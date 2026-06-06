@@ -70,13 +70,23 @@ test("panel module registers and renders websocket data", async () => {
 });
 
 test("panel script parses when Home Assistant loads it as a classic script", async () => {
-  const source = await readFile(
-    new URL(
-      "../../custom_components/predictive_controls/frontend/panel.js",
-      import.meta.url,
-    ),
-    "utf8",
-  );
+  const source = await readFile(panelAssetUrl("panel-v0.1.3.js"), "utf8");
 
   assert.doesNotThrow(() => new vm.Script(source));
 });
+
+test("versioned panel asset matches the development panel asset", async () => {
+  const [developmentSource, versionedSource] = await Promise.all([
+    readFile(panelAssetUrl("panel.js"), "utf8"),
+    readFile(panelAssetUrl("panel-v0.1.3.js"), "utf8"),
+  ]);
+
+  assert.equal(versionedSource, developmentSource);
+});
+
+function panelAssetUrl(filename) {
+  return new URL(
+    `../../custom_components/predictive_controls/frontend/${filename}`,
+    import.meta.url,
+  );
+}

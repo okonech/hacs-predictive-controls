@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .const import DOMAIN, NAME, VERSION
+from .const import DOMAIN, NAME, PANEL_FILENAME
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -54,4 +54,4 @@ async def async_unregister_panel(hass: HomeAssistant) -> None:
 
 
 def panel_js_url() -> str:
-    return f"/{DOMAIN}/static/panel.js?v={VERSION}"
+    return f"/{DOMAIN}/static/{PANEL_FILENAME}"
