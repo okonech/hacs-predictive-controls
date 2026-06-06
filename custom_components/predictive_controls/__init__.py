@@ -13,7 +13,7 @@ from .const import (
     CONF_TRANSITION_WINDOW,
     DEFAULT_TRANSITION_WINDOW,
     DOMAIN,
-    PANEL_REGISTERED,
+    STATIC_PATH_REGISTERED,
     WEBSOCKET_REGISTERED,
 )
 from .yaml_config import (
@@ -36,9 +36,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     from .websocket import async_register_websocket_commands
 
     domain_data = hass.data.setdefault(DOMAIN, {})
-    if not domain_data.get(PANEL_REGISTERED):
-        await async_register_panel(hass)
-        domain_data[PANEL_REGISTERED] = True
+    await async_register_panel(
+        hass, register_static_path=not domain_data.get(STATIC_PATH_REGISTERED)
+    )
+    domain_data[STATIC_PATH_REGISTERED] = True
     if not domain_data.get(WEBSOCKET_REGISTERED):
         async_register_websocket_commands(hass)
         domain_data[WEBSOCKET_REGISTERED] = True

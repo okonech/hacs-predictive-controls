@@ -9,20 +9,24 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
 
-async def async_register_panel(hass: HomeAssistant) -> None:
+async def async_register_panel(
+    hass: HomeAssistant, *, register_static_path: bool = True
+) -> None:
     from homeassistant.components.frontend import async_register_built_in_panel
     from homeassistant.components.http import StaticPathConfig
 
-    frontend_dir = Path(__file__).parent / "frontend"
-    await hass.http.async_register_static_paths(
-        [
-            StaticPathConfig(
-                url_path=f"/{DOMAIN}/static",
-                path=str(frontend_dir),
-                cache_headers=False,
-            )
-        ]
-    )
+    if register_static_path:
+        frontend_dir = Path(__file__).parent / "frontend"
+        await hass.http.async_register_static_paths(
+            [
+                StaticPathConfig(
+                    url_path=f"/{DOMAIN}/static",
+                    path=str(frontend_dir),
+                    cache_headers=False,
+                )
+            ]
+        )
+    await async_unregister_panel(hass)
     async_register_built_in_panel(
         hass,
         component_name="custom",
@@ -34,7 +38,7 @@ async def async_register_panel(hass: HomeAssistant) -> None:
                 "name": "predictive-controls-panel",
                 "embed_iframe": False,
                 "trust_external": False,
-                "js_url": f"/{DOMAIN}/static/panel.js?v={VERSION}",
+                "js_url": panel_js_url(),
             }
         },
         require_admin=True,
@@ -47,3 +51,7 @@ async def async_unregister_panel(hass: HomeAssistant) -> None:
     except ImportError:
         return
     async_remove_panel(hass, DOMAIN)
+
+
+def panel_js_url() -> str:
+    return f"/{DOMAIN}/static/panel.js?v={VERSION}"
