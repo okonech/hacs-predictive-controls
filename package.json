@@ -1,0 +1,9 @@
+{
+  "name": "hacs-predictive-controls",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:frontend": "node --test tests/frontend/*.test.js"
+  }
+}

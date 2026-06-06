@@ -1,0 +1,30 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Predictive Controls",
+        "description": "Create a local predictive controls model.",
+        "data": {
+          "name": "Name"
+        }
+      }
+    }
+  },
+  "options": {
+    "error": {
+      "invalid_yaml": "The map or action YAML is invalid."
+    },
+    "step": {
+      "init": {
+        "title": "Predictive Controls Options",
+        "description": "Edit the node map and predictive actions. Changes reload the integration entry.",
+        "data": {
+          "map_yaml": "Node map YAML",
+          "actions_yaml": "Predictive actions YAML",
+          "transition_window_seconds": "Transition learning window in seconds",
+          "prediction_threshold": "Binary prediction threshold"
+        }
+      }
+    }
+  }
+}
