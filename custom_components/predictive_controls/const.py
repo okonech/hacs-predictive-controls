@@ -1,6 +1,6 @@
 DOMAIN = "predictive_controls"
 NAME = "Predictive Controls"
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 
 CONF_ACTIONS_YAML = "actions_yaml"
 CONF_MAP_YAML = "map_yaml"

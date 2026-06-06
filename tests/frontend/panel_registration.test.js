@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
+import vm from "node:vm";
 
 class FakeHTMLElement {
   constructor() {
@@ -19,6 +21,9 @@ test("panel module registers and renders websocket data", async () => {
   const registry = new Map();
   globalThis.HTMLElement = FakeHTMLElement;
   globalThis.customElements = {
+    get(name) {
+      return registry.get(name);
+    },
     define(name, constructor) {
       registry.set(name, constructor);
     },
@@ -62,4 +67,16 @@ test("panel module registers and renders websocket data", async () => {
   assert.match(panel.innerHTML, /Predictive Controls/);
   assert.match(panel.innerHTML, /Entrance mmWave Dimmer Motion detection/);
   assert.match(panel.innerHTML, /binary_sensor\.entrance_mmwave_dimmer_motion_detection/);
+});
+
+test("panel script parses when Home Assistant loads it as a classic script", async () => {
+  const source = await readFile(
+    new URL(
+      "../../custom_components/predictive_controls/frontend/panel.js",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+
+  assert.doesNotThrow(() => new vm.Script(source));
 });
