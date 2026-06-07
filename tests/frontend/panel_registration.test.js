@@ -185,7 +185,7 @@ test("panel serializes multi-entity nodes into map YAML", async () => {
 });
 
 test("panel script parses when Home Assistant loads it as a classic script", async () => {
-  const source = await readFile(panelAssetUrl("panel-v0.1.4.js"), "utf8");
+  const source = await readFile(panelAssetUrl("panel-v0.1.5.js"), "utf8");
 
   assert.doesNotThrow(() => new vm.Script(source));
 });
@@ -193,7 +193,7 @@ test("panel script parses when Home Assistant loads it as a classic script", asy
 test("versioned panel asset matches the development panel asset", async () => {
   const [developmentSource, versionedSource] = await Promise.all([
     readFile(panelAssetUrl("panel.js"), "utf8"),
-    readFile(panelAssetUrl("panel-v0.1.4.js"), "utf8"),
+    readFile(panelAssetUrl("panel-v0.1.5.js"), "utf8"),
   ]);
 
   assert.equal(versionedSource, developmentSource);
