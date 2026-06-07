@@ -62,6 +62,12 @@ test("panel module registers and renders websocket data", async () => {
           ],
         });
       }
+      if (message.type === "predictive_controls/status") {
+        return Promise.resolve({
+          zone_states: {},
+          recent_occupancy_events: [],
+        });
+      }
       throw new Error(`Unexpected websocket type: ${message.type}`);
     },
   };
@@ -71,6 +77,69 @@ test("panel module registers and renders websocket data", async () => {
   assert.match(panel.innerHTML, /Predictive Controls/);
   assert.match(panel.innerHTML, /Entrance mmWave Dimmer Motion detection/);
   assert.match(panel.innerHTML, /binary_sensor\.entrance_mmwave_dimmer_motion_detection/);
+});
+
+test("panel renders live occupancy zones from configured map data", async () => {
+  const Panel = await panelConstructor();
+  const panel = new Panel();
+  panel._hass = {
+    callWS(message) {
+      assert.equal(message.type, "predictive_controls/status");
+      return Promise.resolve({
+        zone_states: {
+          living_room: {
+            confidence: 0.91,
+            status: "confirmed",
+            last_node_id: "living_left",
+            reason: "still_target active at living_left; confidence is confirmed",
+          },
+        },
+        recent_occupancy_events: [],
+      });
+    },
+  };
+  panel._config = {
+    entry_id: "abc123",
+    map: {
+      zones: {
+        living_room: {
+          label: "Living Room",
+          floor: "first_floor",
+          position: { x: 120, y: 220 },
+          size: { width: 240, height: 130 },
+        },
+      },
+      nodes: {
+        living_left: {
+          zone: "living_room",
+          floor: "first_floor",
+          role: "anchor_sensor",
+          position: { x: 120, y: 220 },
+          adjacent: [],
+        },
+      },
+    },
+  };
+  panel._status = {
+    zone_states: {
+      living_room: {
+        confidence: 0.91,
+        status: "confirmed",
+        last_node_id: "living_left",
+        reason: "still_target active at living_left; confidence is confirmed",
+      },
+    },
+  };
+  panel._statusUpdated = new Date("2026-06-07T12:00:00Z");
+  panel._tab = "occupancy";
+
+  panel.render();
+
+  assert.match(panel.innerHTML, /Occupancy/);
+  assert.match(panel.innerHTML, /Living Room/);
+  assert.match(panel.innerHTML, /91%/);
+  assert.match(panel.innerHTML, /status-confirmed/);
+  assert.match(panel.innerHTML, /living_left/);
 });
 
 test("panel renders the editable map YAML tab", async () => {

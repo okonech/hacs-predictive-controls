@@ -21,6 +21,14 @@ async def async_setup_entry(
         NodeProbabilitySensor(runtime, entry.entry_id, node_id)
         for node_id in runtime.map.nodes
     )
+    entities.extend(
+        ZoneConfidenceSensor(runtime, entry.entry_id, zone)
+        for zone in runtime.map.zones()
+    )
+    entities.extend(
+        ZoneStatusSensor(runtime, entry.entry_id, zone)
+        for zone in runtime.map.zones()
+    )
     async_add_entities(entities)
 
 
@@ -81,3 +89,63 @@ class NodeProbabilitySensor(RuntimeSensor):
     @property
     def native_value(self) -> float:
         return round(self.runtime.probabilities.get(self.node_id, 0.0) * 100, 1)
+
+
+class ZoneConfidenceSensor(RuntimeSensor):
+    def __init__(
+        self, runtime: PredictiveControlsRuntime, entry_id: str, zone: str
+    ) -> None:
+        super().__init__(runtime, entry_id)
+        self.zone = zone
+        self._attr_name = f"{zone.replace('_', ' ').title()} Confidence"
+        self._attr_unique_id = f"{entry_id}_{zone}_confidence"
+        self._attr_native_unit_of_measurement = "%"
+
+    @property
+    def native_value(self) -> float:
+        state = self.runtime.zone_states.get(self.zone)
+        confidence = state.confidence if state is not None else 0.0
+        return round(confidence * 100, 1)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        state = self.runtime.zone_states.get(self.zone)
+        if state is None:
+            return {"status": "rejected", "reason": "no evidence"}
+        return {
+            "status": state.status,
+            "last_evidence_at": state.last_evidence_at.isoformat()
+            if state.last_evidence_at is not None
+            else None,
+            "last_clear_at": state.last_clear_at.isoformat()
+            if state.last_clear_at is not None
+            else None,
+            "last_node_id": state.last_node_id,
+            "reason": state.reason,
+        }
+
+
+class ZoneStatusSensor(RuntimeSensor):
+    def __init__(
+        self, runtime: PredictiveControlsRuntime, entry_id: str, zone: str
+    ) -> None:
+        super().__init__(runtime, entry_id)
+        self.zone = zone
+        self._attr_name = f"{zone.replace('_', ' ').title()} Status"
+        self._attr_unique_id = f"{entry_id}_{zone}_status"
+
+    @property
+    def native_value(self) -> str:
+        state = self.runtime.zone_states.get(self.zone)
+        return state.status if state is not None else "rejected"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        state = self.runtime.zone_states.get(self.zone)
+        if state is None:
+            return {"confidence": 0.0, "reason": "no evidence"}
+        return {
+            "confidence": state.confidence,
+            "reason": state.reason,
+            "last_node_id": state.last_node_id,
+        }

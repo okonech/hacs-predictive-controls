@@ -22,6 +22,8 @@ The sidebar panel includes:
 
 - a motion-entity list discovered from Home Assistant binary sensors;
 - a drag-and-drop board for placing predictive nodes;
+- an occupancy tab that visualizes configured zones by floor with live
+  confidence and status;
 - a connect mode for creating adjacency edges between nodes;
 - a node inspector for labels, entity bindings, initial weights, and edge removal;
 - an actions tab for generic Home Assistant service-call YAML;
@@ -67,6 +69,30 @@ actions:
       data:
         brightness_pct: 35
 ```
+
+## Occupancy Confidence
+
+Predictive Controls also publishes derived occupancy-confidence entities from the
+same node map. Each mapped node may define `floor`, `zone`, and `role` metadata;
+roles such as `room_occupancy`, `transition_gate`, `ambiguous_open_plan`,
+`subzone_occupancy`, and `anchor_sensor` tune how strongly sensor on/off events
+affect zone confidence.
+
+Maps may also include optional top-level `zones` metadata for display labels,
+floor grouping, and visual placement in the occupancy tab. If omitted, the panel
+derives zones from node `zone`, `floor`, and `position` fields.
+
+For each zone, the integration exposes:
+
+- a confidence percentage sensor;
+- a status sensor with `rejected`, `suspect`, `possible`, `probable`, or
+  `confirmed`;
+- a probable-occupancy binary sensor that turns on for `probable` and
+  `confirmed` states.
+
+These entities are intended as an inference layer between raw motion sensors and
+lighting automations. Existing predicted-node entities remain available for
+compatibility.
 
 ## Debugging
 

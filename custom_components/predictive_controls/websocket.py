@@ -16,6 +16,7 @@ from .const import (
     DOMAIN,
 )
 from .entity_catalog import serialize_candidates
+from .status import runtime_status_payload
 from .yaml_config import (
     DEFAULT_ACTIONS_YAML,
     DEFAULT_MAP_YAML,
@@ -31,6 +32,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, websocket_config)
     websocket_api.async_register_command(hass, websocket_save_config)
     websocket_api.async_register_command(hass, websocket_entities)
+    websocket_api.async_register_command(hass, websocket_status)
 
 
 def _entry_for_message(hass: HomeAssistant, msg: dict[str, Any]) -> Any:
@@ -147,4 +149,24 @@ async def websocket_entities(
         websocket_api.result_message(
             msg["id"], {"entities": serialize_candidates(states)}
         )
+    )
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/status"})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def websocket_status(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    try:
+        entry = _entry_for_message(hass, msg)
+        runtime = hass.data[DOMAIN][entry.entry_id]
+    except (KeyError, ValueError) as exc:
+        connection.send_error(msg["id"], "not_found", str(exc))
+        return
+
+    connection.send_message(
+        websocket_api.result_message(msg["id"], runtime_status_payload(runtime))
     )

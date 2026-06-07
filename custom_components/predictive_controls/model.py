@@ -9,6 +9,14 @@ class PredictiveMapError(ValueError):
 
 
 @dataclass(frozen=True)
+class EntityBinding:
+    """Resolved entity binding from one predictive node."""
+
+    node_id: str
+    signal_type: str
+
+
+@dataclass(frozen=True)
 class NodeConfig:
     """Configuration for one predictive node."""
 
@@ -17,6 +25,10 @@ class NodeConfig:
     entities: dict[str, str] = field(default_factory=dict)
     adjacent: tuple[str, ...] = ()
     initial_weight: float = 1.0
+    floor: str | None = None
+    zone: str | None = None
+    role: str = "room_occupancy"
+    review_required: bool = False
 
     @classmethod
     def from_mapping(cls, node_id: str, raw: Any) -> NodeConfig:
@@ -53,13 +65,39 @@ class NodeConfig:
                 f"Node {node_id!r} initial_weight must be positive"
             )
 
+        floor = raw.get("floor")
+        if floor is not None and not isinstance(floor, str):
+            raise PredictiveMapError(f"Node {node_id!r} floor must be a string")
+
+        zone = raw.get("zone")
+        if zone is not None and not isinstance(zone, str):
+            raise PredictiveMapError(f"Node {node_id!r} zone must be a string")
+
+        role = raw.get("role", "room_occupancy")
+        if not isinstance(role, str) or not role:
+            raise PredictiveMapError(f"Node {node_id!r} role must be a string")
+
+        review_required = raw.get("review_required", False)
+        if not isinstance(review_required, bool):
+            raise PredictiveMapError(
+                f"Node {node_id!r} review_required must be a boolean"
+            )
+
         return cls(
             node_id=node_id,
             label=label,
             entities=parsed_entities,
             adjacent=parsed_adjacent,
             initial_weight=parsed_weight,
+            floor=floor,
+            zone=zone,
+            role=role,
+            review_required=review_required,
         )
+
+    @property
+    def occupancy_zone(self) -> str:
+        return self.zone or self.node_id
 
 
 @dataclass(frozen=True)
@@ -96,9 +134,17 @@ class PredictiveMap:
         return cls(nodes=nodes)
 
     def node_for_entity(self, entity_id: str) -> str | None:
+        binding = self.entity_binding_for_entity(entity_id)
+        return binding.node_id if binding is not None else None
+
+    def entity_binding_for_entity(self, entity_id: str) -> EntityBinding | None:
         for node in self.nodes.values():
-            if entity_id in node.entities.values():
-                return node.node_id
+            for signal_type, bound_entity_id in node.entities.items():
+                if entity_id == bound_entity_id:
+                    return EntityBinding(
+                        node_id=node.node_id,
+                        signal_type=signal_type,
+                    )
         return None
 
     def entity_ids(self) -> tuple[str, ...]:
@@ -113,3 +159,8 @@ class PredictiveMap:
     def neighbors(self, node_id: str) -> tuple[str, ...]:
         node = self.nodes.get(node_id)
         return node.adjacent if node is not None else ()
+
+    def zones(self) -> tuple[str, ...]:
+        return tuple(
+            sorted({node.occupancy_zone for node in self.nodes.values()})
+        )

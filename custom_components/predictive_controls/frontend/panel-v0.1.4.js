@@ -117,6 +117,61 @@ function normalizeEntityResponse(response) {
   );
 }
 
+function titleFromId(value) {
+  return String(value || "unknown")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function statusRank(status) {
+  return {
+    rejected: 0,
+    suspect: 1,
+    possible: 2,
+    probable: 3,
+    confirmed: 4,
+  }[status] ?? 0;
+}
+
+function zoneSummaries(map) {
+  const nodes = map?.nodes || {};
+  const configuredZones = map?.zones || {};
+  const grouped = new Map();
+  for (const [nodeId, node] of Object.entries(nodes)) {
+    const zoneId = node.zone || nodeId;
+    if (!grouped.has(zoneId)) grouped.set(zoneId, []);
+    grouped.get(zoneId).push({ nodeId, node });
+  }
+  for (const zoneId of Object.keys(configuredZones)) {
+    if (!grouped.has(zoneId)) grouped.set(zoneId, []);
+  }
+
+  return [...grouped.entries()]
+    .map(([zoneId, entries]) => {
+      const config = configuredZones[zoneId] || {};
+      const positions = entries
+        .map(({ node }) => node.position)
+        .filter((position) => position && Number.isFinite(Number(position.x)) && Number.isFinite(Number(position.y)));
+      const average = positions.length
+        ? {
+            x: Math.round(positions.reduce((sum, position) => sum + Number(position.x), 0) / positions.length),
+            y: Math.round(positions.reduce((sum, position) => sum + Number(position.y), 0) / positions.length),
+          }
+        : { x: 80, y: 80 };
+      const roles = new Set(entries.map(({ node }) => node.role).filter(Boolean));
+      return {
+        zoneId,
+        label: config.label || titleFromId(zoneId),
+        floor: config.floor || entries.find(({ node }) => node.floor)?.node.floor || "unassigned",
+        role: config.role || (roles.size === 1 ? [...roles][0] : "mixed"),
+        position: config.position || average,
+        size: config.size || { width: 210, height: 112 },
+        nodeIds: entries.map(({ nodeId }) => nodeId),
+      };
+    })
+    .sort((left, right) => left.floor.localeCompare(right.floor) || left.label.localeCompare(right.label));
+}
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -176,15 +231,18 @@ class PredictiveControlsPanel extends HTMLElement {
   async loadData() {
     this._error = undefined;
     try {
-      const [config, entityResponse] = await Promise.all([
+      const [config, entityResponse, statusResponse] = await Promise.all([
         this._hass.callWS({ type: "predictive_controls/config" }),
         this._hass.callWS({ type: "predictive_controls/entities" }),
+        this._hass.callWS({ type: "predictive_controls/status" }),
       ]);
       this._config = config;
+      this._status = statusResponse;
       this._entities = normalizeEntityResponse(entityResponse);
       this._selectedNode = undefined;
       this._mapYamlDirty = false;
       this._tab = this._tab || "map";
+      this._statusUpdated = new Date();
       this.render();
     } catch (error) {
       this._error = error.message || String(error);
@@ -194,6 +252,12 @@ class PredictiveControlsPanel extends HTMLElement {
 
   connectedCallback() {
     this.render();
+    this.startStatusRefresh();
+  }
+
+  disconnectedCallback() {
+    if (this._statusTimer) clearInterval(this._statusTimer);
+    this._statusTimer = undefined;
   }
 
   get nodes() {
@@ -222,6 +286,7 @@ class PredictiveControlsPanel extends HTMLElement {
         </header>
         <nav>
           <button class="${this._tab === "map" ? "active" : ""}" data-tab="map">Map</button>
+          <button class="${this._tab === "occupancy" ? "active" : ""}" data-tab="occupancy">Occupancy</button>
           <button class="${this._tab === "yaml" ? "active" : ""}" data-tab="yaml">YAML</button>
           <button class="${this._tab === "actions" ? "active" : ""}" data-tab="actions">Actions</button>
           <button class="${this._tab === "settings" ? "active" : ""}" data-tab="settings">Settings</button>
@@ -233,10 +298,89 @@ class PredictiveControlsPanel extends HTMLElement {
   }
 
   renderActiveTab() {
+    if (this._tab === "occupancy") return this.renderOccupancy();
     if (this._tab === "yaml") return this.renderYaml();
     if (this._tab === "actions") return this.renderActions();
     if (this._tab === "settings") return this.renderSettings();
     return this.renderMap();
+  }
+
+  renderOccupancy() {
+    const zones = zoneSummaries(this._config.map);
+    const floors = [...new Set(zones.map((zone) => zone.floor))];
+    return `
+      <main class="occupancy-layout">
+        <section class="occupancy-toolbar">
+          <div>
+            <h2>Occupancy</h2>
+            <p>${this._statusError ? escapeHtml(this._statusError) : `Updated ${this._statusUpdated ? this._statusUpdated.toLocaleTimeString() : "never"}`}</p>
+          </div>
+          <button data-action="refresh-status">Refresh</button>
+        </section>
+        ${floors.map((floor) => this.renderOccupancyFloor(floor, zones.filter((zone) => zone.floor === floor))).join("")}
+      </main>
+    `;
+  }
+
+  renderOccupancyFloor(floor, zones) {
+    const minX = Math.min(...zones.map((zone) => Number(zone.position.x ?? 80)));
+    const minY = Math.min(...zones.map((zone) => Number(zone.position.y ?? 80)));
+    const maxX = Math.max(...zones.map((zone) => Number(zone.position.x ?? 80) + Number(zone.size.width ?? 210)));
+    const maxY = Math.max(...zones.map((zone) => Number(zone.position.y ?? 80) + Number(zone.size.height ?? 112)));
+    const width = Math.max(640, maxX - minX + 48);
+    const height = Math.max(260, maxY - minY + 48);
+    return `
+      <section class="floor-section">
+        <h3>${titleFromId(floor)}</h3>
+        <div class="occupancy-board" style="height:${height}px;min-width:${width}px">
+          <svg class="zone-edges" viewBox="0 0 ${width} ${height}">${this.renderZoneEdges(zones, minX, minY)}</svg>
+          ${zones.map((zone) => this.renderZoneCard(zone, minX, minY)).join("")}
+        </div>
+      </section>
+    `;
+  }
+
+  renderZoneEdges(zones, minX, minY) {
+    const zonesByNode = new Map();
+    for (const zone of zones) {
+      for (const nodeId of zone.nodeIds) zonesByNode.set(nodeId, zone);
+    }
+    const lines = [];
+    const seen = new Set();
+    for (const zone of zones) {
+      for (const nodeId of zone.nodeIds) {
+        const node = this.nodes[nodeId];
+        for (const targetId of node?.adjacent || []) {
+          const target = zonesByNode.get(targetId);
+          if (!target || target.zoneId === zone.zoneId) continue;
+          const edgeId = [zone.zoneId, target.zoneId].sort().join("->");
+          if (seen.has(edgeId)) continue;
+          seen.add(edgeId);
+          lines.push(`<line x1="${Number(zone.position.x ?? 80) - minX + Number(zone.size.width ?? 210) / 2 + 24}" y1="${Number(zone.position.y ?? 80) - minY + Number(zone.size.height ?? 112) / 2 + 24}" x2="${Number(target.position.x ?? 80) - minX + Number(target.size.width ?? 210) / 2 + 24}" y2="${Number(target.position.y ?? 80) - minY + Number(target.size.height ?? 112) / 2 + 24}" />`);
+        }
+      }
+    }
+    return lines.join("");
+  }
+
+  renderZoneCard(zone, minX, minY) {
+    const state = this._status?.zone_states?.[zone.zoneId] || { confidence: 0, status: "rejected", reason: "no evidence" };
+    const confidence = Math.round(Number(state.confidence || 0) * 100);
+    const left = Number(zone.position.x ?? 80) - minX + 24;
+    const top = Number(zone.position.y ?? 80) - minY + 24;
+    const width = Number(zone.size.width ?? 210);
+    const height = Number(zone.size.height ?? 112);
+    return `
+      <article class="zone-card status-${state.status}" style="left:${left}px;top:${top}px;width:${width}px;min-height:${height}px" title="${escapeHtml(state.reason || "no evidence")}">
+        <div class="zone-card-head">
+          <strong>${escapeHtml(zone.label)}</strong>
+          <span>${confidence}%</span>
+        </div>
+        <div class="confidence-bar"><span style="width:${confidence}%"></span></div>
+        <small>${escapeHtml(state.status || "rejected")} · ${escapeHtml(zone.role)}</small>
+        <small>${zone.nodeIds.length} ${zone.nodeIds.length === 1 ? "sensor" : "sensors"}${state.last_node_id ? ` · ${escapeHtml(state.last_node_id)}` : ""}</small>
+      </article>
+    `;
   }
 
   renderMap() {
@@ -358,9 +502,11 @@ class PredictiveControlsPanel extends HTMLElement {
   bindEvents() {
     this.querySelectorAll("[data-tab]").forEach((button) => button.addEventListener("click", () => {
       this._tab = button.dataset.tab;
+      if (this._tab === "occupancy") this.refreshStatus();
       this.render();
     }));
     this.querySelector('[data-action="reload"]')?.addEventListener("click", () => this.loadData());
+    this.querySelector('[data-action="refresh-status"]')?.addEventListener("click", () => this.refreshStatus());
     this.querySelector('[data-action="save"]')?.addEventListener("click", () => this.save());
     this.querySelector('[data-action="add-empty"]')?.addEventListener("click", () => this.addNode());
     this.querySelector('[data-action="connect"]')?.addEventListener("click", () => {
@@ -526,6 +672,27 @@ class PredictiveControlsPanel extends HTMLElement {
     });
   }
 
+  startStatusRefresh() {
+    if (this._statusTimer) return;
+    this._statusTimer = setInterval(() => this.refreshStatus(), 5000);
+  }
+
+  async refreshStatus() {
+    if (!this._hass || !this._config) return;
+    try {
+      this._status = await this._hass.callWS({
+        type: "predictive_controls/status",
+        entry_id: this._config.entry_id,
+      });
+      this._statusError = undefined;
+      this._statusUpdated = new Date();
+      if (this._tab === "occupancy") this.render();
+    } catch (error) {
+      this._statusError = error.message || String(error);
+      if (this._tab === "occupancy") this.render();
+    }
+  }
+
   async save() {
     try {
       if (!this._mapYamlDirty) this.syncMapYamlFromMap();
@@ -574,6 +741,25 @@ class PredictiveControlsPanel extends HTMLElement {
       .chips { display:flex; flex-wrap:wrap; gap:8px; }
       textarea { min-height:520px; font-family:monospace; }
       textarea.small { min-height:96px; }
+      .occupancy-layout { display:grid; gap:16px; }
+      .occupancy-toolbar, .floor-section { background:var(--card-background-color); border:1px solid var(--divider-color); border-radius:8px; padding:16px; }
+      .occupancy-toolbar { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+      .occupancy-toolbar p { margin:4px 0 0; }
+      .floor-section { overflow:auto; }
+      .occupancy-board { position:relative; overflow:auto; background:var(--secondary-background-color); border:1px solid var(--divider-color); border-radius:8px; }
+      .zone-edges { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+      .zone-edges line { stroke:var(--divider-color); stroke-width:3; opacity:.8; }
+      .zone-card { position:absolute; box-sizing:border-box; border:1px solid var(--divider-color); border-left-width:6px; border-radius:8px; padding:12px; background:var(--card-background-color); box-shadow:var(--ha-card-box-shadow, none); }
+      .zone-card-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+      .zone-card-head strong, .zone-card small { overflow:hidden; text-overflow:ellipsis; }
+      .zone-card small { display:block; margin-top:6px; color:var(--secondary-text-color); }
+      .confidence-bar { height:8px; margin-top:10px; border-radius:999px; background:var(--divider-color); overflow:hidden; }
+      .confidence-bar span { display:block; height:100%; background:var(--primary-color); }
+      .status-rejected { border-left-color:var(--disabled-text-color); opacity:.72; }
+      .status-suspect { border-left-color:var(--warning-color, #f2a900); }
+      .status-possible { border-left-color:var(--info-color, #4797ff); }
+      .status-probable { border-left-color:var(--success-color, #43a047); }
+      .status-confirmed { border-left-color:var(--primary-color); }
       @media (max-width: 1000px) { .map-layout { grid-template-columns:1fr; } }
     `;
   }
