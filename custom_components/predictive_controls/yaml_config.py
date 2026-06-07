@@ -53,6 +53,14 @@ def dump_yaml_document(data: Any) -> str:
   return str(yaml.safe_dump(data, sort_keys=False))
 
 
+def map_yaml_from_payload(payload: dict[str, Any]) -> str:
+  if "map_yaml" in payload and payload["map_yaml"].strip():
+    return str(payload["map_yaml"])
+  if "map" in payload:
+    return dump_yaml_document(payload["map"])
+  raise ValueError("Either map or map_yaml is required")
+
+
 def load_predictive_map(text: str) -> PredictiveMap:
     return PredictiveMap.from_mapping(load_yaml_document(text))
 

@@ -19,10 +19,10 @@ from .entity_catalog import serialize_candidates
 from .yaml_config import (
     DEFAULT_ACTIONS_YAML,
     DEFAULT_MAP_YAML,
-    dump_yaml_document,
     load_predictive_actions,
     load_predictive_map,
     load_yaml_document,
+    map_yaml_from_payload,
 )
 
 
@@ -90,7 +90,8 @@ async def websocket_config(
     {
         vol.Required("type"): f"{DOMAIN}/save_config",
         vol.Required("entry_id"): str,
-        vol.Required("map"): dict,
+        vol.Optional("map"): dict,
+        vol.Optional("map_yaml"): str,
         vol.Required("actions_yaml"): str,
         vol.Required("transition_window_seconds"): int,
         vol.Required("prediction_threshold"): float,
@@ -105,7 +106,7 @@ async def websocket_save_config(
 ) -> None:
     try:
         entry = _entry_for_message(hass, msg)
-        map_yaml = dump_yaml_document(msg["map"])
+        map_yaml = map_yaml_from_payload(msg)
         load_predictive_map(map_yaml)
         load_predictive_actions(msg["actions_yaml"])
         threshold = float(msg["prediction_threshold"])

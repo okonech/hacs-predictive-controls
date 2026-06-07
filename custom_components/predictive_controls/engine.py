@@ -18,6 +18,13 @@ class EngineUpdate:
     action_decisions: tuple[ActionDecision, ...]
 
 
+@dataclass
+class _RecentEvent:
+    node_id: str
+    event_at: datetime
+    consumed: bool = False
+
+
 class PredictiveEngine:
     """Pure inference state for predictive controls."""
 
@@ -36,9 +43,11 @@ class PredictiveEngine:
         self.last_event_at: datetime | None = None
         self.last_prediction: Prediction | None = None
         self.last_fired: dict[str, datetime] = {}
+        self._recent_events: list[_RecentEvent] = []
 
     def observe_node(self, node_id: str, now: datetime) -> EngineUpdate:
         learned_transition = self._learn_transition(node_id, now)
+        self._remember_event(node_id, now)
         self.last_source_node = node_id
         self.last_event_at = now
         self.probabilities = self.chain.predict({node_id: 1.0})
@@ -64,15 +73,25 @@ class PredictiveEngine:
     def _learn_transition(
         self, node_id: str, now: datetime
     ) -> tuple[str, str] | None:
-        if self.last_source_node is None or self.last_event_at is None:
-            return None
+        self._prune_recent_events(now)
 
-        within_window = now - self.last_event_at <= self.transition_window
-        if not within_window:
-            return None
+        for event in reversed(self._recent_events):
+            if event.consumed:
+                continue
+            learned = self.chain.observe(event.node_id, node_id)
+            if learned:
+                event.consumed = True
+                return (event.node_id, node_id)
 
-        learned = self.chain.observe(self.last_source_node, node_id)
-        if not learned:
-            return None
+        return None
 
-        return (self.last_source_node, node_id)
+    def _remember_event(self, node_id: str, now: datetime) -> None:
+        self._recent_events.append(_RecentEvent(node_id=node_id, event_at=now))
+        self._prune_recent_events(now)
+
+    def _prune_recent_events(self, now: datetime) -> None:
+        self._recent_events = [
+            event
+            for event in self._recent_events
+            if timedelta(0) <= now - event.event_at <= self.transition_window
+        ]

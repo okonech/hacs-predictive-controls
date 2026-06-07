@@ -19,6 +19,21 @@ def make_map() -> PredictiveMap:
     )
 
 
+def make_house_map() -> PredictiveMap:
+    return PredictiveMap.from_mapping(
+        {
+            "nodes": {
+                "entrance": {"adjacent": ["kitchen", "dining"]},
+                "kitchen": {"adjacent": ["entrance", "dining"]},
+                "dining": {"adjacent": ["entrance", "kitchen"]},
+                "top_staircase": {"adjacent": ["master_bedroom_entrance"]},
+                "master_bedroom_entrance": {"adjacent": ["top_staircase"]},
+                "false_positive_sensor": {"adjacent": []},
+            }
+        }
+    )
+
+
 def make_action() -> PredictiveAction:
     return PredictiveAction.from_mapping(
         "prelight_kitchen",
@@ -74,6 +89,48 @@ def test_engine_does_not_learn_outside_window_or_invalid_transition() -> None:
     assert engine.chain.counts["entry"] == {"hall": 0.0, "kitchen": 0.0}
     assert engine.chain.counts["hall"] == {"entry": 0.0, "kitchen": 1.0}
     assert engine.chain.counts["kitchen"] == {"hall": 0.0}
+
+
+def test_engine_learns_interleaved_two_person_paths() -> None:
+    engine = PredictiveEngine(make_house_map(), (), timedelta(seconds=30))
+    now = datetime(2026, 6, 6, tzinfo=UTC)
+
+    first_person_starts = engine.observe_node("entrance", now)
+    second_person_starts = engine.observe_node(
+        "top_staircase", now + timedelta(seconds=2)
+    )
+    first_person_moves = engine.observe_node("kitchen", now + timedelta(seconds=4))
+    second_person_moves = engine.observe_node(
+        "master_bedroom_entrance", now + timedelta(seconds=6)
+    )
+
+    assert first_person_starts.learned_transition is None
+    assert second_person_starts.learned_transition is None
+    assert first_person_moves.learned_transition == ("entrance", "kitchen")
+    assert second_person_moves.learned_transition == (
+        "top_staircase",
+        "master_bedroom_entrance",
+    )
+    assert engine.chain.counts["entrance"] == {"kitchen": 1.0, "dining": 0.0}
+    assert engine.chain.counts["top_staircase"] == {
+        "master_bedroom_entrance": 1.0
+    }
+
+
+def test_engine_ignores_interleaved_false_positive_for_transition_matching() -> None:
+    engine = PredictiveEngine(make_house_map(), (), timedelta(seconds=30))
+    now = datetime(2026, 6, 6, tzinfo=UTC)
+
+    engine.observe_node("entrance", now)
+    false_positive = engine.observe_node(
+        "false_positive_sensor", now + timedelta(seconds=2)
+    )
+    kitchen = engine.observe_node("kitchen", now + timedelta(seconds=4))
+
+    assert false_positive.learned_transition is None
+    assert kitchen.learned_transition == ("entrance", "kitchen")
+    assert engine.chain.counts["entrance"] == {"kitchen": 1.0, "dining": 0.0}
+    assert engine.chain.counts["false_positive_sensor"] == {}
 
 
 def test_engine_returns_actions_and_records_cooldown() -> None:
