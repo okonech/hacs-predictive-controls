@@ -14,6 +14,7 @@ from .const import (
     DEFAULT_TRANSITION_WINDOW,
     DOMAIN,
     STATIC_PATH_REGISTERED,
+    STORAGE_VERSION,
     WEBSOCKET_REGISTERED,
 )
 from .yaml_config import (
@@ -30,6 +31,7 @@ PLATFORM_NAMES = ["sensor", "binary_sensor"]
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     from homeassistant.const import Platform
+    from homeassistant.helpers.storage import Store
 
     from .panel import async_register_panel
     from .runtime import PredictiveControlsRuntime
@@ -52,9 +54,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     transition_window = int(
         options.get(CONF_TRANSITION_WINDOW, DEFAULT_TRANSITION_WINDOW)
     )
+    transition_store = Store(
+        hass,
+        STORAGE_VERSION,
+        f"{DOMAIN}_{entry.entry_id}_transitions",
+    )
+    stored_transitions = await transition_store.async_load() or {}
 
     runtime = PredictiveControlsRuntime(
-        hass, predictive_map, actions, transition_window
+        hass,
+        predictive_map,
+        actions,
+        transition_window,
+        transition_store=transition_store,
+        transition_counts=stored_transitions.get("transition_counts"),
     )
     runtime.start()
 

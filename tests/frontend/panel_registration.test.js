@@ -129,6 +129,9 @@ test("panel renders live occupancy zones from configured map data", async () => 
         reason: "still_target active at living_left; confidence is confirmed",
       },
     },
+    transition_counts: {
+      living_left: { kitchen: 7 },
+    },
   };
   panel._statusUpdated = new Date("2026-06-07T12:00:00Z");
   panel._tab = "occupancy";
@@ -140,6 +143,9 @@ test("panel renders live occupancy zones from configured map data", async () => 
   assert.match(panel.innerHTML, /91%/);
   assert.match(panel.innerHTML, /status-confirmed/);
   assert.match(panel.innerHTML, /living_left/);
+  assert.match(panel.innerHTML, /Learned Transitions/);
+  assert.match(panel.innerHTML, /Kitchen/);
+  assert.match(panel.innerHTML, /7/);
 });
 
 test("panel renders the editable map YAML tab", async () => {
@@ -185,7 +191,7 @@ test("panel serializes multi-entity nodes into map YAML", async () => {
 });
 
 test("panel script parses when Home Assistant loads it as a classic script", async () => {
-  const source = await readFile(panelAssetUrl("panel-v0.1.5.js"), "utf8");
+  const source = await readFile(panelAssetUrl("panel-v0.1.6.js"), "utf8");
 
   assert.doesNotThrow(() => new vm.Script(source));
 });
@@ -193,7 +199,7 @@ test("panel script parses when Home Assistant loads it as a classic script", asy
 test("versioned panel asset matches the development panel asset", async () => {
   const [developmentSource, versionedSource] = await Promise.all([
     readFile(panelAssetUrl("panel.js"), "utf8"),
-    readFile(panelAssetUrl("panel-v0.1.5.js"), "utf8"),
+    readFile(panelAssetUrl("panel-v0.1.6.js"), "utf8"),
   ]);
 
   assert.equal(versionedSource, developmentSource);

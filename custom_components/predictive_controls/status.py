@@ -23,6 +23,7 @@ def runtime_status_payload(runtime: Any) -> dict[str, Any]:
             "probability": runtime.last_prediction.probability,
         },
         "probabilities": runtime.probabilities,
+        "transition_counts": runtime.transition_counts,
     }
 
 

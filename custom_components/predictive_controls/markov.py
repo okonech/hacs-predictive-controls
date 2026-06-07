@@ -31,6 +31,22 @@ class MarkovChain:
     def counts(self) -> dict[str, dict[str, float]]:
         return {source: targets.copy() for source, targets in self._counts.items()}
 
+    def restore_counts(self, counts: Mapping[str, Mapping[str, object]]) -> None:
+        for source, targets in counts.items():
+            if source not in self._counts:
+                continue
+            for target, count in targets.items():
+                if target not in self._counts[source]:
+                    continue
+                if not isinstance(count, int | float | str):
+                    continue
+                try:
+                    parsed_count = float(count)
+                except (TypeError, ValueError):
+                    continue
+                if parsed_count >= 0:
+                    self._counts[source][target] = parsed_count
+
     def observe(self, source: str, target: str, weight: float = 1.0) -> bool:
         if weight <= 0:
             raise ValueError("weight must be positive")

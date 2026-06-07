@@ -32,7 +32,6 @@ def test_observed_transitions_update_probabilities_without_mutating_counts_copy(
 ) -> None:
     chain = MarkovChain(make_map())
 
-
     assert chain.observe("entry", "kitchen", weight=3)
     counts = chain.counts
     counts["entry"]["kitchen"] = 100
@@ -42,6 +41,28 @@ def test_observed_transitions_update_probabilities_without_mutating_counts_copy(
         "hall": pytest.approx(2 / 6),
         "kitchen": pytest.approx(4 / 6),
     }
+
+
+def test_restore_counts_keeps_only_valid_current_edges() -> None:
+    chain = MarkovChain(make_map())
+
+    chain.restore_counts(
+        {
+            "entry": {
+                "hall": 2,
+                "kitchen": "3.5",
+                "office": 99,
+                "missing": 99,
+            },
+            "hall": {"entry": None, "kitchen": "not-a-number"},
+            "kitchen": {"hall": -1},
+            "missing": {"entry": 99},
+        }
+    )
+
+    assert chain.counts["entry"] == {"hall": 2.0, "kitchen": 3.5}
+    assert chain.counts["hall"] == {"entry": 0.0, "kitchen": 0.0}
+    assert chain.counts["kitchen"] == {"hall": 0.0}
 
 
 def test_invalid_transition_is_not_learned() -> None:

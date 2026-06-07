@@ -20,6 +20,7 @@ class FakeRuntime:
     last_source_node: str | None
     last_prediction: Prediction | None
     probabilities: dict[str, float]
+    transition_counts: dict[str, dict[str, float]]
 
 
 def make_zone_state() -> ZoneState:
@@ -88,6 +89,7 @@ def test_runtime_status_payload_serializes_prediction_and_without_prediction() -
         last_source_node="living_left",
         last_prediction=Prediction(node_id="dining_room", probability=0.72),
         probabilities={"dining_room": 0.72},
+        transition_counts={"living_left": {"dining_room": 4.0}},
     )
 
     payload = runtime_status_payload(runtime)
@@ -100,6 +102,7 @@ def test_runtime_status_payload_serializes_prediction_and_without_prediction() -
         "probability": 0.72,
     }
     assert payload["probabilities"] == {"dining_room": 0.72}
+    assert payload["transition_counts"] == {"living_left": {"dining_room": 4.0}}
 
     without_prediction = FakeRuntime(
         zone_states={},
@@ -107,6 +110,7 @@ def test_runtime_status_payload_serializes_prediction_and_without_prediction() -
         last_source_node=None,
         last_prediction=None,
         probabilities={},
+        transition_counts={},
     )
 
     assert runtime_status_payload(without_prediction)["last_prediction"] is None

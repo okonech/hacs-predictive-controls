@@ -152,7 +152,12 @@ async def websocket_entities(
     )
 
 
-@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/status"})
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/status",
+        vol.Optional("entry_id"): str,
+    }
+)
 @websocket_api.require_admin
 @websocket_api.async_response
 async def websocket_status(

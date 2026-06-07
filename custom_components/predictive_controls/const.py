@@ -1,7 +1,7 @@
 DOMAIN = "predictive_controls"
 NAME = "Predictive Controls"
-VERSION = "0.1.5"
-PANEL_FILENAME = "panel-v0.1.5.js"
+VERSION = "0.1.6"
+PANEL_FILENAME = "panel-v0.1.6.js"
 
 CONF_ACTIONS_YAML = "actions_yaml"
 CONF_MAP_YAML = "map_yaml"
@@ -14,3 +14,4 @@ DEFAULT_TRANSITION_WINDOW = 30
 DISPATCH_UPDATE = f"{DOMAIN}_update"
 STATIC_PATH_REGISTERED = "_static_path_registered"
 WEBSOCKET_REGISTERED = "_websocket_registered"
+STORAGE_VERSION = 1

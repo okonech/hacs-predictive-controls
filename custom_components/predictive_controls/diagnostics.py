@@ -39,6 +39,6 @@ async def async_get_config_entry_diagnostics(
             "probability": runtime.last_prediction.probability,
         },
         "probabilities": runtime.probabilities,
-        "transition_counts": runtime.chain.counts,
+        "transition_counts": status["transition_counts"],
         "actions": [action.action_id for action in runtime.actions],
     }

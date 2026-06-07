@@ -172,6 +172,26 @@ function zoneSummaries(map) {
     .sort((left, right) => left.floor.localeCompare(right.floor) || left.label.localeCompare(right.label));
 }
 
+function learnedTransitionRows(map, status) {
+  const nodes = map?.nodes || {};
+  const counts = status?.transition_counts || {};
+  const rows = [];
+  for (const [sourceId, targets] of Object.entries(counts)) {
+    for (const [targetId, count] of Object.entries(targets || {})) {
+      const learnedCount = Number(count || 0);
+      if (learnedCount <= 0) continue;
+      rows.push({
+        sourceId,
+        targetId,
+        sourceLabel: nodes[sourceId]?.label || titleFromId(sourceId),
+        targetLabel: nodes[targetId]?.label || titleFromId(targetId),
+        count: learnedCount,
+      });
+    }
+  }
+  return rows.sort((left, right) => right.count - left.count || left.sourceLabel.localeCompare(right.sourceLabel) || left.targetLabel.localeCompare(right.targetLabel));
+}
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -318,7 +338,34 @@ class PredictiveControlsPanel extends HTMLElement {
           <button data-action="refresh-status">Refresh</button>
         </section>
         ${floors.map((floor) => this.renderOccupancyFloor(floor, zones.filter((zone) => zone.floor === floor))).join("")}
+        ${this.renderLearnedTransitions()}
       </main>
+    `;
+  }
+
+  renderLearnedTransitions() {
+    const rows = learnedTransitionRows(this._config.map, this._status);
+    return `
+      <section class="transition-section">
+        <div class="section-head">
+          <h3>Learned Transitions</h3>
+          <small>${rows.length} active ${rows.length === 1 ? "edge" : "edges"}</small>
+        </div>
+        ${rows.length ? `
+          <table class="transition-table">
+            <thead><tr><th>From</th><th>To</th><th>Count</th></tr></thead>
+            <tbody>
+              ${rows.map((row) => `
+                <tr>
+                  <td><strong>${escapeHtml(row.sourceLabel)}</strong><small>${escapeHtml(row.sourceId)}</small></td>
+                  <td><strong>${escapeHtml(row.targetLabel)}</strong><small>${escapeHtml(row.targetId)}</small></td>
+                  <td>${row.count.toLocaleString(undefined, { maximumFractionDigits: 1 })}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        ` : `<p>No learned transitions yet.</p>`}
+      </section>
     `;
   }
 
@@ -742,9 +789,11 @@ class PredictiveControlsPanel extends HTMLElement {
       textarea { min-height:520px; font-family:monospace; }
       textarea.small { min-height:96px; }
       .occupancy-layout { display:grid; gap:16px; }
-      .occupancy-toolbar, .floor-section { background:var(--card-background-color); border:1px solid var(--divider-color); border-radius:8px; padding:16px; }
+      .occupancy-toolbar, .floor-section, .transition-section { background:var(--card-background-color); border:1px solid var(--divider-color); border-radius:8px; padding:16px; }
       .occupancy-toolbar { display:flex; align-items:center; justify-content:space-between; gap:16px; }
       .occupancy-toolbar p { margin:4px 0 0; }
+      .section-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+      .section-head small { color:var(--secondary-text-color); }
       .floor-section { overflow:auto; }
       .occupancy-board { position:relative; overflow:auto; background:var(--secondary-background-color); border:1px solid var(--divider-color); border-radius:8px; }
       .zone-edges { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
@@ -760,6 +809,10 @@ class PredictiveControlsPanel extends HTMLElement {
       .status-possible { border-left-color:var(--info-color, #4797ff); }
       .status-probable { border-left-color:var(--success-color, #43a047); }
       .status-confirmed { border-left-color:var(--primary-color); }
+      .transition-table { width:100%; border-collapse:collapse; margin-top:12px; }
+      .transition-table th, .transition-table td { text-align:left; border-top:1px solid var(--divider-color); padding:10px 8px; vertical-align:top; }
+      .transition-table th { color:var(--secondary-text-color); font-weight:600; }
+      .transition-table small { display:block; color:var(--secondary-text-color); margin-top:2px; }
       @media (max-width: 1000px) { .map-layout { grid-template-columns:1fr; } }
     `;
   }
