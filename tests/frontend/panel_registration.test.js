@@ -105,6 +105,8 @@ test("panel renders live occupancy zones from configured map data", async () => 
         living_room: {
           label: "Living Room",
           floor: "first_floor",
+          role: "anchor_sensor",
+          occupancy_behavior: "sticky",
           position: { x: 120, y: 220 },
           size: { width: 240, height: 130 },
         },
@@ -125,6 +127,7 @@ test("panel renders live occupancy zones from configured map data", async () => 
       living_room: {
         confidence: 0.91,
         status: "confirmed",
+        occupancy_behavior: "sticky",
         last_node_id: "living_left",
         reason: "still_target active at living_left; confidence is confirmed",
       },
@@ -142,6 +145,8 @@ test("panel renders live occupancy zones from configured map data", async () => 
   assert.match(panel.innerHTML, /Living Room/);
   assert.match(panel.innerHTML, /91%/);
   assert.match(panel.innerHTML, /status-confirmed/);
+  assert.match(panel.innerHTML, /Sticky/);
+  assert.match(panel.innerHTML, /Anchor Sensor/);
   assert.match(panel.innerHTML, /living_left/);
   assert.match(panel.innerHTML, /Learned Transitions/);
   assert.match(panel.innerHTML, /Kitchen/);
@@ -163,6 +168,35 @@ test("panel renders the editable map YAML tab", async () => {
   assert.match(panel.innerHTML, /Map YAML/);
   assert.match(panel.innerHTML, /data-map-yaml/);
   assert.match(panel.innerHTML, /entry:/);
+});
+
+test("panel renders map nodes with behavior and role labels", async () => {
+  const Panel = await panelConstructor();
+  const panel = new Panel();
+  panel._hass = {};
+  panel._config = {
+    map: {
+      zones: {
+        office: { occupancy_behavior: "sustained" },
+      },
+      nodes: {
+        office_motion: {
+          label: "Office Motion",
+          zone: "office",
+          role: "room_occupancy",
+          entities: { motion: "binary_sensor.office_motion" },
+          adjacent: [],
+          position: { x: 80, y: 80 },
+        },
+      },
+    },
+  };
+  panel._tab = "map";
+
+  panel.render();
+
+  assert.match(panel.innerHTML, /Sustained/);
+  assert.match(panel.innerHTML, /Room Occupancy/);
 });
 
 test("panel serializes multi-entity nodes into map YAML", async () => {
@@ -191,7 +225,7 @@ test("panel serializes multi-entity nodes into map YAML", async () => {
 });
 
 test("panel script parses when Home Assistant loads it as a classic script", async () => {
-  const source = await readFile(panelAssetUrl("panel-v0.1.6.js"), "utf8");
+  const source = await readFile(panelAssetUrl("panel-v0.1.7.js"), "utf8");
 
   assert.doesNotThrow(() => new vm.Script(source));
 });
@@ -199,7 +233,7 @@ test("panel script parses when Home Assistant loads it as a classic script", asy
 test("versioned panel asset matches the development panel asset", async () => {
   const [developmentSource, versionedSource] = await Promise.all([
     readFile(panelAssetUrl("panel.js"), "utf8"),
-    readFile(panelAssetUrl("panel-v0.1.6.js"), "utf8"),
+    readFile(panelAssetUrl("panel-v0.1.7.js"), "utf8"),
   ]);
 
   assert.equal(versionedSource, developmentSource);

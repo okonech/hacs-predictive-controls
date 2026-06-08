@@ -31,6 +31,10 @@ def zone_state_payload(state: Any) -> dict[str, Any]:
     return {
         "confidence": state.confidence,
         "status": state.status,
+        "occupancy_behavior": state.occupancy_behavior,
+        "active_since": state.active_since.isoformat()
+        if state.active_since is not None
+        else None,
         "last_evidence_at": state.last_evidence_at.isoformat()
         if state.last_evidence_at is not None
         else None,
@@ -49,6 +53,7 @@ def occupancy_event_payload(event: Any) -> dict[str, Any]:
         "zone": event.zone,
         "floor": event.floor,
         "role": event.role,
+        "occupancy_behavior": event.occupancy_behavior,
         "signal_type": event.signal_type,
         "state": event.state,
         "event_at": event.event_at.isoformat(),

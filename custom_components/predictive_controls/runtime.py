@@ -6,7 +6,10 @@ from typing import Any
 
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import (
+    async_track_state_change_event,
+    async_track_time_interval,
+)
 
 from .actions import ActionDecision, PredictiveAction
 from .confidence import ZoneConfidenceEngine, ZoneState, ZoneUpdate
@@ -44,6 +47,7 @@ class PredictiveControlsRuntime:
         self.last_occupancy_event: OccupancyEvent | None = None
         self.last_zone_update: ZoneUpdate | None = None
         self._unsubscribe: object | None = None
+        self._unsubscribe_refresh: object | None = None
 
     @property
     def chain(self) -> MarkovChain:
@@ -84,11 +88,27 @@ class PredictiveControlsRuntime:
         self._unsubscribe = async_track_state_change_event(
             self.hass, entity_ids, self._async_state_changed
         )
+        self._unsubscribe_refresh = async_track_time_interval(
+            self.hass, self._async_refresh_active_confidence, timedelta(minutes=1)
+        )
+        now = datetime.now().astimezone()
+        for entity_id in entity_ids:
+            state = self.hass.states.get(entity_id)
+            if state is not None:
+                self.observe_entity(
+                    entity_id=entity_id,
+                    state=str(state.state),
+                    now=now,
+                    process_prediction_actions=False,
+                )
 
     async def async_stop(self) -> None:
         if callable(self._unsubscribe):
             self._unsubscribe()
+        if callable(self._unsubscribe_refresh):
+            self._unsubscribe_refresh()
         self._unsubscribe = None
+        self._unsubscribe_refresh = None
         await self.async_save_transition_counts()
 
     async def async_save_transition_counts(self) -> None:
@@ -115,7 +135,22 @@ class PredictiveControlsRuntime:
             now=now,
         )
 
-    def observe_entity(self, entity_id: str, state: str, now: datetime) -> None:
+    @callback
+    def _async_refresh_active_confidence(self, now: datetime) -> None:
+        updates = self.confidence.refresh_active(now)
+        if not updates:
+            return
+        self.last_zone_update = updates[-1]
+        _LOGGER.debug("Refreshed %s active zone confidence states", len(updates))
+        async_dispatcher_send(self.hass, DISPATCH_UPDATE)
+
+    def observe_entity(
+        self,
+        entity_id: str,
+        state: str,
+        now: datetime,
+        process_prediction_actions: bool = True,
+    ) -> None:
         occupancy_event = event_from_entity(self.map, entity_id, state, now)
         if occupancy_event is None:
             return
@@ -132,7 +167,7 @@ class PredictiveControlsRuntime:
         )
 
         action_decisions: tuple[ActionDecision, ...] = ()
-        if occupancy_event.state == "on":
+        if occupancy_event.state == "on" and process_prediction_actions:
             update = self.engine.observe_node(node_id=occupancy_event.node_id, now=now)
             action_decisions = update.action_decisions
             if update.learned_transition is not None:

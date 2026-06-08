@@ -1,6 +1,6 @@
 [project]
 name = "hacs-predictive-controls"
-version = "0.1.6"
+version = "0.1.7"
 description = "Home Assistant custom integration for Markov-chain predictive controls"
 readme = "README.md"
 requires-python = ">=3.12"

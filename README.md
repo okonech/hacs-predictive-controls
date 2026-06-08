@@ -73,14 +73,22 @@ actions:
 ## Occupancy Confidence
 
 Predictive Controls also publishes derived occupancy-confidence entities from the
-same node map. Each mapped node may define `floor`, `zone`, and `role` metadata;
-roles such as `room_occupancy`, `transition_gate`, `ambiguous_open_plan`,
-`subzone_occupancy`, and `anchor_sensor` tune how strongly sensor on/off events
-affect zone confidence.
+same node map. Each mapped node may define `floor`, `zone`, `role`, and
+`occupancy_behavior` metadata. Roles such as `room_occupancy`,
+`transition_gate`, `ambiguous_open_plan`, `subzone_occupancy`, and
+`anchor_sensor` describe the kind of sensor or place. Occupancy behaviors tune
+how confidence grows while evidence remains active and how quickly it decays:
+
+- `transient`: pass-through areas such as hallways and stairs;
+- `sustained`: normal rooms such as offices, kitchens, closets, and gyms;
+- `sticky`: rooms where occupancy should remain trusted longer, such as living
+  rooms or bathrooms;
+- `ambiguous`: open-plan or overlapping areas that should rise more cautiously.
 
 Maps may also include optional top-level `zones` metadata for display labels,
-floor grouping, and visual placement in the occupancy tab. If omitted, the panel
-derives zones from node `zone`, `floor`, and `position` fields.
+floor grouping, occupancy behavior, and visual placement in the occupancy tab.
+If omitted, the panel derives zones from node `zone`, `floor`, `role`, and
+`position` fields.
 
 For each zone, the integration exposes:
 

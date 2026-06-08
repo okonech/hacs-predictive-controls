@@ -24,6 +24,7 @@ async def async_get_config_entry_diagnostics(
                 "floor": node.floor,
                 "zone": node.occupancy_zone,
                 "role": node.role,
+                "occupancy_behavior": runtime.map.occupancy_behavior_for_node(node),
                 "review_required": node.review_required,
             }
             for node_id, node in runtime.map.nodes.items()

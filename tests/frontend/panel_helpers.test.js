@@ -67,6 +67,8 @@ test("creates a node from a live-shaped motion entity", () => {
       motion: "binary_sensor.entrance_mmwave_dimmer_motion_detection",
     },
     adjacent: [],
+    role: "room_occupancy",
+    occupancy_behavior: "sustained",
     initial_weight: 1,
     position: { x: 32, y: 106 },
   });
@@ -86,6 +88,8 @@ test("creates empty nodes with default board placement", () => {
   const { nodeId, node } = createEmptyNode(nodes);
 
   assert.equal(nodeId, "node_2");
+  assert.equal(node.role, "room_occupancy");
+  assert.equal(node.occupancy_behavior, "sustained");
   assert.equal(node.position.x, 80);
   assert.equal(node.position.y, 80);
 });

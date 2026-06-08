@@ -109,5 +109,9 @@ class ZoneProbableSensor(BinarySensorEntity):
         return {
             "confidence": state.confidence,
             "status": state.status,
+            "occupancy_behavior": state.occupancy_behavior,
+            "active_since": state.active_since.isoformat()
+            if state.active_since is not None
+            else None,
             "reason": state.reason,
         }

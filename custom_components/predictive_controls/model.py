@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+OCCUPANCY_BEHAVIORS = ("transient", "sustained", "sticky", "ambiguous")
+
 
 class PredictiveMapError(ValueError):
     """Raised when a predictive map is invalid."""
@@ -14,6 +16,48 @@ class EntityBinding:
 
     node_id: str
     signal_type: str
+
+
+def default_occupancy_behavior(role: str) -> str:
+    if role == "transition_gate":
+        return "transient"
+    if role == "ambiguous_open_plan":
+        return "ambiguous"
+    if role == "anchor_sensor":
+        return "sticky"
+    return "sustained"
+
+
+@dataclass(frozen=True)
+class ZoneConfig:
+    """Display and inference metadata for one occupancy zone."""
+
+    zone_id: str
+    role: str | None = None
+    occupancy_behavior: str | None = None
+
+    @classmethod
+    def from_mapping(cls, zone_id: str, raw: Any) -> ZoneConfig:
+        if not isinstance(raw, dict):
+            raise PredictiveMapError(f"Zone {zone_id!r} must be a mapping")
+
+        role = raw.get("role")
+        if role is not None and (not isinstance(role, str) or not role):
+            raise PredictiveMapError(f"Zone {zone_id!r} role must be a string")
+
+        occupancy_behavior = raw.get("occupancy_behavior")
+        if occupancy_behavior is not None:
+            if occupancy_behavior not in OCCUPANCY_BEHAVIORS:
+                joined = ", ".join(OCCUPANCY_BEHAVIORS)
+                raise PredictiveMapError(
+                    f"Zone {zone_id!r} occupancy_behavior must be one of: {joined}"
+                )
+
+        return cls(
+            zone_id=zone_id,
+            role=role,
+            occupancy_behavior=occupancy_behavior,
+        )
 
 
 @dataclass(frozen=True)
@@ -28,6 +72,7 @@ class NodeConfig:
     floor: str | None = None
     zone: str | None = None
     role: str = "room_occupancy"
+    occupancy_behavior: str | None = None
     review_required: bool = False
 
     @classmethod
@@ -77,6 +122,14 @@ class NodeConfig:
         if not isinstance(role, str) or not role:
             raise PredictiveMapError(f"Node {node_id!r} role must be a string")
 
+        occupancy_behavior = raw.get("occupancy_behavior")
+        if occupancy_behavior is not None:
+            if occupancy_behavior not in OCCUPANCY_BEHAVIORS:
+                joined = ", ".join(OCCUPANCY_BEHAVIORS)
+                raise PredictiveMapError(
+                    f"Node {node_id!r} occupancy_behavior must be one of: {joined}"
+                )
+
         review_required = raw.get("review_required", False)
         if not isinstance(review_required, bool):
             raise PredictiveMapError(
@@ -92,6 +145,7 @@ class NodeConfig:
             floor=floor,
             zone=zone,
             role=role,
+            occupancy_behavior=occupancy_behavior,
             review_required=review_required,
         )
 
@@ -105,6 +159,7 @@ class PredictiveMap:
     """Validated graph and entity mapping for predictive controls."""
 
     nodes: dict[str, NodeConfig]
+    zone_configs: dict[str, ZoneConfig] = field(default_factory=dict)
 
     @classmethod
     def from_mapping(cls, raw: Any) -> PredictiveMap:
@@ -114,6 +169,17 @@ class PredictiveMap:
         raw_nodes = raw.get("nodes")
         if not isinstance(raw_nodes, dict) or not raw_nodes:
             raise PredictiveMapError("Predictive map must define at least one node")
+
+        raw_zones = raw.get("zones", {})
+        if raw_zones is None:
+            raw_zones = {}
+        if not isinstance(raw_zones, dict):
+            raise PredictiveMapError("Predictive map zones must be a mapping")
+
+        zone_configs = {
+            str(zone_id): ZoneConfig.from_mapping(str(zone_id), zone_raw)
+            for zone_id, zone_raw in raw_zones.items()
+        }
 
         nodes = {
             str(node_id): NodeConfig.from_mapping(str(node_id), node_raw)
@@ -131,7 +197,7 @@ class PredictiveMap:
             joined = ", ".join(unknown_targets)
             raise PredictiveMapError(f"Adjacent nodes are not defined: {joined}")
 
-        return cls(nodes=nodes)
+        return cls(nodes=nodes, zone_configs=zone_configs)
 
     def node_for_entity(self, entity_id: str) -> str | None:
         binding = self.entity_binding_for_entity(entity_id)
@@ -162,5 +228,32 @@ class PredictiveMap:
 
     def zones(self) -> tuple[str, ...]:
         return tuple(
-            sorted({node.occupancy_zone for node in self.nodes.values()})
+            sorted(
+                {
+                    *self.zone_configs,
+                    *(node.occupancy_zone for node in self.nodes.values()),
+                }
+            )
         )
+
+    def occupancy_behavior_for_node(self, node: NodeConfig) -> str:
+        if node.occupancy_behavior is not None:
+            return node.occupancy_behavior
+        zone_config = self.zone_configs.get(node.occupancy_zone)
+        if zone_config is not None and zone_config.occupancy_behavior is not None:
+            return zone_config.occupancy_behavior
+        role = (
+            zone_config.role
+            if zone_config is not None and zone_config.role
+            else node.role
+        )
+        return default_occupancy_behavior(role)
+
+    def zone_occupancy_behavior(self, zone: str) -> str:
+        zone_config = self.zone_configs.get(zone)
+        if zone_config is not None and zone_config.occupancy_behavior is not None:
+            return zone_config.occupancy_behavior
+        for node in self.nodes.values():
+            if node.occupancy_zone == zone:
+                return self.occupancy_behavior_for_node(node)
+        return "sustained"

@@ -14,6 +14,7 @@ def make_map() -> PredictiveMap:
                     "floor": "first_floor",
                     "zone": "living_room",
                     "role": "anchor_sensor",
+                    "occupancy_behavior": "sticky",
                     "entities": {
                         "still_target": "binary_sensor.living_still",
                         "moving_target": "binary_sensor.living_moving",
@@ -36,6 +37,7 @@ def test_event_from_entity_normalizes_mapped_binary_state() -> None:
     assert event.zone == "living_room"
     assert event.floor == "first_floor"
     assert event.role == "anchor_sensor"
+    assert event.occupancy_behavior == "sticky"
     assert event.signal_type == "still_target"
     assert event.state == "on"
     assert event.event_at == now

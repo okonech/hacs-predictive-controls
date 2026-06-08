@@ -15,6 +15,7 @@ class OccupancyEvent:
     zone: str
     floor: str | None
     role: str
+    occupancy_behavior: str
     signal_type: str
     state: str
     event_at: datetime
@@ -43,6 +44,7 @@ def event_from_entity(
         zone=node.occupancy_zone,
         floor=node.floor,
         role=node.role,
+        occupancy_behavior=predictive_map.occupancy_behavior_for_node(node),
         signal_type=binding.signal_type,
         state=state,
         event_at=event_at,

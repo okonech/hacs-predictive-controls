@@ -114,6 +114,10 @@ class ZoneConfidenceSensor(RuntimeSensor):
             return {"status": "rejected", "reason": "no evidence"}
         return {
             "status": state.status,
+            "occupancy_behavior": state.occupancy_behavior,
+            "active_since": state.active_since.isoformat()
+            if state.active_since is not None
+            else None,
             "last_evidence_at": state.last_evidence_at.isoformat()
             if state.last_evidence_at is not None
             else None,
@@ -146,6 +150,10 @@ class ZoneStatusSensor(RuntimeSensor):
             return {"confidence": 0.0, "reason": "no evidence"}
         return {
             "confidence": state.confidence,
+            "occupancy_behavior": state.occupancy_behavior,
+            "active_since": state.active_since.isoformat()
+            if state.active_since is not None
+            else None,
             "reason": state.reason,
             "last_node_id": state.last_node_id,
         }
