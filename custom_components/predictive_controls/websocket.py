@@ -99,6 +99,7 @@ async def websocket_config(
         vol.Required("entry_id"): str,
         vol.Optional("map"): dict,
         vol.Optional("map_yaml"): str,
+        vol.Optional("map_yaml_dirty", default=False): bool,
         vol.Required("actions_yaml"): str,
         vol.Required("transition_window_seconds"): int,
         vol.Required("prediction_threshold"): float,

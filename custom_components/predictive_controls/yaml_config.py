@@ -57,10 +57,12 @@ def dump_yaml_document(data: Any) -> str:
 
 
 def map_yaml_from_payload(payload: dict[str, Any]) -> str:
-    if "map_yaml" in payload and payload["map_yaml"].strip():
+    if payload.get("map_yaml_dirty") and "map_yaml" in payload:
         return str(payload["map_yaml"])
     if "map" in payload:
         return dump_yaml_document(payload["map"])
+    if "map_yaml" in payload and payload["map_yaml"].strip():
+        return str(payload["map_yaml"])
     raise ValueError("Either map or map_yaml is required")
 
 

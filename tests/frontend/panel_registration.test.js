@@ -76,8 +76,31 @@ test("panel module registers and renders websocket data", async () => {
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.match(panel.innerHTML, /Predictive Controls/);
-  assert.match(panel.innerHTML, /Entrance mmWave Dimmer Motion detection/);
-  assert.match(panel.innerHTML, /binary_sensor\.entrance_mmwave_dimmer_motion_detection/);
+  assert.match(panel.innerHTML, /<main class="occupancy-layout">/);
+  assert.equal(panel._entities[0].entity_id, "binary_sensor.entrance_mmwave_dimmer_motion_detection");
+});
+
+test("panel defaults to occupancy first and renders requested tab order", async () => {
+  const Panel = await panelConstructor();
+  const panel = new Panel();
+  panel._hass = {};
+  panel._config = {
+    map: { nodes: {} },
+    map_yaml: "nodes: {}\n",
+    actions_yaml: "actions: {}\n",
+    transition_window_seconds: 30,
+    prediction_threshold: 0.6,
+    expected_occupants: 2,
+  };
+  panel._status = { zone_states: {}, occupancy_diagnostics: { tracks: [] } };
+
+  panel.render();
+
+  assert.match(panel.innerHTML, /<main class="occupancy-layout">/);
+  assert.match(
+    panel.innerHTML,
+    /data-tab="occupancy">Occupancy<\/button>\s*<button[^>]+data-tab="map">Map<\/button>\s*<button[^>]+data-tab="yaml">YAML<\/button>\s*<button[^>]+data-tab="actions">Actions<\/button>\s*<button[^>]+data-tab="settings">Settings<\/button>/,
+  );
 });
 
 test("panel renders live occupancy zones from configured map data", async () => {
@@ -261,6 +284,34 @@ test("panel serializes empty nested collections inline", async () => {
   assert.match(panel._config.map_yaml, /adjacent: \[\]/);
   assert.doesNotMatch(panel._config.map_yaml, /^\[\]$/m);
   assert.doesNotMatch(panel._config.map_yaml, /^\{\}$/m);
+});
+
+test("panel marks raw map yaml dirty only for yaml editor saves", async () => {
+  const Panel = await panelConstructor();
+  const calls = [];
+  const panel = new Panel();
+  panel._hass = {
+    callWS(message) {
+      calls.push(message);
+      return Promise.resolve(panel._config);
+    },
+  };
+  panel._config = {
+    entry_id: "abc123",
+    map: { nodes: { entry: { adjacent: [] } } },
+    map_yaml: "nodes:\n  entry:\n    adjacent:\n[]\n",
+    actions_yaml: "actions: {}\n",
+    transition_window_seconds: 30,
+    prediction_threshold: 0.6,
+    expected_occupants: 2,
+  };
+
+  await panel.save();
+  panel._mapYamlDirty = true;
+  await panel.save();
+
+  assert.equal(calls[0].map_yaml_dirty, false);
+  assert.equal(calls[1].map_yaml_dirty, true);
 });
 
 test("panel renders expected occupants setting", async () => {

@@ -285,7 +285,7 @@ class PredictiveControlsPanel extends HTMLElement {
       this._entities = normalizeEntityResponse(entityResponse);
       this._selectedNode = undefined;
       this._mapYamlDirty = false;
-      this._tab = this._tab || "map";
+      this._tab = this._tab || "occupancy";
       this._statusUpdated = new Date();
       this.render();
     } catch (error) {
@@ -314,6 +314,7 @@ class PredictiveControlsPanel extends HTMLElement {
       this.innerHTML = `<div class="pc-shell"><p>${this._error || "Loading Predictive Controls..."}</p></div>`;
       return;
     }
+    this._tab = this._tab || "occupancy";
 
     this.innerHTML = `
       <style>${this.styles()}</style>
@@ -329,8 +330,8 @@ class PredictiveControlsPanel extends HTMLElement {
           </div>
         </header>
         <nav>
-          <button class="${this._tab === "map" ? "active" : ""}" data-tab="map">Map</button>
           <button class="${this._tab === "occupancy" ? "active" : ""}" data-tab="occupancy">Occupancy</button>
+          <button class="${this._tab === "map" ? "active" : ""}" data-tab="map">Map</button>
           <button class="${this._tab === "yaml" ? "active" : ""}" data-tab="yaml">YAML</button>
           <button class="${this._tab === "actions" ? "active" : ""}" data-tab="actions">Actions</button>
           <button class="${this._tab === "settings" ? "active" : ""}" data-tab="settings">Settings</button>
@@ -800,6 +801,7 @@ class PredictiveControlsPanel extends HTMLElement {
         entry_id: this._config.entry_id,
         map: this._config.map,
         map_yaml: this._config.map_yaml,
+        map_yaml_dirty: this._mapYamlDirty === true,
         actions_yaml: this._config.actions_yaml,
         transition_window_seconds: Number(this._config.transition_window_seconds),
         prediction_threshold: Number(this._config.prediction_threshold),
