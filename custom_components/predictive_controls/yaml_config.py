@@ -45,20 +45,23 @@ DEFAULT_ACTIONS_YAML = """actions:
 
 
 def load_yaml_document(text: str) -> Any:
-    loaded = yaml.safe_load(text)
+    try:
+        loaded = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"Invalid YAML: {exc}") from exc
     return {} if loaded is None else loaded
 
 
 def dump_yaml_document(data: Any) -> str:
-  return str(yaml.safe_dump(data, sort_keys=False))
+    return str(yaml.safe_dump(data, sort_keys=False))
 
 
 def map_yaml_from_payload(payload: dict[str, Any]) -> str:
-  if "map_yaml" in payload and payload["map_yaml"].strip():
-    return str(payload["map_yaml"])
-  if "map" in payload:
-    return dump_yaml_document(payload["map"])
-  raise ValueError("Either map or map_yaml is required")
+    if "map_yaml" in payload and payload["map_yaml"].strip():
+        return str(payload["map_yaml"])
+    if "map" in payload:
+        return dump_yaml_document(payload["map"])
+    raise ValueError("Either map or map_yaml is required")
 
 
 def load_predictive_map(text: str) -> PredictiveMap:

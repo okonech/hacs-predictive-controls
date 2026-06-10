@@ -238,6 +238,31 @@ test("panel serializes multi-entity nodes into map YAML", async () => {
   assert.match(panel._config.map_yaml, /moving_target: binary_sensor\.fireplace_moving_target/);
 });
 
+test("panel serializes empty nested collections inline", async () => {
+  const Panel = await panelConstructor();
+  const panel = new Panel();
+  panel._hass = {};
+  panel._config = {
+    map: {
+      nodes: {
+        entry: {
+          label: "Entry",
+          entities: {},
+          adjacent: [],
+          position: { x: 80, y: 80 },
+        },
+      },
+    },
+  };
+
+  panel.syncMapYamlFromMap();
+
+  assert.match(panel._config.map_yaml, /entities: \{\}/);
+  assert.match(panel._config.map_yaml, /adjacent: \[\]/);
+  assert.doesNotMatch(panel._config.map_yaml, /^\[\]$/m);
+  assert.doesNotMatch(panel._config.map_yaml, /^\{\}$/m);
+});
+
 test("panel renders expected occupants setting", async () => {
   const Panel = await panelConstructor();
   const panel = new Panel();

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from custom_components.predictive_controls.yaml_config import (
     DEFAULT_ACTIONS_YAML,
     DEFAULT_MAP_YAML,
@@ -20,6 +22,11 @@ def test_default_yaml_documents_are_valid_and_generic() -> None:
 
 def test_empty_yaml_document_loads_as_mapping() -> None:
     assert load_yaml_document("") == {}
+
+
+def test_invalid_yaml_raises_value_error() -> None:
+    with pytest.raises(ValueError, match="Invalid YAML"):
+        load_yaml_document("nodes:\n  entry\n    adjacent: []\n")
 
 
 def test_dump_yaml_document_preserves_key_order() -> None:

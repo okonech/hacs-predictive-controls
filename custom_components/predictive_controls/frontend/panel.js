@@ -235,6 +235,12 @@ function dumpValue(value, indent) {
     return entries
       .map(([key, item]) => {
         const prefix = `${" ".repeat(indent)}${key}:`;
+        if (Array.isArray(item) && item.length === 0) {
+          return `${prefix} []`;
+        }
+        if (item && typeof item === "object" && Object.entries(item).length === 0) {
+          return `${prefix} {}`;
+        }
         if (item && typeof item === "object") {
           return `${prefix}\n${dumpValue(item, indent + 2)}`;
         }
