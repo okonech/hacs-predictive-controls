@@ -31,6 +31,7 @@ class PredictiveControlsRuntime:
         predictive_map: PredictiveMap,
         actions: tuple[PredictiveAction, ...],
         transition_window: int,
+        expected_occupants: int | None = None,
         transition_store: Any | None = None,
         transition_counts: dict[str, dict[str, float]] | None = None,
     ) -> None:
@@ -43,7 +44,13 @@ class PredictiveControlsRuntime:
         )
         if transition_counts is not None:
             self.engine.chain.restore_counts(transition_counts)
-        self.confidence = ZoneConfidenceEngine(predictive_map)
+        self.expected_occupants = (
+            expected_occupants if expected_occupants and expected_occupants > 0 else 0
+        )
+        self.confidence = ZoneConfidenceEngine(
+            predictive_map,
+            expected_occupants=self.expected_occupants,
+        )
         self.last_occupancy_event: OccupancyEvent | None = None
         self.last_zone_update: ZoneUpdate | None = None
         self._unsubscribe: object | None = None
@@ -155,6 +162,16 @@ class PredictiveControlsRuntime:
         if occupancy_event is None:
             return
 
+        action_decisions: tuple[ActionDecision, ...] = ()
+        if occupancy_event.state == "on" and process_prediction_actions:
+            update = self.engine.observe_node(node_id=occupancy_event.node_id, now=now)
+            self.confidence.apply_node_predictions(self.engine.probabilities)
+            action_decisions = update.action_decisions
+            if update.learned_transition is not None:
+                source, target = update.learned_transition
+                _LOGGER.debug("Learned transition %s -> %s", source, target)
+                self.schedule_transition_count_save()
+
         self.last_occupancy_event = occupancy_event
         self.last_zone_update = self.confidence.observe(occupancy_event)
         _LOGGER.debug(
@@ -166,20 +183,12 @@ class PredictiveControlsRuntime:
             self.last_zone_update.current.reason,
         )
 
-        action_decisions: tuple[ActionDecision, ...] = ()
-        if occupancy_event.state == "on" and process_prediction_actions:
-            update = self.engine.observe_node(node_id=occupancy_event.node_id, now=now)
-            action_decisions = update.action_decisions
-            if update.learned_transition is not None:
-                source, target = update.learned_transition
-                _LOGGER.debug("Learned transition %s -> %s", source, target)
-                self.schedule_transition_count_save()
-
         async_dispatcher_send(self.hass, DISPATCH_UPDATE)
         self._execute_actions(action_decisions)
 
     def observe_node(self, node_id: str, now: datetime) -> None:
         update = self.engine.observe_node(node_id=node_id, now=now)
+        self.confidence.apply_node_predictions(self.engine.probabilities)
         if update.learned_transition is not None:
             source, target = update.learned_transition
             _LOGGER.debug("Learned transition %s -> %s", source, target)

@@ -150,3 +150,29 @@ def test_node_occupancy_behavior_can_override_zone() -> None:
     ) == "sticky"
     assert predictive_map.zone_occupancy_behavior("office") == "sustained"
     assert predictive_map.zone_occupancy_behavior("hall") == "transient"
+
+
+def test_zone_neighbors_follow_node_adjacency() -> None:
+    predictive_map = PredictiveMap.from_mapping(
+        {
+            "nodes": {
+                "office_motion": {
+                    "zone": "office",
+                    "adjacent": ["hall_motion", "desk_motion"],
+                },
+                "desk_motion": {"zone": "office", "adjacent": ["office_motion"]},
+                "hall_motion": {
+                    "zone": "hall",
+                    "adjacent": ["office_motion", "bath_motion"],
+                },
+                "bath_motion": {
+                    "zone": "bathroom",
+                    "adjacent": ["hall_motion"],
+                },
+            }
+        }
+    )
+
+    assert predictive_map.zone_neighbors("office") == ("hall",)
+    assert predictive_map.zone_neighbors("hall") == ("bathroom", "office")
+    assert predictive_map.zone_neighbors("missing") == ()

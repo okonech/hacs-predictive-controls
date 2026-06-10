@@ -6,6 +6,10 @@ from datetime import UTC, datetime
 from custom_components.predictive_controls.confidence import ZoneState
 from custom_components.predictive_controls.events import OccupancyEvent
 from custom_components.predictive_controls.markov import Prediction
+from custom_components.predictive_controls.occupancy_tracker import (
+    AnonymousTrack,
+    TrackerDiagnostics,
+)
 from custom_components.predictive_controls.status import (
     occupancy_event_payload,
     runtime_status_payload,
@@ -21,6 +25,12 @@ class FakeRuntime:
     last_prediction: Prediction | None
     probabilities: dict[str, float]
     transition_counts: dict[str, dict[str, float]]
+    confidence: object
+
+
+@dataclass(frozen=True)
+class FakeConfidence:
+    diagnostics: TrackerDiagnostics
 
 
 def make_zone_state() -> ZoneState:
@@ -34,6 +44,27 @@ def make_zone_state() -> ZoneState:
         last_clear_at=datetime(2026, 6, 7, 11, tzinfo=UTC),
         last_node_id="living_left",
         reason="still_target active at living_left; confidence is confirmed",
+        explanation={"type": "event", "active_signal_count": 1},
+    )
+
+
+def make_diagnostics() -> TrackerDiagnostics:
+    return TrackerDiagnostics(
+        expected_occupants=2,
+        tracks=(
+            AnonymousTrack(
+                track_id="track_1",
+                zone="living_room",
+                confidence=0.91,
+                active=True,
+                last_evidence_at=datetime(2026, 6, 7, 12, tzinfo=UTC),
+                source_entities=("binary_sensor.living_still",),
+            ),
+        ),
+        protected_tracks=("living_room",),
+        protected_corridor=("kitchen", "living_room"),
+        prediction_hints={"kitchen": 0.72},
+        dwell_seconds={"living_room": {"samples": 2, "average_seconds": 1800.0}},
     )
 
 
@@ -62,6 +93,7 @@ def test_zone_state_payload_serializes_datetimes_and_empty_values() -> None:
         "last_clear_at": "2026-06-07T11:00:00+00:00",
         "last_node_id": "living_left",
         "reason": "still_target active at living_left; confidence is confirmed",
+        "explanation": {"type": "event", "active_signal_count": 1},
     }
     assert zone_state_payload(ZoneState(zone="empty")) == {
         "confidence": 0.0,
@@ -72,6 +104,7 @@ def test_zone_state_payload_serializes_datetimes_and_empty_values() -> None:
         "last_clear_at": None,
         "last_node_id": None,
         "reason": "no evidence",
+        "explanation": {},
     }
 
 
@@ -98,6 +131,7 @@ def test_runtime_status_payload_serializes_prediction_and_without_prediction() -
         last_prediction=Prediction(node_id="dining_room", probability=0.72),
         probabilities={"dining_room": 0.72},
         transition_counts={"living_left": {"dining_room": 4.0}},
+        confidence=FakeConfidence(make_diagnostics()),
     )
 
     payload = runtime_status_payload(runtime)
@@ -111,6 +145,26 @@ def test_runtime_status_payload_serializes_prediction_and_without_prediction() -
     }
     assert payload["probabilities"] == {"dining_room": 0.72}
     assert payload["transition_counts"] == {"living_left": {"dining_room": 4.0}}
+    assert payload["expected_occupants"] == 0
+    assert payload["occupancy_diagnostics"] == {
+        "expected_occupants": 2,
+        "protected_tracks": ["living_room"],
+        "protected_corridor": ["kitchen", "living_room"],
+        "prediction_hints": {"kitchen": 0.72},
+        "dwell_seconds": {
+            "living_room": {"samples": 2, "average_seconds": 1800.0}
+        },
+        "tracks": [
+            {
+                "track_id": "track_1",
+                "zone": "living_room",
+                "confidence": 0.91,
+                "active": True,
+                "last_evidence_at": "2026-06-07T12:00:00+00:00",
+                "source_entities": ["binary_sensor.living_still"],
+            }
+        ],
+    }
 
     without_prediction = FakeRuntime(
         zone_states={},
@@ -119,6 +173,7 @@ def test_runtime_status_payload_serializes_prediction_and_without_prediction() -
         last_prediction=None,
         probabilities={},
         transition_counts={},
+        confidence=FakeConfidence(make_diagnostics()),
     )
 
     assert runtime_status_payload(without_prediction)["last_prediction"] is None

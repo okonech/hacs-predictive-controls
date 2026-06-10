@@ -11,9 +11,11 @@ from homeassistant.helpers import selector
 
 from .const import (
     CONF_ACTIONS_YAML,
+    CONF_EXPECTED_OCCUPANTS,
     CONF_MAP_YAML,
     CONF_PREDICTION_THRESHOLD,
     CONF_TRANSITION_WINDOW,
+    DEFAULT_EXPECTED_OCCUPANTS,
     DEFAULT_PREDICTION_THRESHOLD,
     DEFAULT_TRANSITION_WINDOW,
     DOMAIN,
@@ -39,6 +41,7 @@ def _options_schema(
     actions_yaml: str = DEFAULT_ACTIONS_YAML,
     transition_window: int = DEFAULT_TRANSITION_WINDOW,
     prediction_threshold: float = DEFAULT_PREDICTION_THRESHOLD,
+    expected_occupants: int = DEFAULT_EXPECTED_OCCUPANTS,
 ) -> vol.Schema:
     return vol.Schema(
         {
@@ -50,6 +53,7 @@ def _options_schema(
             vol.Required(
                 CONF_PREDICTION_THRESHOLD, default=prediction_threshold
             ): float,
+            vol.Required(CONF_EXPECTED_OCCUPANTS, default=expected_occupants): int,
         }
     )
 
@@ -62,6 +66,8 @@ def _validate_options(data: dict[str, Any]) -> None:
     threshold = float(data[CONF_PREDICTION_THRESHOLD])
     if not 0 <= threshold <= 1:
         raise ValueError("Prediction threshold must be between 0 and 1")
+    if int(data[CONF_EXPECTED_OCCUPANTS]) < 0:
+        raise ValueError("Expected occupants must be zero or positive")
 
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -88,6 +94,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_ACTIONS_YAML: DEFAULT_ACTIONS_YAML,
                 CONF_TRANSITION_WINDOW: DEFAULT_TRANSITION_WINDOW,
                 CONF_PREDICTION_THRESHOLD: DEFAULT_PREDICTION_THRESHOLD,
+                CONF_EXPECTED_OCCUPANTS: DEFAULT_EXPECTED_OCCUPANTS,
             },
         )
 
@@ -123,6 +130,7 @@ class OptionsFlow(config_entries.OptionsFlow):
                     actions_yaml=user_input[CONF_ACTIONS_YAML],
                     transition_window=int(user_input[CONF_TRANSITION_WINDOW]),
                     prediction_threshold=float(user_input[CONF_PREDICTION_THRESHOLD]),
+                    expected_occupants=int(user_input[CONF_EXPECTED_OCCUPANTS]),
                 ),
                 errors=errors,
             )
@@ -137,6 +145,9 @@ class OptionsFlow(config_entries.OptionsFlow):
                 ),
                 prediction_threshold=options.get(
                     CONF_PREDICTION_THRESHOLD, DEFAULT_PREDICTION_THRESHOLD
+                ),
+                expected_occupants=options.get(
+                    CONF_EXPECTED_OCCUPANTS, DEFAULT_EXPECTED_OCCUPANTS
                 ),
             ),
         )

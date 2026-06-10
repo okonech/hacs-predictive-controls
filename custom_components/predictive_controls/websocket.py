@@ -8,9 +8,11 @@ from homeassistant.core import HomeAssistant, callback
 
 from .const import (
     CONF_ACTIONS_YAML,
+    CONF_EXPECTED_OCCUPANTS,
     CONF_MAP_YAML,
     CONF_PREDICTION_THRESHOLD,
     CONF_TRANSITION_WINDOW,
+    DEFAULT_EXPECTED_OCCUPANTS,
     DEFAULT_PREDICTION_THRESHOLD,
     DEFAULT_TRANSITION_WINDOW,
     DOMAIN,
@@ -66,6 +68,9 @@ def _entry_payload(entry: Any) -> dict[str, Any]:
         "prediction_threshold": options.get(
             CONF_PREDICTION_THRESHOLD, DEFAULT_PREDICTION_THRESHOLD
         ),
+        "expected_occupants": options.get(
+            CONF_EXPECTED_OCCUPANTS, DEFAULT_EXPECTED_OCCUPANTS
+        ),
     }
 
 
@@ -97,6 +102,7 @@ async def websocket_config(
         vol.Required("actions_yaml"): str,
         vol.Required("transition_window_seconds"): int,
         vol.Required("prediction_threshold"): float,
+        vol.Optional("expected_occupants", default=DEFAULT_EXPECTED_OCCUPANTS): int,
     }
 )
 @websocket_api.require_admin
@@ -117,6 +123,9 @@ async def websocket_save_config(
         transition_window = int(msg["transition_window_seconds"])
         if transition_window < 1:
             raise ValueError("transition_window_seconds must be positive")
+        expected_occupants = int(msg["expected_occupants"])
+        if expected_occupants < 0:
+            raise ValueError("expected_occupants must be zero or positive")
     except ValueError as exc:
         connection.send_error(msg["id"], "invalid_config", str(exc))
         return
@@ -128,6 +137,7 @@ async def websocket_save_config(
             CONF_ACTIONS_YAML: msg["actions_yaml"],
             CONF_TRANSITION_WINDOW: transition_window,
             CONF_PREDICTION_THRESHOLD: threshold,
+            CONF_EXPECTED_OCCUPANTS: expected_occupants,
         },
     )
     await hass.config_entries.async_reload(entry.entry_id)

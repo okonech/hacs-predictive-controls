@@ -226,6 +226,17 @@ class PredictiveMap:
         node = self.nodes.get(node_id)
         return node.adjacent if node is not None else ()
 
+    def zone_neighbors(self, zone: str) -> tuple[str, ...]:
+        neighbors: set[str] = set()
+        for node in self.nodes.values():
+            if node.occupancy_zone != zone:
+                continue
+            for target_id in node.adjacent:
+                target = self.nodes.get(target_id)
+                if target is not None and target.occupancy_zone != zone:
+                    neighbors.add(target.occupancy_zone)
+        return tuple(sorted(neighbors))
+
     def zones(self) -> tuple[str, ...]:
         return tuple(
             sorted(

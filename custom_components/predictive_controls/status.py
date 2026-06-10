@@ -24,6 +24,10 @@ def runtime_status_payload(runtime: Any) -> dict[str, Any]:
         },
         "probabilities": runtime.probabilities,
         "transition_counts": runtime.transition_counts,
+        "expected_occupants": getattr(runtime, "expected_occupants", 0),
+        "occupancy_diagnostics": tracker_diagnostics_payload(
+            runtime.confidence.diagnostics
+        ),
     }
 
 
@@ -43,6 +47,31 @@ def zone_state_payload(state: Any) -> dict[str, Any]:
         else None,
         "last_node_id": state.last_node_id,
         "reason": state.reason,
+        "explanation": dict(getattr(state, "explanation", {})),
+    }
+
+
+def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
+    return {
+        "expected_occupants": diagnostics.expected_occupants,
+        "protected_tracks": list(diagnostics.protected_tracks),
+        "protected_corridor": list(diagnostics.protected_corridor),
+        "prediction_hints": diagnostics.prediction_hints,
+        "dwell_seconds": diagnostics.dwell_seconds,
+        "tracks": [track_payload(track) for track in diagnostics.tracks],
+    }
+
+
+def track_payload(track: Any) -> dict[str, Any]:
+    return {
+        "track_id": track.track_id,
+        "zone": track.zone,
+        "confidence": track.confidence,
+        "active": track.active,
+        "last_evidence_at": track.last_evidence_at.isoformat()
+        if track.last_evidence_at is not None
+        else None,
+        "source_entities": list(track.source_entities),
     }
 
 

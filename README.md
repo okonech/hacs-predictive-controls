@@ -27,7 +27,8 @@ The sidebar panel includes:
 - a connect mode for creating adjacency edges between nodes;
 - a node inspector for labels, entity bindings, initial weights, and edge removal;
 - an actions tab for generic Home Assistant service-call YAML;
-- settings for transition learning window and binary prediction threshold.
+- settings for transition learning window, binary prediction threshold, and
+  expected occupant count.
 
 The default map is intentionally generic:
 
@@ -101,6 +102,43 @@ For each zone, the integration exposes:
 These entities are intended as an inference layer between raw motion sensors and
 lighting automations. Existing predicted-node entities remain available for
 compatibility.
+
+### Occupancy Tracking Architecture
+
+Occupancy confidence is modeled as anonymous multi-person tracking over the
+configured adjacency graph. The system does not try to identify a specific
+person. Instead, it asks which set of occupied zones best explains the recent
+sensor evidence.
+
+The implementation is split into small modules:
+
+- `occupancy_graph.py`: derives a zone-level graph from node adjacency and
+  answers neighbor, movement-corridor, and shortest-path questions;
+- `occupancy_scoring.py`: contains pure confidence math for sensor-on evidence,
+  clear events, sustained active evidence, passive time decay, and conflict
+  decay;
+- `occupancy_tracker.py`: keeps zone state, active sensor evidence, recent
+  events, and anonymous occupant-track reconciliation;
+- `confidence.py`: compatibility facade used by existing runtime, entity, and
+  test imports.
+
+When `expected_occupants` is greater than zero, fresh evidence competes with
+older explanations. The tracker preserves the strongest occupied tracks and
+their adjacent movement corridor, then sharply lowers stale zones that are not
+needed to explain the configured number of people. For example, if two offices
+have fresh motion and `expected_occupants` is `2`, stale confidence in an
+unrelated bathroom or guest bedroom drops even if those sensors have not emitted
+another event.
+
+Passive time decay also runs during periodic refreshes. This prevents cleared
+zones from keeping high confidence indefinitely just because no later event
+touched the same room.
+
+The next learning layer should attach to these module boundaries: transition
+probabilities belong to graph edges, dwell-time distributions belong to zones,
+and sensor reliability belongs to node/entity bindings. Learning should only
+update those statistics when the tracker has a high-confidence explanation for
+which anonymous track produced the evidence.
 
 ## Debugging
 

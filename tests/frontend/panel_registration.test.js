@@ -48,6 +48,7 @@ test("panel module registers and renders websocket data", async () => {
           actions_yaml: "actions: {}\n",
           transition_window_seconds: 30,
           prediction_threshold: 0.6,
+          expected_occupants: 2,
         });
       }
       if (message.type === "predictive_controls/entities") {
@@ -135,6 +136,17 @@ test("panel renders live occupancy zones from configured map data", async () => 
     transition_counts: {
       living_left: { kitchen: 7 },
     },
+        occupancy_diagnostics: {
+          expected_occupants: 2,
+          protected_corridor: ["living_room", "kitchen"],
+          tracks: [
+            {
+              track_id: "track_1",
+              zone: "living_room",
+              confidence: 0.91,
+            },
+          ],
+        },
   };
   panel._statusUpdated = new Date("2026-06-07T12:00:00Z");
   panel._tab = "occupancy";
@@ -149,6 +161,8 @@ test("panel renders live occupancy zones from configured map data", async () => 
   assert.match(panel.innerHTML, /Anchor Sensor/);
   assert.match(panel.innerHTML, /living_left/);
   assert.match(panel.innerHTML, /Learned Transitions/);
+  assert.match(panel.innerHTML, /Expected 2/);
+  assert.match(panel.innerHTML, /track_1/);
   assert.match(panel.innerHTML, /Kitchen/);
   assert.match(panel.innerHTML, /7/);
 });
@@ -224,8 +238,25 @@ test("panel serializes multi-entity nodes into map YAML", async () => {
   assert.match(panel._config.map_yaml, /moving_target: binary_sensor\.fireplace_moving_target/);
 });
 
+test("panel renders expected occupants setting", async () => {
+  const Panel = await panelConstructor();
+  const panel = new Panel();
+  panel._hass = {};
+  panel._config = {
+    transition_window_seconds: 30,
+    prediction_threshold: 0.6,
+    expected_occupants: 2,
+  };
+  panel._tab = "settings";
+
+  panel.render();
+
+  assert.match(panel.innerHTML, /Expected occupants/);
+  assert.match(panel.innerHTML, /value="2"/);
+});
+
 test("panel script parses when Home Assistant loads it as a classic script", async () => {
-  const source = await readFile(panelAssetUrl("panel-v0.1.7.js"), "utf8");
+  const source = await readFile(panelAssetUrl("panel-v0.1.9.js"), "utf8");
 
   assert.doesNotThrow(() => new vm.Script(source));
 });
@@ -233,7 +264,7 @@ test("panel script parses when Home Assistant loads it as a classic script", asy
 test("versioned panel asset matches the development panel asset", async () => {
   const [developmentSource, versionedSource] = await Promise.all([
     readFile(panelAssetUrl("panel.js"), "utf8"),
-    readFile(panelAssetUrl("panel-v0.1.7.js"), "utf8"),
+    readFile(panelAssetUrl("panel-v0.1.9.js"), "utf8"),
   ]);
 
   assert.equal(versionedSource, developmentSource);
