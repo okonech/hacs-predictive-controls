@@ -10,9 +10,11 @@ if TYPE_CHECKING:
 from .const import (
     CONF_ACTIONS_YAML,
     CONF_EXPECTED_OCCUPANTS,
+    CONF_EXPECTED_OCCUPANTS_ENTITY,
     CONF_MAP_YAML,
     CONF_TRANSITION_WINDOW,
     DEFAULT_EXPECTED_OCCUPANTS,
+    DEFAULT_EXPECTED_OCCUPANTS_ENTITY,
     DEFAULT_TRANSITION_WINDOW,
     DOMAIN,
     STATIC_PATH_REGISTERED,
@@ -59,6 +61,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     expected_occupants = int(
         options.get(CONF_EXPECTED_OCCUPANTS, DEFAULT_EXPECTED_OCCUPANTS)
     )
+    expected_occupants_entity = str(
+        options.get(CONF_EXPECTED_OCCUPANTS_ENTITY, DEFAULT_EXPECTED_OCCUPANTS_ENTITY)
+    ).strip()
     transition_store = Store(
         hass,
         STORAGE_VERSION,
@@ -72,6 +77,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         actions,
         transition_window,
         expected_occupants=expected_occupants,
+        expected_occupants_entity=expected_occupants_entity,
         transition_store=transition_store,
         transition_counts=stored_transitions.get("transition_counts"),
     )

@@ -56,6 +56,13 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
         "expected_occupants": diagnostics.expected_occupants,
         "protected_tracks": list(diagnostics.protected_tracks),
         "protected_corridor": list(diagnostics.protected_corridor),
+        "inferred_join_slots": [
+            join_slot_payload(slot) for slot in diagnostics.inferred_join_slots
+        ],
+        "inferred_departures": [
+            departure_payload(departure)
+            for departure in diagnostics.inferred_departures
+        ],
         "prediction_hints": diagnostics.prediction_hints,
         "dwell_seconds": diagnostics.dwell_seconds,
         "tracks": [track_payload(track) for track in diagnostics.tracks],
@@ -72,6 +79,27 @@ def track_payload(track: Any) -> dict[str, Any]:
         if track.last_evidence_at is not None
         else None,
         "source_entities": list(track.source_entities),
+    }
+
+
+def join_slot_payload(slot: Any) -> dict[str, Any]:
+    return {
+        "zone": slot.zone,
+        "source_zone": slot.source_zone,
+        "source_node_id": slot.source_node_id,
+        "event_at": slot.event_at.isoformat(),
+        "expires_at": slot.expires_at.isoformat(),
+    }
+
+
+def departure_payload(departure: Any) -> dict[str, Any]:
+    return {
+        "zone": departure.zone,
+        "via_zone": departure.via_zone,
+        "via_node_id": departure.via_node_id,
+        "destination_zone": departure.destination_zone,
+        "event_at": departure.event_at.isoformat(),
+        "expires_at": departure.expires_at.isoformat(),
     }
 
 

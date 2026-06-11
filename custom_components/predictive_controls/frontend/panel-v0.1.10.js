@@ -373,14 +373,34 @@ class PredictiveControlsPanel extends HTMLElement {
     const diagnostics = this._status?.occupancy_diagnostics;
     if (!diagnostics) return "";
     const tracks = diagnostics.tracks || [];
+    const joins = diagnostics.inferred_join_slots || [];
+    const departures = diagnostics.inferred_departures || [];
     const expected = Number(diagnostics.expected_occupants || this._status?.expected_occupants || 0);
     return `
-      <section class="diagnostics-strip">
-        <span>Expected ${expected || "auto"}</span>
-        <span>${tracks.length} ${tracks.length === 1 ? "track" : "tracks"}</span>
-        <span>${(diagnostics.protected_corridor || []).length} corridor zones</span>
-        ${tracks.map((track) => `<span>${escapeHtml(track.track_id)} · ${escapeHtml(labelFromValue(track.zone))} · ${Math.round(Number(track.confidence || 0) * 100)}%</span>`).join("")}
+      <section class="diagnostics-panel">
+        <div class="diagnostics-strip">
+          <span>Expected ${expected || "auto"}</span>
+          <span>${tracks.length} ${tracks.length === 1 ? "track" : "tracks"}</span>
+          <span>${(diagnostics.protected_corridor || []).length} corridor zones</span>
+          <span>${joins.length} joined</span>
+          <span>${departures.length} departed</span>
+        </div>
+        <div class="diagnostics-list">
+          ${tracks.map((track) => this.renderTrackDiagnostic(track)).join("")}
+          ${joins.map((slot) => `<p><strong>Joined</strong><span>${escapeHtml(labelFromValue(slot.zone))} from ${escapeHtml(labelFromValue(slot.source_zone))}</span></p>`).join("")}
+          ${departures.map((departure) => `<p><strong>Departed</strong><span>${escapeHtml(labelFromValue(departure.zone))} via ${escapeHtml(labelFromValue(departure.via_zone))} toward ${escapeHtml(labelFromValue(departure.destination_zone))}</span></p>`).join("")}
+        </div>
       </section>
+    `;
+  }
+
+  renderTrackDiagnostic(track) {
+    const entities = (track.source_entities || []).join(", ");
+    return `
+      <p>
+        <strong>${escapeHtml(track.track_id)} · ${escapeHtml(labelFromValue(track.zone))}</strong>
+        <span>${Math.round(Number(track.confidence || 0) * 100)}% · ${track.active ? "active" : "inferred"}${entities ? ` · ${escapeHtml(entities)}` : ""}</span>
+      </p>
     `;
   }
 
@@ -595,6 +615,7 @@ class PredictiveControlsPanel extends HTMLElement {
         <label>Transition window seconds<input data-setting="transition_window_seconds" type="number" min="1" value="${this._config.transition_window_seconds}" /></label>
         <label>Prediction threshold<input data-setting="prediction_threshold" type="number" min="0" max="1" step="0.01" value="${this._config.prediction_threshold}" /></label>
         <label>Expected occupants<input data-setting="expected_occupants" type="number" min="0" step="1" value="${this._config.expected_occupants || 0}" /></label>
+        <label>Expected occupants entity<input data-setting="expected_occupants_entity" type="text" value="${escapeHtml(this._config.expected_occupants_entity || "")}" /></label>
       </main>
     `;
   }
@@ -624,7 +645,7 @@ class PredictiveControlsPanel extends HTMLElement {
       this._mapYamlDirty = true;
     });
     this.querySelectorAll("[data-setting]").forEach((input) => input.addEventListener("input", () => {
-      this._config[input.dataset.setting] = Number(input.value);
+      this._config[input.dataset.setting] = input.type === "number" ? Number(input.value) : input.value;
     }));
     this.querySelector("[data-filter]")?.addEventListener("input", (event) => this.filterEntities(event.target.value));
   }
@@ -806,6 +827,7 @@ class PredictiveControlsPanel extends HTMLElement {
         transition_window_seconds: Number(this._config.transition_window_seconds),
         prediction_threshold: Number(this._config.prediction_threshold),
         expected_occupants: Number(this._config.expected_occupants || 0),
+        expected_occupants_entity: this._config.expected_occupants_entity || "",
       });
       this._mapYamlDirty = false;
       this.render();
@@ -844,11 +866,14 @@ class PredictiveControlsPanel extends HTMLElement {
       textarea { min-height:520px; font-family:monospace; }
       textarea.small { min-height:96px; }
       .occupancy-layout { display:grid; gap:16px; }
-      .occupancy-toolbar, .diagnostics-strip, .floor-section, .transition-section { background:var(--card-background-color); border:1px solid var(--divider-color); border-radius:8px; padding:16px; }
+      .occupancy-toolbar, .diagnostics-panel, .floor-section, .transition-section { background:var(--card-background-color); border:1px solid var(--divider-color); border-radius:8px; padding:16px; }
       .occupancy-toolbar { display:flex; align-items:center; justify-content:space-between; gap:16px; }
       .occupancy-toolbar p { margin:4px 0 0; }
       .diagnostics-strip { display:flex; flex-wrap:wrap; gap:8px; }
       .diagnostics-strip span { border:1px solid var(--divider-color); border-radius:999px; padding:4px 8px; }
+      .diagnostics-list { display:grid; gap:8px; margin-top:12px; }
+      .diagnostics-list p { margin:0; display:grid; gap:2px; }
+      .diagnostics-list span { color:var(--secondary-text-color); }
       .section-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
       .section-head small { color:var(--secondary-text-color); }
       .floor-section { overflow:auto; }

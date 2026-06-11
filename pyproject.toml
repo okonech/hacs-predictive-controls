@@ -1,6 +1,6 @@
 [project]
 name = "hacs-predictive-controls"
-version = "0.1.9"
+version = "0.1.10"
 description = "Home Assistant custom integration for Markov-chain predictive controls"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -27,6 +27,7 @@ addopts = [
   "--cov=custom_components.predictive_controls.occupancy_dwell",
   "--cov=custom_components.predictive_controls.occupancy_replay",
   "--cov=custom_components.predictive_controls.occupancy_scoring",
+  "--cov=custom_components.predictive_controls.occupancy_settings",
   "--cov=custom_components.predictive_controls.occupancy_tracker",
   "--cov=custom_components.predictive_controls.status",
   "--cov=custom_components.predictive_controls.model",

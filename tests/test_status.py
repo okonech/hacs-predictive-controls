@@ -8,6 +8,8 @@ from custom_components.predictive_controls.events import OccupancyEvent
 from custom_components.predictive_controls.markov import Prediction
 from custom_components.predictive_controls.occupancy_tracker import (
     AnonymousTrack,
+    InferredDeparture,
+    InferredJoinSlot,
     TrackerDiagnostics,
 )
 from custom_components.predictive_controls.status import (
@@ -63,6 +65,25 @@ def make_diagnostics() -> TrackerDiagnostics:
         ),
         protected_tracks=("living_room",),
         protected_corridor=("kitchen", "living_room"),
+        inferred_join_slots=(
+            InferredJoinSlot(
+                zone="living_room",
+                source_zone="foyer",
+                source_node_id="foyer_motion",
+                event_at=datetime(2026, 6, 7, 12, 5, tzinfo=UTC),
+                expires_at=datetime(2026, 6, 7, 12, 10, tzinfo=UTC),
+            ),
+        ),
+        inferred_departures=(
+            InferredDeparture(
+                zone="office",
+                via_zone="hall",
+                via_node_id="hall_motion",
+                destination_zone="kitchen",
+                event_at=datetime(2026, 6, 7, 12, 6, tzinfo=UTC),
+                expires_at=datetime(2026, 6, 7, 12, 11, tzinfo=UTC),
+            ),
+        ),
         prediction_hints={"kitchen": 0.72},
         dwell_seconds={"living_room": {"samples": 2, "average_seconds": 1800.0}},
     )
@@ -150,6 +171,25 @@ def test_runtime_status_payload_serializes_prediction_and_without_prediction() -
         "expected_occupants": 2,
         "protected_tracks": ["living_room"],
         "protected_corridor": ["kitchen", "living_room"],
+        "inferred_join_slots": [
+            {
+                "zone": "living_room",
+                "source_zone": "foyer",
+                "source_node_id": "foyer_motion",
+                "event_at": "2026-06-07T12:05:00+00:00",
+                "expires_at": "2026-06-07T12:10:00+00:00",
+            }
+        ],
+        "inferred_departures": [
+            {
+                "zone": "office",
+                "via_zone": "hall",
+                "via_node_id": "hall_motion",
+                "destination_zone": "kitchen",
+                "event_at": "2026-06-07T12:06:00+00:00",
+                "expires_at": "2026-06-07T12:11:00+00:00",
+            }
+        ],
         "prediction_hints": {"kitchen": 0.72},
         "dwell_seconds": {
             "living_room": {"samples": 2, "average_seconds": 1800.0}

@@ -14,6 +14,7 @@ from .occupancy_scoring import (
     event_confidence,
     passive_confidence_for_duration,
     reason_for_conflict_decay,
+    reason_for_departure_decay,
     reason_for_event,
     reason_for_inactive_decay,
     reason_for_sustained_event,
@@ -55,6 +56,12 @@ class TrackerConfig:
     expected_occupants: int = 0
     corridor_radius: int = 1
     recent_evidence_window: timedelta = timedelta(minutes=15)
+    join_transition_window: timedelta = timedelta(minutes=3)
+    join_slot_retention: timedelta = timedelta(minutes=5)
+    join_destination_min_confidence: float = 0.35
+    departure_transition_window: timedelta = timedelta(minutes=3)
+    departure_retention: timedelta = timedelta(minutes=5)
+    departure_source_min_confidence: float = 0.35
 
     @property
     def occupant_limit(self) -> int | None:
@@ -82,6 +89,29 @@ class AnonymousTrack:
 
 
 @dataclass(frozen=True)
+class InferredJoinSlot:
+    """Temporary extra occupant slot for someone joining an occupied zone."""
+
+    zone: str
+    source_zone: str
+    source_node_id: str
+    event_at: datetime
+    expires_at: datetime
+
+
+@dataclass(frozen=True)
+class InferredDeparture:
+    """Temporary record that a person likely left one zone for another."""
+
+    zone: str
+    via_zone: str
+    via_node_id: str
+    destination_zone: str
+    event_at: datetime
+    expires_at: datetime
+
+
+@dataclass(frozen=True)
 class TrackerDiagnostics:
     """Structured diagnostics for panel and status payloads."""
 
@@ -89,6 +119,8 @@ class TrackerDiagnostics:
     tracks: tuple[AnonymousTrack, ...]
     protected_tracks: tuple[str, ...]
     protected_corridor: tuple[str, ...]
+    inferred_join_slots: tuple[InferredJoinSlot, ...]
+    inferred_departures: tuple[InferredDeparture, ...]
     prediction_hints: dict[str, float]
     dwell_seconds: dict[str, dict[str, float | int]]
 
@@ -117,6 +149,8 @@ class OccupancyTracker:
         self._tracks: tuple[AnonymousTrack, ...] = ()
         self._protected_tracks: tuple[str, ...] = ()
         self._protected_corridor: tuple[str, ...] = ()
+        self._join_slots: dict[str, InferredJoinSlot] = {}
+        self._departures: dict[str, InferredDeparture] = {}
         self._prediction_hints: dict[str, float] = {}
 
     @property
@@ -138,6 +172,8 @@ class OccupancyTracker:
             tracks=self._tracks,
             protected_tracks=self._protected_tracks,
             protected_corridor=self._protected_corridor,
+            inferred_join_slots=tuple(self._join_slots.values()),
+            inferred_departures=tuple(self._departures.values()),
             prediction_hints=self._prediction_hints.copy(),
             dwell_seconds=self.dwell.payload(),
         )
@@ -147,9 +183,27 @@ class OccupancyTracker:
 
     def observe(self, event: OccupancyEvent) -> ZoneUpdate:
         previous = self.state_for_zone(event.zone)
+        self._expire_inferences(event.event_at)
         self._track_active_event(event)
         self._learn_dwell_if_clear_finished(previous, event)
+        join_slot = self._infer_join_slot(previous, event)
+        if join_slot is not None:
+            self._join_slots[event.zone] = join_slot
         confidence = event_confidence(previous.confidence, event)
+        reason = reason_for_event(event, confidence)
+        explanation: dict[str, Any] = {
+            "type": "event",
+            "state": event.state,
+            "signal_type": event.signal_type,
+            "node_id": event.node_id,
+            "active_signal_count": len(self._active_events.get(event.zone, {})),
+        }
+        if join_slot is not None:
+            reason = (
+                f"{reason}; inferred additional occupant from "
+                f"{join_slot.source_zone}"
+            )
+            explanation["join_transition"] = join_slot_payload(join_slot)
         current = replace(
             previous,
             confidence=confidence,
@@ -164,18 +218,13 @@ class OccupancyTracker:
             else previous.last_clear_at,
             updated_at=event.event_at,
             last_node_id=event.node_id,
-            reason=reason_for_event(event, confidence),
-            explanation={
-                "type": "event",
-                "state": event.state,
-                "signal_type": event.signal_type,
-                "node_id": event.node_id,
-                "active_signal_count": len(self._active_events.get(event.zone, {})),
-            },
+            reason=reason,
+            explanation=explanation,
         )
         self._states[event.zone] = current
         self._recent_events = [*self._recent_events[-24:], event]
         if event.state == "on":
+            self._apply_departures(event)
             self._reconcile_competing_zones(event)
         self._update_tracks(event)
         return ZoneUpdate(event=event, previous=previous, current=current)
@@ -354,6 +403,8 @@ class OccupancyTracker:
     ) -> tuple[TrackCandidate, ...]:
         score = self._track_score(state, event, active_zones)
         slots = max(1, len(self._active_events.get(state.zone, {})))
+        if self._join_slots.get(state.zone) is not None:
+            slots += 1
         return tuple(TrackCandidate(zone=state.zone, score=score) for _ in range(slots))
 
     def _track_score(
@@ -381,6 +432,153 @@ class OccupancyTracker:
             zone_events[event.entity_id] = event
         else:
             zone_events.pop(event.entity_id, None)
+
+    def _infer_join_slot(
+        self, previous: ZoneState, event: OccupancyEvent
+    ) -> InferredJoinSlot | None:
+        if event.state != "on":
+            return None
+        if event.occupancy_behavior == "transient" or event.role == "transition_gate":
+            return None
+        if previous.confidence < self.config.join_destination_min_confidence:
+            return None
+        if previous.last_evidence_at is None:
+            return None
+
+        source = self._recent_adjacent_transition(
+            event,
+            self.config.join_transition_window,
+        )
+        if source is None:
+            return None
+        return InferredJoinSlot(
+            zone=event.zone,
+            source_zone=source.zone,
+            source_node_id=source.node_id,
+            event_at=event.event_at,
+            expires_at=event.event_at + self.config.join_slot_retention,
+        )
+
+    def _recent_adjacent_transition(
+        self, event: OccupancyEvent, default_window: timedelta
+    ) -> OccupancyEvent | None:
+        for recent in reversed(self._recent_events):
+            elapsed = event.event_at - recent.event_at
+            if elapsed < timedelta(0):
+                continue
+            if elapsed > self._transition_window_for_events(
+                recent,
+                event,
+                default_window,
+            ):
+                break
+            if recent.zone == event.zone:
+                continue
+            if (
+                recent.occupancy_behavior != "transient"
+                and recent.role != "transition_gate"
+            ):
+                continue
+            if self.graph.distance(recent.zone, event.zone, max_depth=1) is None:
+                continue
+            return recent
+        return None
+
+    def _apply_departures(self, event: OccupancyEvent) -> None:
+        for departure in self._infer_departures(event):
+            previous = self.state_for_zone(departure.zone)
+            confidence = conflict_confidence(previous.confidence)
+            current = replace(
+                previous,
+                confidence=confidence,
+                status=status_for_confidence(confidence),
+                updated_at=event.event_at,
+                reason=reason_for_departure_decay(
+                    previous,
+                    confidence,
+                    departure.via_zone,
+                    departure.destination_zone,
+                ),
+                explanation={
+                    "type": "departure_decay",
+                    "departure": departure_payload(departure),
+                    "trigger_zone": event.zone,
+                },
+            )
+            self._states[departure.zone] = current
+            self._departures[departure.zone] = departure
+
+    def _infer_departures(
+        self, event: OccupancyEvent
+    ) -> tuple[InferredDeparture, ...]:
+        if event.state != "on":
+            return ()
+        if event.occupancy_behavior == "transient" or event.role == "transition_gate":
+            return ()
+
+        transition = self._recent_adjacent_transition(
+            event,
+            self.config.departure_transition_window,
+        )
+        if transition is None:
+            return ()
+
+        candidates: list[tuple[float, ZoneState]] = []
+        for zone in self.graph.neighbors(transition.zone):
+            if zone == event.zone or self._active_events.get(zone):
+                continue
+            state = self.state_for_zone(zone)
+            if state.confidence < self.config.departure_source_min_confidence:
+                continue
+            if state.last_evidence_at is None:
+                continue
+            age = event.event_at - state.last_evidence_at
+            if age < timedelta(0):
+                continue
+            if age > self.config.recent_evidence_window:
+                continue
+            recency = 1.0 - age / self.config.recent_evidence_window
+            candidates.append((state.confidence + recency, state))
+
+        if not candidates:
+            return ()
+        _, source = max(candidates, key=lambda item: item[0])
+        return (
+            InferredDeparture(
+                zone=source.zone,
+                via_zone=transition.zone,
+                via_node_id=transition.node_id,
+                destination_zone=event.zone,
+                event_at=event.event_at,
+                expires_at=event.event_at + self.config.departure_retention,
+            ),
+        )
+
+    def _transition_window_for_events(
+        self,
+        source: OccupancyEvent,
+        target: OccupancyEvent,
+        default_window: timedelta,
+    ) -> timedelta:
+        configured_seconds = self._map.transition_seconds_between_nodes(
+            source.node_id,
+            target.node_id,
+        )
+        if configured_seconds is None:
+            return default_window
+        return timedelta(seconds=configured_seconds)
+
+    def _expire_inferences(self, now: datetime) -> None:
+        self._join_slots = {
+            zone: slot
+            for zone, slot in self._join_slots.items()
+            if slot.expires_at >= now
+        }
+        self._departures = {
+            zone: departure
+            for zone, departure in self._departures.items()
+            if departure.expires_at >= now
+        }
 
     def _learn_dwell_if_clear_finished(
         self, previous: ZoneState, event: OccupancyEvent
@@ -442,3 +640,24 @@ class OccupancyTracker:
             event_at=now,
             reliability=1.0,
         )
+
+
+def join_slot_payload(slot: InferredJoinSlot) -> dict[str, str]:
+    return {
+        "zone": slot.zone,
+        "source_zone": slot.source_zone,
+        "source_node_id": slot.source_node_id,
+        "event_at": slot.event_at.isoformat(),
+        "expires_at": slot.expires_at.isoformat(),
+    }
+
+
+def departure_payload(departure: InferredDeparture) -> dict[str, str]:
+    return {
+        "zone": departure.zone,
+        "via_zone": departure.via_zone,
+        "via_node_id": departure.via_node_id,
+        "destination_zone": departure.destination_zone,
+        "event_at": departure.event_at.isoformat(),
+        "expires_at": departure.expires_at.isoformat(),
+    }

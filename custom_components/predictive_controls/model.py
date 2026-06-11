@@ -68,6 +68,7 @@ class NodeConfig:
     label: str
     entities: dict[str, str] = field(default_factory=dict)
     adjacent: tuple[str, ...] = ()
+    transition_seconds: dict[str, float] = field(default_factory=dict)
     initial_weight: float = 1.0
     floor: str | None = None
     zone: str | None = None
@@ -95,6 +96,28 @@ class NodeConfig:
         if not isinstance(adjacent, list):
             raise PredictiveMapError(f"Node {node_id!r} adjacent must be a list")
         parsed_adjacent = tuple(str(target) for target in adjacent)
+
+        transition_seconds = raw.get("transition_seconds", {})
+        if not isinstance(transition_seconds, dict):
+            raise PredictiveMapError(
+                f"Node {node_id!r} transition_seconds must be a mapping"
+            )
+        parsed_transition_seconds: dict[str, float] = {}
+        for target, seconds in transition_seconds.items():
+            target_id = str(target)
+            try:
+                parsed_seconds = float(seconds)
+            except (TypeError, ValueError) as exc:
+                raise PredictiveMapError(
+                    f"Node {node_id!r} transition_seconds for {target_id!r} "
+                    "must be numeric"
+                ) from exc
+            if parsed_seconds <= 0:
+                raise PredictiveMapError(
+                    f"Node {node_id!r} transition_seconds for {target_id!r} "
+                    "must be positive"
+                )
+            parsed_transition_seconds[target_id] = parsed_seconds
 
         initial_weight = raw.get("initial_weight", raw.get("initial_reliability"))
         if initial_weight is None:
@@ -141,6 +164,7 @@ class NodeConfig:
             label=label,
             entities=parsed_entities,
             adjacent=parsed_adjacent,
+            transition_seconds=parsed_transition_seconds,
             initial_weight=parsed_weight,
             floor=floor,
             zone=zone,
@@ -197,6 +221,20 @@ class PredictiveMap:
             joined = ", ".join(unknown_targets)
             raise PredictiveMapError(f"Adjacent nodes are not defined: {joined}")
 
+        unknown_timed_targets = sorted(
+            {
+                target
+                for node in nodes.values()
+                for target in node.transition_seconds
+                if target not in nodes
+            }
+        )
+        if unknown_timed_targets:
+            joined = ", ".join(unknown_timed_targets)
+            raise PredictiveMapError(
+                f"Transition timing targets are not defined: {joined}"
+            )
+
         return cls(nodes=nodes, zone_configs=zone_configs)
 
     def node_for_entity(self, entity_id: str) -> str | None:
@@ -225,6 +263,19 @@ class PredictiveMap:
     def neighbors(self, node_id: str) -> tuple[str, ...]:
         node = self.nodes.get(node_id)
         return node.adjacent if node is not None else ()
+
+    def transition_seconds_between_nodes(
+        self, source_node_id: str, target_node_id: str
+    ) -> float | None:
+        source = self.nodes.get(source_node_id)
+        if source is not None and target_node_id in source.transition_seconds:
+            return source.transition_seconds[target_node_id]
+
+        target = self.nodes.get(target_node_id)
+        if target is not None and source_node_id in target.transition_seconds:
+            return target.transition_seconds[source_node_id]
+
+        return None
 
     def zone_neighbors(self, zone: str) -> tuple[str, ...]:
         neighbors: set[str] = set()

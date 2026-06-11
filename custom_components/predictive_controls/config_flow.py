@@ -12,10 +12,12 @@ from homeassistant.helpers import selector
 from .const import (
     CONF_ACTIONS_YAML,
     CONF_EXPECTED_OCCUPANTS,
+    CONF_EXPECTED_OCCUPANTS_ENTITY,
     CONF_MAP_YAML,
     CONF_PREDICTION_THRESHOLD,
     CONF_TRANSITION_WINDOW,
     DEFAULT_EXPECTED_OCCUPANTS,
+    DEFAULT_EXPECTED_OCCUPANTS_ENTITY,
     DEFAULT_PREDICTION_THRESHOLD,
     DEFAULT_TRANSITION_WINDOW,
     DOMAIN,
@@ -42,6 +44,7 @@ def _options_schema(
     transition_window: int = DEFAULT_TRANSITION_WINDOW,
     prediction_threshold: float = DEFAULT_PREDICTION_THRESHOLD,
     expected_occupants: int = DEFAULT_EXPECTED_OCCUPANTS,
+    expected_occupants_entity: str = DEFAULT_EXPECTED_OCCUPANTS_ENTITY,
 ) -> vol.Schema:
     return vol.Schema(
         {
@@ -54,6 +57,10 @@ def _options_schema(
                 CONF_PREDICTION_THRESHOLD, default=prediction_threshold
             ): float,
             vol.Required(CONF_EXPECTED_OCCUPANTS, default=expected_occupants): int,
+            vol.Optional(
+                CONF_EXPECTED_OCCUPANTS_ENTITY,
+                default=expected_occupants_entity,
+            ): str,
         }
     )
 
@@ -68,6 +75,9 @@ def _validate_options(data: dict[str, Any]) -> None:
         raise ValueError("Prediction threshold must be between 0 and 1")
     if int(data[CONF_EXPECTED_OCCUPANTS]) < 0:
         raise ValueError("Expected occupants must be zero or positive")
+    expected_entity = str(data.get(CONF_EXPECTED_OCCUPANTS_ENTITY, "")).strip()
+    if expected_entity and "." not in expected_entity:
+        raise ValueError("Expected occupants entity must be an entity id")
 
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -95,6 +105,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_TRANSITION_WINDOW: DEFAULT_TRANSITION_WINDOW,
                 CONF_PREDICTION_THRESHOLD: DEFAULT_PREDICTION_THRESHOLD,
                 CONF_EXPECTED_OCCUPANTS: DEFAULT_EXPECTED_OCCUPANTS,
+                CONF_EXPECTED_OCCUPANTS_ENTITY: DEFAULT_EXPECTED_OCCUPANTS_ENTITY,
             },
         )
 
@@ -131,6 +142,9 @@ class OptionsFlow(config_entries.OptionsFlow):
                     transition_window=int(user_input[CONF_TRANSITION_WINDOW]),
                     prediction_threshold=float(user_input[CONF_PREDICTION_THRESHOLD]),
                     expected_occupants=int(user_input[CONF_EXPECTED_OCCUPANTS]),
+                    expected_occupants_entity=str(
+                        user_input.get(CONF_EXPECTED_OCCUPANTS_ENTITY, "")
+                    ),
                 ),
                 errors=errors,
             )
@@ -148,6 +162,10 @@ class OptionsFlow(config_entries.OptionsFlow):
                 ),
                 expected_occupants=options.get(
                     CONF_EXPECTED_OCCUPANTS, DEFAULT_EXPECTED_OCCUPANTS
+                ),
+                expected_occupants_entity=options.get(
+                    CONF_EXPECTED_OCCUPANTS_ENTITY,
+                    DEFAULT_EXPECTED_OCCUPANTS_ENTITY,
                 ),
             ),
         )

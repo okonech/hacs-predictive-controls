@@ -579,6 +579,82 @@ def test_zone_confidence_engine_preserves_adjacent_movement_corridor() -> None:
     assert "competed" not in states["upstairs_hallway"].reason
 
 
+def test_zone_confidence_engine_join_slot_gates_recent_transition_evidence() -> None:
+    engine = ZoneConfidenceEngine(make_map(), expected_occupants=2)
+    now = datetime(2026, 6, 7, 12, tzinfo=UTC)
+    target = replace(make_event(zone="shaila_office"), event_at=now)
+    previous_without_evidence = replace(
+        engine.state_for_zone("shaila_office"),
+        confidence=0.5,
+    )
+
+    assert engine._infer_join_slot(previous_without_evidence, target) is None  # noqa: SLF001
+
+    previous = replace(
+        previous_without_evidence,
+        last_evidence_at=now - timedelta(minutes=1),
+    )
+    future_transition = replace(
+        make_event(
+            zone="upstairs_hallway",
+            role="transition_gate",
+            occupancy_behavior="transient",
+        ),
+        event_at=now + timedelta(seconds=5),
+    )
+    non_transition = replace(make_event(zone="alex_office"), event_at=now)
+    non_adjacent_transition = replace(
+        make_event(
+            zone="guest_bedroom",
+            role="transition_gate",
+            occupancy_behavior="transient",
+        ),
+        event_at=now,
+    )
+
+    engine._recent_events = [future_transition]  # noqa: SLF001
+    assert engine._infer_join_slot(previous, target) is None  # noqa: SLF001
+
+    engine._recent_events = [non_transition]  # noqa: SLF001
+    assert engine._infer_join_slot(previous, target) is None  # noqa: SLF001
+
+    engine._recent_events = [non_adjacent_transition]  # noqa: SLF001
+    assert engine._infer_join_slot(previous, target) is None  # noqa: SLF001
+
+
+def test_zone_confidence_engine_departure_gates_source_evidence() -> None:
+    engine = ZoneConfidenceEngine(make_map(), expected_occupants=2)
+    now = datetime(2026, 6, 7, 12, tzinfo=UTC)
+    transition = make_event(
+        zone="upstairs_hallway",
+        role="transition_gate",
+        occupancy_behavior="transient",
+    )
+    target = replace(make_event(zone="shaila_office"), event_at=now)
+    engine._recent_events = [replace(transition, event_at=now)]  # noqa: SLF001
+
+    assert engine._infer_departures(replace(target, state="off")) == ()  # noqa: SLF001
+    assert engine._infer_departures(replace(transition, event_at=now)) == ()  # noqa: SLF001
+
+    engine._states["alex_office"] = replace(  # noqa: SLF001
+        engine.state_for_zone("alex_office"),
+        confidence=0.5,
+    )
+    assert engine._infer_departures(target) == ()  # noqa: SLF001
+
+    engine._states["alex_office"] = replace(  # noqa: SLF001
+        engine.state_for_zone("alex_office"),
+        last_evidence_at=now + timedelta(seconds=1),
+    )
+    assert engine._infer_departures(target) == ()  # noqa: SLF001
+
+    engine._states["alex_office"] = replace(  # noqa: SLF001
+        engine.state_for_zone("alex_office"),
+        last_evidence_at=now - timedelta(hours=1),
+    )
+    assert engine._infer_departures(target) == ()  # noqa: SLF001
+
+
 def test_zone_confidence_engine_caps_confidence_and_limits_recent_events() -> None:
     engine = ZoneConfidenceEngine(make_map())
     event = make_event(reliability=2.0)

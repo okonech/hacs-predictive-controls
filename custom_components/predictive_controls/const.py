@@ -1,15 +1,17 @@
 DOMAIN = "predictive_controls"
 NAME = "Predictive Controls"
-VERSION = "0.1.9"
-PANEL_FILENAME = "panel-v0.1.9.js"
+VERSION = "0.1.10"
+PANEL_FILENAME = "panel-v0.1.10.js"
 
 CONF_ACTIONS_YAML = "actions_yaml"
 CONF_EXPECTED_OCCUPANTS = "expected_occupants"
+CONF_EXPECTED_OCCUPANTS_ENTITY = "expected_occupants_entity"
 CONF_MAP_YAML = "map_yaml"
 CONF_PREDICTION_THRESHOLD = "prediction_threshold"
 CONF_TRANSITION_WINDOW = "transition_window_seconds"
 
 DEFAULT_EXPECTED_OCCUPANTS = 0
+DEFAULT_EXPECTED_OCCUPANTS_ENTITY = ""
 DEFAULT_PREDICTION_THRESHOLD = 0.6
 DEFAULT_TRANSITION_WINDOW = 30
 

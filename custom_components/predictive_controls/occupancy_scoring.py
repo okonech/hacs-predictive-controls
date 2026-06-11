@@ -189,3 +189,16 @@ def reason_for_conflict_decay(
         f"competed with stronger occupied tracks ({tracks}); "
         f"confidence decayed to {status}"
     )
+
+
+def reason_for_departure_decay(
+    previous: ZoneStateView,
+    confidence: float,
+    via_zone: str,
+    destination_zone: str,
+) -> str:
+    status = status_for_confidence(confidence)
+    return (
+        f"departure inferred via {via_zone} toward {destination_zone}; "
+        f"confidence decayed to {status}"
+    )

@@ -7,7 +7,12 @@ from typing import Any
 
 from .events import OccupancyEvent, event_from_entity
 from .model import PredictiveMap
-from .occupancy_tracker import OccupancyTracker, ZoneState, ZoneUpdate
+from .occupancy_tracker import (
+    OccupancyTracker,
+    TrackerDiagnostics,
+    ZoneState,
+    ZoneUpdate,
+)
 
 
 @dataclass(frozen=True)
@@ -17,6 +22,7 @@ class ReplayStep:
     event: OccupancyEvent
     update: ZoneUpdate
     zone_states: dict[str, ZoneState]
+    diagnostics: TrackerDiagnostics
 
 
 @dataclass(frozen=True)
@@ -25,6 +31,7 @@ class ReplayResult:
 
     steps: tuple[ReplayStep, ...]
     final_states: dict[str, ZoneState]
+    final_diagnostics: TrackerDiagnostics
 
 
 def replay_events(
@@ -38,8 +45,57 @@ def replay_events(
         if refresh_before_events:
             tracker.refresh_active(event.event_at)
         update = tracker.observe(event)
-        steps.append(ReplayStep(event=event, update=update, zone_states=tracker.states))
-    return ReplayResult(steps=tuple(steps), final_states=tracker.states)
+        steps.append(
+            ReplayStep(
+                event=event,
+                update=update,
+                zone_states=tracker.states,
+                diagnostics=tracker.diagnostics,
+            )
+        )
+    return ReplayResult(
+        steps=tuple(steps),
+        final_states=tracker.states,
+        final_diagnostics=tracker.diagnostics,
+    )
+
+
+def replay_history_states(
+    predictive_map: PredictiveMap,
+    tracker: OccupancyTracker,
+    history_payload: Sequence[Any],
+    *,
+    refresh_before_events: bool = True,
+) -> ReplayResult:
+    """Import Home Assistant history rows and replay them through a tracker."""
+
+    return replay_events(
+        tracker,
+        history_events_from_states(predictive_map, history_payload),
+        refresh_before_events=refresh_before_events,
+    )
+
+
+def replay_summary(result: ReplayResult) -> dict[str, Any]:
+    """Return a compact, serializable replay summary for tuning workflows."""
+
+    return {
+        "event_count": len(result.steps),
+        "final_zones": {
+            zone: {
+                "confidence": state.confidence,
+                "status": state.status,
+                "reason": state.reason,
+            }
+            for zone, state in sorted(result.final_states.items())
+            if state.confidence > 0
+        },
+        "tracks": [track.zone for track in result.final_diagnostics.tracks],
+        "inferred_join_count": len(result.final_diagnostics.inferred_join_slots),
+        "inferred_departure_count": len(
+            result.final_diagnostics.inferred_departures
+        ),
+    }
 
 
 def history_events_from_states(

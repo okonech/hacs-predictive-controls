@@ -167,6 +167,21 @@ test("panel renders live occupancy zones from configured map data", async () => 
               track_id: "track_1",
               zone: "living_room",
               confidence: 0.91,
+              active: true,
+              source_entities: ["binary_sensor.living_still"],
+            },
+          ],
+          inferred_join_slots: [
+            {
+              zone: "living_room",
+              source_zone: "foyer",
+            },
+          ],
+          inferred_departures: [
+            {
+              zone: "office",
+              via_zone: "hall",
+              destination_zone: "kitchen",
             },
           ],
         },
@@ -186,6 +201,10 @@ test("panel renders live occupancy zones from configured map data", async () => 
   assert.match(panel.innerHTML, /Learned Transitions/);
   assert.match(panel.innerHTML, /Expected 2/);
   assert.match(panel.innerHTML, /track_1/);
+  assert.match(panel.innerHTML, /binary_sensor\.living_still/);
+  assert.match(panel.innerHTML, /Joined/);
+  assert.match(panel.innerHTML, /Departed/);
+  assert.match(panel.innerHTML, /Office/);
   assert.match(panel.innerHTML, /Kitchen/);
   assert.match(panel.innerHTML, /7/);
 });
@@ -304,6 +323,7 @@ test("panel marks raw map yaml dirty only for yaml editor saves", async () => {
     transition_window_seconds: 30,
     prediction_threshold: 0.6,
     expected_occupants: 2,
+    expected_occupants_entity: "input_number.expected_occupants",
   };
 
   await panel.save();
@@ -311,6 +331,7 @@ test("panel marks raw map yaml dirty only for yaml editor saves", async () => {
   await panel.save();
 
   assert.equal(calls[0].map_yaml_dirty, false);
+  assert.equal(calls[0].expected_occupants_entity, "input_number.expected_occupants");
   assert.equal(calls[1].map_yaml_dirty, true);
 });
 
@@ -322,6 +343,7 @@ test("panel renders expected occupants setting", async () => {
     transition_window_seconds: 30,
     prediction_threshold: 0.6,
     expected_occupants: 2,
+    expected_occupants_entity: "input_number.expected_occupants",
   };
   panel._tab = "settings";
 
@@ -329,10 +351,12 @@ test("panel renders expected occupants setting", async () => {
 
   assert.match(panel.innerHTML, /Expected occupants/);
   assert.match(panel.innerHTML, /value="2"/);
+  assert.match(panel.innerHTML, /Expected occupants entity/);
+  assert.match(panel.innerHTML, /input_number\.expected_occupants/);
 });
 
 test("panel script parses when Home Assistant loads it as a classic script", async () => {
-  const source = await readFile(panelAssetUrl("panel-v0.1.9.js"), "utf8");
+  const source = await readFile(panelAssetUrl("panel-v0.1.10.js"), "utf8");
 
   assert.doesNotThrow(() => new vm.Script(source));
 });
@@ -340,7 +364,7 @@ test("panel script parses when Home Assistant loads it as a classic script", asy
 test("versioned panel asset matches the development panel asset", async () => {
   const [developmentSource, versionedSource] = await Promise.all([
     readFile(panelAssetUrl("panel.js"), "utf8"),
-    readFile(panelAssetUrl("panel-v0.1.9.js"), "utf8"),
+    readFile(panelAssetUrl("panel-v0.1.10.js"), "utf8"),
   ]);
 
   assert.equal(versionedSource, developmentSource);

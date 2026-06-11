@@ -8,6 +8,8 @@ from custom_components.predictive_controls.model import PredictiveMap
 from custom_components.predictive_controls.occupancy_replay import (
     history_events_from_states,
     replay_events,
+    replay_history_states,
+    replay_summary,
 )
 
 
@@ -61,7 +63,9 @@ def test_replay_events_applies_sorted_trace_and_snapshots_states() -> None:
     assert len(result.steps) == 2
     assert result.steps[0].event.state == "on"
     assert result.steps[0].zone_states["office"].status == "probable"
+    assert result.steps[0].diagnostics.expected_occupants == 0
     assert result.final_states["office"].status == "possible"
+    assert result.final_diagnostics.expected_occupants == 0
 
 
 def test_replay_events_can_skip_refresh_between_events() -> None:
@@ -115,3 +119,30 @@ def test_history_events_from_states_imports_home_assistant_history_rows() -> Non
 
     assert [event.state for event in events] == ["on", "off"]
     assert events[1].event_at == datetime(2026, 6, 7, 12, 5, tzinfo=UTC)
+
+
+def test_replay_history_states_imports_and_summarizes_real_history_shape() -> None:
+    tracker = ZoneConfidenceEngine(make_map())
+    payload = [
+        [
+            {
+                "entity_id": "binary_sensor.office_motion",
+                "state": "on",
+                "last_changed": "2026-06-07T12:00:00+00:00",
+            },
+            {
+                "entity_id": "binary_sensor.office_motion",
+                "state": "off",
+                "last_changed": "2026-06-07T12:01:00+00:00",
+            },
+        ]
+    ]
+
+    result = replay_history_states(make_map(), tracker, payload)
+    summary = replay_summary(result)
+
+    assert summary["event_count"] == 2
+    assert summary["final_zones"]["office"]["status"] == "possible"
+    assert summary["tracks"] == ["office"]
+    assert summary["inferred_join_count"] == 0
+    assert summary["inferred_departure_count"] == 0

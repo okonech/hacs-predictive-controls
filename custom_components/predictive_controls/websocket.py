@@ -9,10 +9,12 @@ from homeassistant.core import HomeAssistant, callback
 from .const import (
     CONF_ACTIONS_YAML,
     CONF_EXPECTED_OCCUPANTS,
+    CONF_EXPECTED_OCCUPANTS_ENTITY,
     CONF_MAP_YAML,
     CONF_PREDICTION_THRESHOLD,
     CONF_TRANSITION_WINDOW,
     DEFAULT_EXPECTED_OCCUPANTS,
+    DEFAULT_EXPECTED_OCCUPANTS_ENTITY,
     DEFAULT_PREDICTION_THRESHOLD,
     DEFAULT_TRANSITION_WINDOW,
     DOMAIN,
@@ -71,6 +73,9 @@ def _entry_payload(entry: Any) -> dict[str, Any]:
         "expected_occupants": options.get(
             CONF_EXPECTED_OCCUPANTS, DEFAULT_EXPECTED_OCCUPANTS
         ),
+        "expected_occupants_entity": options.get(
+            CONF_EXPECTED_OCCUPANTS_ENTITY, DEFAULT_EXPECTED_OCCUPANTS_ENTITY
+        ),
     }
 
 
@@ -104,6 +109,10 @@ async def websocket_config(
         vol.Required("transition_window_seconds"): int,
         vol.Required("prediction_threshold"): float,
         vol.Optional("expected_occupants", default=DEFAULT_EXPECTED_OCCUPANTS): int,
+        vol.Optional(
+            "expected_occupants_entity",
+            default=DEFAULT_EXPECTED_OCCUPANTS_ENTITY,
+        ): str,
     }
 )
 @websocket_api.require_admin
@@ -127,6 +136,9 @@ async def websocket_save_config(
         expected_occupants = int(msg["expected_occupants"])
         if expected_occupants < 0:
             raise ValueError("expected_occupants must be zero or positive")
+        expected_occupants_entity = str(msg["expected_occupants_entity"]).strip()
+        if expected_occupants_entity and "." not in expected_occupants_entity:
+            raise ValueError("expected_occupants_entity must be an entity id")
     except ValueError as exc:
         connection.send_error(msg["id"], "invalid_config", str(exc))
         return
@@ -139,6 +151,7 @@ async def websocket_save_config(
             CONF_TRANSITION_WINDOW: transition_window,
             CONF_PREDICTION_THRESHOLD: threshold,
             CONF_EXPECTED_OCCUPANTS: expected_occupants,
+            CONF_EXPECTED_OCCUPANTS_ENTITY: expected_occupants_entity,
         },
     )
     await hass.config_entries.async_reload(entry.entry_id)

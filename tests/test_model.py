@@ -27,6 +27,7 @@ def test_predictive_map_parses_nodes_and_entities() -> None:
                     "role": "transition_gate",
                     "entities": {"motion": "binary_sensor.entry"},
                     "adjacent": ["hall"],
+                    "transition_seconds": {"hall": 12},
                     "initial_weight": 2,
                     "review_required": True,
                 },
@@ -46,6 +47,10 @@ def test_predictive_map_parses_nodes_and_entities() -> None:
     assert predictive_map.zone_occupancy_behavior("entry_hall") == "transient"
     assert predictive_map.zone_occupancy_behavior("missing") == "sustained"
     assert predictive_map.nodes["entry"].initial_weight == 2.0
+    assert predictive_map.nodes["entry"].transition_seconds == {"hall": 12.0}
+    assert predictive_map.transition_seconds_between_nodes("entry", "hall") == 12.0
+    assert predictive_map.transition_seconds_between_nodes("hall", "entry") == 12.0
+    assert predictive_map.transition_seconds_between_nodes("entry", "missing") is None
     assert predictive_map.nodes["entry"].review_required
     assert predictive_map.node_for_entity("binary_sensor.entry") == "entry"
     assert predictive_map.entity_binding_for_entity(
@@ -68,6 +73,18 @@ def test_predictive_map_parses_nodes_and_entities() -> None:
         ({"nodes": {"entry": {"label": ""}}}, "label must be"),
         ({"nodes": {"entry": {"entities": []}}}, "entities must be"),
         ({"nodes": {"entry": {"adjacent": "hall"}}}, "adjacent must be"),
+        (
+            {"nodes": {"entry": {"transition_seconds": []}}},
+            "transition_seconds must be",
+        ),
+        (
+            {"nodes": {"entry": {"transition_seconds": {"hall": "fast"}}}},
+            "must be numeric",
+        ),
+        (
+            {"nodes": {"entry": {"transition_seconds": {"hall": 0}}}},
+            "must be positive",
+        ),
         ({"nodes": {"entry": {"initial_weight": "heavy"}}}, "must be numeric"),
         ({"nodes": {"entry": {"initial_weight": 0}}}, "must be positive"),
         ({"nodes": {"entry": {"floor": 1}}}, "floor must be"),
@@ -98,6 +115,10 @@ def test_predictive_map_parses_nodes_and_entities() -> None:
             "review_required must be",
         ),
         ({"nodes": {"entry": {"adjacent": ["hall"]}}}, "not defined: hall"),
+        (
+            {"nodes": {"entry": {"transition_seconds": {"hall": 12}}}},
+            "Transition timing targets are not defined: hall",
+        ),
     ],
 )
 def test_predictive_map_rejects_invalid_config(raw: object, message: str) -> None:
