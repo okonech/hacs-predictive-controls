@@ -13,6 +13,7 @@ from .occupancy_scoring import (
     conflict_confidence,
     event_confidence,
     passive_confidence_for_duration,
+    reason_for_clear_transition_decay,
     reason_for_conflict_decay,
     reason_for_departure_decay,
     reason_for_event,
@@ -200,6 +201,25 @@ class OccupancyTracker:
             "node_id": event.node_id,
             "active_signal_count": len(self._active_events.get(event.zone, {})),
         }
+        clear_departure = self._infer_clear_transition_departure(
+            previous,
+            event,
+            confidence,
+        )
+        if clear_departure is not None:
+            confidence = min(confidence, conflict_confidence(previous.confidence))
+            reason = reason_for_clear_transition_decay(
+                previous,
+                confidence,
+                clear_departure.via_zone,
+                clear_departure.destination_zone,
+            )
+            explanation = {
+                "type": "clear_transition_decay",
+                "departure": departure_payload(clear_departure),
+                "trigger_zone": event.zone,
+                "active_signal_count": len(self._active_events.get(event.zone, {})),
+            }
         nonadjacent_tracks = self._nonadjacent_saturated_track_zones(event)
         if nonadjacent_tracks:
             confidence = min(confidence, NON_ADJACENT_EVENT_CONFIDENCE_CAP)
@@ -233,6 +253,8 @@ class OccupancyTracker:
             explanation=explanation,
         )
         self._states[event.zone] = current
+        if clear_departure is not None:
+            self._departures[event.zone] = clear_departure
         self._recent_events = [*self._recent_events[-24:], event]
         if event.state == "on":
             self._apply_departures(event)
@@ -574,6 +596,49 @@ class OccupancyTracker:
                 event_at=event.event_at,
                 expires_at=event.event_at + self.config.departure_retention,
             ),
+        )
+
+    def _infer_clear_transition_departure(
+        self,
+        previous: ZoneState,
+        event: OccupancyEvent,
+        cleared_confidence: float,
+    ) -> InferredDeparture | None:
+        if event.state != "off":
+            return None
+        if self._active_events.get(event.zone):
+            return None
+        if previous.confidence < self.config.departure_source_min_confidence:
+            return None
+        if previous.last_evidence_at is None:
+            return None
+
+        transition = self._recent_adjacent_transition(
+            event,
+            self.config.departure_transition_window,
+        )
+        if transition is None:
+            return None
+
+        candidates: list[tuple[float, ZoneState]] = []
+        for zone in self.graph.neighbors(transition.zone):
+            if zone == event.zone or not self._active_events.get(zone):
+                continue
+            state = self.state_for_zone(zone)
+            if state.confidence <= cleared_confidence:
+                continue
+            candidates.append((state.confidence, state))
+
+        if not candidates:
+            return None
+        _, destination = max(candidates, key=lambda item: item[0])
+        return InferredDeparture(
+            zone=event.zone,
+            via_zone=transition.zone,
+            via_node_id=transition.node_id,
+            destination_zone=destination.zone,
+            event_at=event.event_at,
+            expires_at=event.event_at + self.config.departure_retention,
         )
 
     def _transition_window_for_events(

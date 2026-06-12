@@ -209,7 +209,7 @@ test("panel renders live occupancy zones from configured map data", async () => 
   assert.match(panel.innerHTML, /7/);
 });
 
-test("panel renders cross-floor zone adjacency as floor transitions", async () => {
+test("panel renders cross-floor zone adjacency as a graph edge", async () => {
   const Panel = await panelConstructor();
   const panel = new Panel();
   panel._hass = {};
@@ -246,10 +246,12 @@ test("panel renders cross-floor zone adjacency as floor transitions", async () =
 
   panel.render();
 
-  assert.match(panel.innerHTML, /floor-transitions/);
+  assert.match(panel.innerHTML, /occupancy-graph/);
+  assert.match(panel.innerHTML, /data-edge="staircase_bottom-&gt;upstairs_hallway"/);
   assert.match(panel.innerHTML, /Bottom of Staircase/);
   assert.match(panel.innerHTML, /Second Floor/);
   assert.match(panel.innerHTML, /Upstairs Hallway/);
+  assert.doesNotMatch(panel.innerHTML, /floor-transitions/);
 });
 
 test("panel renders the editable map YAML tab", async () => {
@@ -451,7 +453,7 @@ test("panel reports when no stale entities are found", async () => {
 });
 
 test("panel script parses when Home Assistant loads it as a classic script", async () => {
-  const source = await readFile(panelAssetUrl("panel-v0.1.12.js"), "utf8");
+  const source = await readFile(panelAssetUrl("panel-v0.1.13.js"), "utf8");
 
   assert.doesNotThrow(() => new vm.Script(source));
 });
@@ -459,7 +461,7 @@ test("panel script parses when Home Assistant loads it as a classic script", asy
 test("versioned panel asset matches the development panel asset", async () => {
   const [developmentSource, versionedSource] = await Promise.all([
     readFile(panelAssetUrl("panel.js"), "utf8"),
-    readFile(panelAssetUrl("panel-v0.1.12.js"), "utf8"),
+    readFile(panelAssetUrl("panel-v0.1.13.js"), "utf8"),
   ]);
 
   assert.equal(versionedSource, developmentSource);

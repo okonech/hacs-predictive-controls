@@ -95,7 +95,13 @@ Zone adjacency is derived from node `adjacent` edges. Cross-floor movement shoul
 be modeled as a normal edge between the two adjacent transition nodes, such as a
 bottom-of-staircase node connected only to the top-of-staircase or upstairs
 hallway node. The occupancy tab renders same-floor zone edges on each board and
-shows those cross-floor links as floor-transition chips.
+cross-floor links as one connected graph, with floor bands behind the current
+occupancy cards.
+
+When a sticky room clears shortly after adjacent transition evidence, and a
+stronger active track exists on the other side of that transition, the cleared
+room decays faster as a likely departure instead of waiting for normal passive
+sticky decay.
 
 For each zone, the integration exposes:
 

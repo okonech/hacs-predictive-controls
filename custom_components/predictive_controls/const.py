@@ -1,7 +1,7 @@
 DOMAIN = "predictive_controls"
 NAME = "Predictive Controls"
-VERSION = "0.1.12"
-PANEL_FILENAME = "panel-v0.1.12.js"
+VERSION = "0.1.13"
+PANEL_FILENAME = "panel-v0.1.13.js"
 
 CONF_ACTIONS_YAML = "actions_yaml"
 CONF_EXPECTED_OCCUPANTS = "expected_occupants"

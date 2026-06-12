@@ -3,7 +3,10 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
-from custom_components.predictive_controls.confidence import ZoneConfidenceEngine
+from custom_components.predictive_controls.confidence import (
+    ZoneConfidenceEngine,
+    ZoneState,
+)
 from custom_components.predictive_controls.events import OccupancyEvent
 from custom_components.predictive_controls.model import PredictiveMap
 
@@ -39,6 +42,14 @@ def make_house_map() -> PredictiveMap:
                         "shaila_office_motion",
                         "kitchen_motion",
                     ],
+                },
+                "upstairs_bathroom_motion": {
+                    "zone": "upstairs_bathroom",
+                    "role": "room_occupancy",
+                    "occupancy_behavior": "sticky",
+                    "entities": {"motion": "binary_sensor.upstairs_bathroom_motion"},
+                    "initial_weight": 0.7,
+                    "adjacent": ["upstairs_hallway_motion"],
                 },
                 "kitchen_motion": {
                     "zone": "kitchen",
@@ -412,6 +423,132 @@ def test_departure_through_transition_zone_decays_source_room() -> None:
     assert states["office"].explanation["type"] == "departure_decay"
     assert states["office"].explanation["departure"]["via_zone"] == "upstairs_hallway"
     assert engine.diagnostics.inferred_departures[0].destination_zone == "kitchen"
+
+
+def test_cleared_room_after_adjacent_transition_decays_toward_active_track() -> None:
+    engine = ZoneConfidenceEngine(make_house_map(), expected_occupants=1)
+    now = datetime(2026, 6, 12, 19, 59, 28, tzinfo=UTC)
+
+    office = event("office", node_id="office_motion", event_at=now)
+    hallway = event(
+        "upstairs_hallway",
+        node_id="upstairs_hallway_motion",
+        role="transition_gate",
+        behavior="transient",
+        reliability=0.85,
+        event_at=now + timedelta(seconds=13),
+    )
+    bathroom = event(
+        "upstairs_bathroom",
+        node_id="upstairs_bathroom_motion",
+        behavior="sticky",
+        reliability=0.7,
+        event_at=now + timedelta(seconds=16),
+    )
+
+    engine.observe(office)
+    engine.observe(hallway)
+    engine.observe(bathroom)
+    engine.observe(replace(hallway, state="off", event_at=now + timedelta(seconds=23)))
+    engine.observe(replace(hallway, event_at=now + timedelta(seconds=29)))
+    engine.observe(replace(hallway, state="off", event_at=now + timedelta(seconds=39)))
+    engine.observe(replace(bathroom, state="off", event_at=now + timedelta(seconds=57)))
+
+    states = engine.states
+    assert states["office"].status == "probable"
+    assert states["upstairs_bathroom"].status == "suspect"
+    assert states["upstairs_bathroom"].confidence < 0.35
+    assert states["upstairs_bathroom"].explanation["type"] == "clear_transition_decay"
+    assert states["upstairs_bathroom"].explanation["departure"] == {
+        "zone": "upstairs_bathroom",
+        "via_zone": "upstairs_hallway",
+        "via_node_id": "upstairs_hallway_motion",
+        "destination_zone": "office",
+        "event_at": (now + timedelta(seconds=57)).isoformat(),
+        "expires_at": (now + timedelta(minutes=5, seconds=57)).isoformat(),
+    }
+    assert engine.diagnostics.inferred_departures[0].zone == "upstairs_bathroom"
+
+
+def test_cleared_room_without_adjacent_transition_uses_normal_clear_decay() -> None:
+    engine = ZoneConfidenceEngine(make_house_map(), expected_occupants=0)
+    now = datetime(2026, 6, 12, 19, 59, 28, tzinfo=UTC)
+
+    bathroom = event(
+        "upstairs_bathroom",
+        node_id="upstairs_bathroom_motion",
+        behavior="sticky",
+        reliability=0.7,
+        event_at=now,
+    )
+
+    engine.observe(bathroom)
+    engine.observe(replace(bathroom, state="off", event_at=now + timedelta(minutes=1)))
+
+    state = engine.states["upstairs_bathroom"]
+    assert state.status == "possible"
+    assert state.explanation["type"] == "event"
+    assert engine.diagnostics.inferred_departures == ()
+
+
+def test_cleared_room_without_evidence_timestamp_uses_normal_clear_decay() -> None:
+    engine = ZoneConfidenceEngine(make_house_map(), expected_occupants=0)
+    now = datetime(2026, 6, 12, 19, 59, 28, tzinfo=UTC)
+    engine._states["upstairs_bathroom"] = ZoneState(
+        zone="upstairs_bathroom",
+        confidence=0.5,
+        status="possible",
+        occupancy_behavior="sticky",
+    )
+
+    bathroom_clear = event(
+        "upstairs_bathroom",
+        node_id="upstairs_bathroom_motion",
+        behavior="sticky",
+        state="off",
+        event_at=now,
+    )
+
+    engine.observe(bathroom_clear)
+
+    state = engine.states["upstairs_bathroom"]
+    assert state.status == "possible"
+    assert state.explanation["type"] == "event"
+    assert engine.diagnostics.inferred_departures == ()
+
+
+def test_cleared_room_needs_stronger_active_destination_to_decay() -> None:
+    engine = ZoneConfidenceEngine(make_house_map(), expected_occupants=0)
+    now = datetime(2026, 6, 12, 19, 59, 28, tzinfo=UTC)
+
+    office = event("office", node_id="office_motion", event_at=now)
+    hallway = event(
+        "upstairs_hallway",
+        node_id="upstairs_hallway_motion",
+        role="transition_gate",
+        behavior="transient",
+        reliability=0.85,
+        event_at=now + timedelta(seconds=13),
+    )
+    bathroom = event(
+        "upstairs_bathroom",
+        node_id="upstairs_bathroom_motion",
+        behavior="sticky",
+        signal_type="still_target",
+        reliability=0.9,
+        event_at=now + timedelta(seconds=16),
+    )
+
+    engine.observe(office)
+    engine.observe(hallway)
+    engine.observe(bathroom)
+    engine.observe(replace(hallway, state="off", event_at=now + timedelta(seconds=23)))
+    engine.observe(replace(bathroom, state="off", event_at=now + timedelta(seconds=57)))
+
+    state = engine.states["upstairs_bathroom"]
+    assert state.status == "probable"
+    assert state.explanation["type"] == "event"
+    assert engine.diagnostics.inferred_departures == ()
 
 
 def test_transition_seconds_can_tighten_join_window() -> None:

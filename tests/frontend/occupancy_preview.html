@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Predictive Controls Occupancy Preview</title>
+  <style>
+    :root {
+      --primary-text-color: #e6e6e6;
+      --secondary-text-color: #a8a8a8;
+      --text-primary-color: #111;
+      --primary-color: #03a9d9;
+      --card-background-color: #1b1b1b;
+      --secondary-background-color: #252525;
+      --divider-color: #333;
+      --disabled-text-color: #737373;
+      --success-color: #43a047;
+      --warning-color: #f2a900;
+      --info-color: #4797ff;
+      --ha-card-box-shadow: none;
+      color-scheme: dark;
+    }
+    body {
+      margin: 0;
+      background: #101010;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+  </style>
+</head>
+<body>
+  <predictive-controls-panel></predictive-controls-panel>
+  <script type="module">
+    import "../../custom_components/predictive_controls/frontend/panel.js";
+
+    const map = {
+      zones: {
+        entrance_hallway: { label: "Entrance Hallway", floor: "first_floor", role: "transition_gate", occupancy_behavior: "transient", position: { x: 120, y: 70 }, size: { width: 230, height: 110 } },
+        first_floor_bathroom_laundry_room: { label: "Ground Floor Bathroom/Laundry Room", floor: "first_floor", role: "room_occupancy", occupancy_behavior: "sustained", position: { x: 420, y: 105 }, size: { width: 250, height: 120 } },
+        dining_room: { label: "Dining Room", floor: "first_floor", role: "ambiguous_open_plan", occupancy_behavior: "ambiguous", position: { x: 70, y: 285 }, size: { width: 240, height: 130 } },
+        kitchen: { label: "Kitchen", floor: "first_floor", role: "room_occupancy", occupancy_behavior: "sustained", position: { x: 330, y: 260 }, size: { width: 240, height: 130 } },
+        foyer: { label: "Foyer", floor: "first_floor", role: "transition_gate", occupancy_behavior: "transient", position: { x: 70, y: 470 }, size: { width: 220, height: 110 } },
+        living_room: { label: "Living Room", floor: "first_floor", role: "anchor_sensor", occupancy_behavior: "sticky", position: { x: 330, y: 430 }, size: { width: 430, height: 150 } },
+        staircase_bottom: { label: "Bottom of Staircase", floor: "first_floor", role: "transition_gate", occupancy_behavior: "transient", position: { x: 330, y: 610 }, size: { width: 250, height: 110 } },
+        guest_bedroom: { label: "Guest Bedroom", floor: "first_floor", role: "room_occupancy", occupancy_behavior: "sustained", position: { x: 590, y: 610 }, size: { width: 250, height: 120 } },
+        upstairs_hallway: { label: "Upstairs Hallway", floor: "second_floor", role: "transition_gate", occupancy_behavior: "transient", position: { x: 330, y: 780 }, size: { width: 250, height: 110 } },
+        upstairs_bathroom: { label: "Upstairs Bathroom", floor: "second_floor", role: "room_occupancy", occupancy_behavior: "sticky", position: { x: 330, y: 920 }, size: { width: 250, height: 120 } },
+        alex_office: { label: "Alex Office", floor: "second_floor", role: "room_occupancy", occupancy_behavior: "sustained", position: { x: 590, y: 760 }, size: { width: 250, height: 120 } },
+        master_bedroom_entrance: { label: "Master Bedroom Entrance", floor: "second_floor", role: "transition_gate", occupancy_behavior: "transient", position: { x: 90, y: 900 }, size: { width: 250, height: 110 } },
+        master_bedroom_closet: { label: "Master Bedroom Closet", floor: "second_floor", role: "subzone_occupancy", occupancy_behavior: "sustained", position: { x: 90, y: 1050 }, size: { width: 250, height: 110 } },
+        master_bathroom: { label: "Master Bathroom", floor: "second_floor", role: "room_occupancy", occupancy_behavior: "sticky", position: { x: 90, y: 1200 }, size: { width: 250, height: 120 } },
+        shaila_office: { label: "Shaila Office", floor: "second_floor", role: "room_occupancy", occupancy_behavior: "sustained", position: { x: 590, y: 900 }, size: { width: 250, height: 120 } },
+      },
+      nodes: {
+        entrance_mmwave_dimmer: { label: "Entrance mmWave Dimmer", floor: "first_floor", zone: "entrance_hallway", role: "transition_gate", occupancy_behavior: "transient", entities: { motion: "binary_sensor.entrance_mmwave_dimmer_motion_detection" }, adjacent: ["ground_floor_bathroom_laundry_room", "dining_room_motion", "kitchen_overhead_mmwave_dimmer"], position: { x: 120, y: 70 } },
+        ground_floor_bathroom_laundry_room: { label: "Ground Floor Bathroom/Laundry Room PIR Motion", floor: "first_floor", zone: "first_floor_bathroom_laundry_room", role: "room_occupancy", entities: { motion: "binary_sensor.ground_floor_bathroom_laundry_room_motion_detection" }, adjacent: ["entrance_mmwave_dimmer"], position: { x: 420, y: 105 } },
+        dining_room_motion: { label: "Dining room motion", floor: "first_floor", zone: "dining_room", role: "ambiguous_open_plan", entities: { motion: "binary_sensor.dining_room_motion_motion_detection" }, adjacent: ["entrance_mmwave_dimmer", "kitchen_overhead_mmwave_dimmer", "living_room_fireplace_right", "foyer_pir_motion"], position: { x: 70, y: 285 } },
+        kitchen_overhead_mmwave_dimmer: { label: "Kitchen Overhead mmWave Dimmer", floor: "first_floor", zone: "kitchen", role: "room_occupancy", entities: { motion: "binary_sensor.mmwave_dimmer_motion_detection_2" }, adjacent: ["entrance_mmwave_dimmer", "dining_room_motion"], position: { x: 330, y: 260 } },
+        foyer_pir_motion: { label: "Foyer PIR Motion", floor: "first_floor", zone: "foyer", role: "transition_gate", entities: { motion: "binary_sensor.foyer_pir_motion_motion_detection" }, adjacent: ["dining_room_motion", "bottom_of_staircase_motion"], position: { x: 70, y: 470 } },
+        living_room_fireplace_left: { label: "Fireplace Monitor Left", floor: "first_floor", zone: "living_room", role: "anchor_sensor", entities: { target: "binary_sensor.apollo_msr_target", moving_target: "binary_sensor.apollo_msr_moving", still_target: "binary_sensor.apollo_msr_still" }, adjacent: ["guest_bedroom_motion", "living_room_fireplace_right"], position: { x: 560, y: 430 } },
+        living_room_fireplace_right: { label: "Fireplace Monitor Right", floor: "first_floor", zone: "living_room", role: "anchor_sensor", entities: { target: "binary_sensor.island_monitor_target", moving_target: "binary_sensor.island_monitor_moving", still_target: "binary_sensor.island_monitor_still" }, adjacent: ["dining_room_motion", "living_room_fireplace_left"], position: { x: 330, y: 440 } },
+        bottom_of_staircase_motion: { label: "Bottom of Staircase Motion", floor: "first_floor", zone: "staircase_bottom", role: "transition_gate", entities: { motion: "binary_sensor.bottom_of_staircase_motion_motion_detection" }, adjacent: ["foyer_pir_motion", "guest_bedroom_motion", "top_of_staircase_motion"], position: { x: 330, y: 610 } },
+        guest_bedroom_motion: { label: "Guest Bedroom Motion", floor: "first_floor", zone: "guest_bedroom", role: "room_occupancy", entities: { motion: "binary_sensor.guest_bedroom_motion_detection" }, adjacent: ["bottom_of_staircase_motion", "living_room_fireplace_left"], position: { x: 590, y: 610 } },
+        top_of_staircase_motion: { label: "Top of Staircase Motion", floor: "second_floor", zone: "upstairs_hallway", role: "transition_gate", entities: { motion: "binary_sensor.top_of_staircase_motion_motion_detection" }, adjacent: ["bottom_of_staircase_motion", "upstairs_bathroom_motion", "alex_office_motion", "master_bedroom_entrance", "shaila_office_fan_light"], position: { x: 330, y: 780 } },
+        upstairs_bathroom_motion: { label: "Upstairs Bathroom Motion", floor: "second_floor", zone: "upstairs_bathroom", role: "room_occupancy", entities: { motion: "binary_sensor.upstairs_bathroom_motion_detection" }, adjacent: ["top_of_staircase_motion"], position: { x: 330, y: 920 } },
+        alex_office_motion: { label: "Alex Office Motion", floor: "second_floor", zone: "alex_office", role: "room_occupancy", entities: { motion: "binary_sensor.alex_office_motion_detection" }, adjacent: ["top_of_staircase_motion"], position: { x: 590, y: 760 } },
+        master_bedroom_entrance: { label: "Master Bedroom Entrance PIR Motion", floor: "second_floor", zone: "master_bedroom_entrance", role: "transition_gate", entities: { motion: "binary_sensor.master_bedroom_entrance_motion_detection" }, adjacent: ["master_bedroom_closet", "top_of_staircase_motion"], position: { x: 90, y: 900 } },
+        master_bedroom_closet: { label: "Master Bedroom Closet Motion", floor: "second_floor", zone: "master_bedroom_closet", role: "subzone_occupancy", entities: { motion: "binary_sensor.master_bedroom_closet_motion_detection" }, adjacent: ["master_bedroom_entrance", "master_bathroom_light_motion"], position: { x: 90, y: 1050 } },
+        master_bathroom_light_motion: { label: "Master Bathroom Light Motion", floor: "second_floor", zone: "master_bathroom", role: "room_occupancy", entities: { motion: "binary_sensor.master_bathroom_motion_detection" }, adjacent: ["master_bedroom_closet"], position: { x: 90, y: 1200 } },
+        shaila_office_fan_light: { label: "Shaila Office Fan Light", floor: "second_floor", zone: "shaila_office", role: "room_occupancy", entities: { motion: "binary_sensor.shaila_office_motion_detection" }, adjacent: ["top_of_staircase_motion"], position: { x: 590, y: 900 } },
+      },
+    };
+
+    const zoneStates = Object.fromEntries(Object.keys(map.zones).map((zone) => [zone, {
+      confidence: 0,
+      status: "rejected",
+      occupancy_behavior: map.zones[zone].occupancy_behavior,
+      reason: "preview state",
+      last_node_id: null,
+    }]));
+    zoneStates.alex_office = {
+      confidence: 0.65,
+      status: "probable",
+      occupancy_behavior: "sustained",
+      reason: "motion active at alex_office_motion; confidence is probable",
+      last_node_id: "alex_office_motion",
+    };
+
+    const config = {
+      entry_id: "preview",
+      map,
+      map_yaml: "preview: true\n",
+      actions_yaml: "actions: []\n",
+      transition_window_seconds: 30,
+      prediction_threshold: 0.6,
+      expected_occupants: 1,
+    };
+    const status = {
+      zone_states: zoneStates,
+      recent_occupancy_events: [],
+      transition_counts: {
+        top_of_staircase_motion: { alex_office_motion: 3, bottom_of_staircase_motion: 1 },
+        bottom_of_staircase_motion: { top_of_staircase_motion: 2 },
+      },
+      occupancy_diagnostics: {
+        expected_occupants: 1,
+        protected_tracks: ["alex_office"],
+        protected_corridor: ["alex_office", "upstairs_hallway"],
+        prediction_hints: { upstairs_hallway: 0.62 },
+        inferred_join_slots: [],
+        inferred_departures: [],
+        dwell_seconds: {},
+        tracks: [{ track_id: "track_1", zone: "alex_office", confidence: 0.65, active: true, source_entities: ["binary_sensor.alex_office_motion_detection"] }],
+      },
+    };
+    const entities = Object.values(map.nodes).flatMap((node) => Object.values(node.entities || {})).map((entityId) => ({
+      entity_id: entityId,
+      name: entityId.replace(/^binary_sensor\./, "").replace(/_/g, " "),
+      state: entityId.includes("alex_office") ? "on" : "off",
+      device_class: "motion",
+    }));
+
+    document.querySelector("predictive-controls-panel").hass = {
+      callWS(message) {
+        if (message.type === "predictive_controls/config") return Promise.resolve(config);
+        if (message.type === "predictive_controls/status") return Promise.resolve(status);
+        if (message.type === "predictive_controls/entities") return Promise.resolve({ entities });
+        if (message.type === "predictive_controls/cleanup_entities") return Promise.resolve({ stale_count: 0, removed_count: 0 });
+        if (message.type === "predictive_controls/save_config") return Promise.resolve(config);
+        return Promise.reject(new Error(`Unexpected websocket type: ${message.type}`));
+      },
+    };
+  </script>
+</body>
+</html>

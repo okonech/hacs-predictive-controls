@@ -202,3 +202,17 @@ def reason_for_departure_decay(
         f"departure inferred via {via_zone} toward {destination_zone}; "
         f"confidence decayed to {status}"
     )
+
+
+def reason_for_clear_transition_decay(
+    previous: ZoneStateView,
+    confidence: float,
+    via_zone: str,
+    destination_zone: str,
+) -> str:
+    status = status_for_confidence(confidence)
+    return (
+        f"cleared after adjacent transition via {via_zone} while "
+        f"{destination_zone} had stronger active evidence; "
+        f"confidence decayed to {status}"
+    )

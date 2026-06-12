@@ -210,33 +210,35 @@ function learnedTransitionRows(map, status) {
   return rows.sort((left, right) => right.count - left.count || left.sourceLabel.localeCompare(right.sourceLabel) || left.targetLabel.localeCompare(right.targetLabel));
 }
 
-function crossFloorZoneEdges(map, floor) {
-  const nodes = map?.nodes || {};
-  const zonesById = new Map(zoneSummaries(map).map((zone) => [zone.zoneId, zone]));
-  const edges = [];
-  const seen = new Set();
-  for (const [sourceNodeId, sourceNode] of Object.entries(nodes)) {
-    const sourceZoneId = sourceNode.zone || sourceNodeId;
-    const sourceZone = zonesById.get(sourceZoneId);
-    if (!sourceZone) continue;
-    for (const targetNodeId of sourceNode.adjacent || []) {
-      const targetNode = nodes[targetNodeId];
-      if (!targetNode) continue;
-      const targetZoneId = targetNode.zone || targetNodeId;
-      if (targetZoneId === sourceZoneId) continue;
-      const targetZone = zonesById.get(targetZoneId);
-      if (!targetZone || targetZone.floor === sourceZone.floor) continue;
-
-      const local = sourceZone.floor === floor ? sourceZone : targetZone;
-      const remote = sourceZone.floor === floor ? targetZone : sourceZone;
-      if (local.floor !== floor) continue;
-      const edgeId = [sourceZone.zoneId, targetZone.zoneId].sort().join("->");
-      if (seen.has(edgeId)) continue;
-      seen.add(edgeId);
-      edges.push({ local, remote });
-    }
+function floorBands(zones) {
+  const bands = new Map();
+  for (const zone of zones) {
+    const top = Number(zone.position.y ?? 80);
+    const bottom = top + Number(zone.size.height ?? 112);
+    const existing = bands.get(zone.floor) || { floor: zone.floor, top, bottom };
+    existing.top = Math.min(existing.top, top);
+    existing.bottom = Math.max(existing.bottom, bottom);
+    bands.set(zone.floor, existing);
   }
-  return edges.sort((left, right) => left.local.label.localeCompare(right.local.label) || left.remote.label.localeCompare(right.remote.label));
+  return [...bands.values()].sort((left, right) => left.top - right.top || left.floor.localeCompare(right.floor));
+}
+
+function spacedZoneSummaries(zones, scaleX = 1.22, scaleY = 1.18) {
+  if (!zones.length) return zones;
+  const originX = Math.min(...zones.map((zone) => Number(zone.position.x ?? 80)));
+  const originY = Math.min(...zones.map((zone) => Number(zone.position.y ?? 80)));
+  return zones.map((zone) => {
+    const x = Number(zone.position.x ?? 80);
+    const y = Number(zone.position.y ?? 80);
+    return {
+      ...zone,
+      position: {
+        ...zone.position,
+        x: Math.round(originX + (x - originX) * scaleX),
+        y: Math.round(originY + (y - originY) * scaleY),
+      },
+    };
+  });
 }
 
 function escapeHtml(value) {
@@ -381,7 +383,6 @@ class PredictiveControlsPanel extends HTMLElement {
 
   renderOccupancy() {
     const zones = zoneSummaries(this._config.map);
-    const floors = [...new Set(zones.map((zone) => zone.floor))];
     return `
       <main class="occupancy-layout">
         <section class="occupancy-toolbar">
@@ -392,7 +393,7 @@ class PredictiveControlsPanel extends HTMLElement {
           <button data-action="refresh-status">Refresh</button>
         </section>
         ${this.renderOccupancyDiagnostics()}
-        ${floors.map((floor) => this.renderOccupancyFloor(floor, zones.filter((zone) => zone.floor === floor))).join("")}
+        ${this.renderOccupancyGraph(zones)}
         ${this.renderLearnedTransitions()}
       </main>
     `;
@@ -459,39 +460,37 @@ class PredictiveControlsPanel extends HTMLElement {
     `;
   }
 
-  renderOccupancyFloor(floor, zones) {
-    const minX = Math.min(...zones.map((zone) => Number(zone.position.x ?? 80)));
-    const minY = Math.min(...zones.map((zone) => Number(zone.position.y ?? 80)));
-    const maxX = Math.max(...zones.map((zone) => Number(zone.position.x ?? 80) + Number(zone.size.width ?? 210)));
-    const maxY = Math.max(...zones.map((zone) => Number(zone.position.y ?? 80) + Number(zone.size.height ?? 112)));
-    const width = Math.max(640, maxX - minX + 48);
-    const height = Math.max(260, maxY - minY + 48);
+  renderOccupancyGraph(zones) {
+    const layoutZones = spacedZoneSummaries(zones);
+    const graphLabelGutter = 64;
+    const minX = Math.min(...layoutZones.map((zone) => Number(zone.position.x ?? 80))) - graphLabelGutter;
+    const minY = Math.min(...layoutZones.map((zone) => Number(zone.position.y ?? 80)));
+    const maxX = Math.max(...layoutZones.map((zone) => Number(zone.position.x ?? 80) + Number(zone.size.width ?? 210)));
+    const maxY = Math.max(...layoutZones.map((zone) => Number(zone.position.y ?? 80) + Number(zone.size.height ?? 112)));
+    const width = Math.max(900, maxX - minX + 48, Number(this.clientWidth || 0) - 48);
+    const height = Math.max(520, maxY - minY + 48);
     return `
-      <section class="floor-section">
-        <h3>${titleFromId(floor)}</h3>
-        <div class="occupancy-board" style="height:${height}px;min-width:${width}px">
-          <svg class="zone-edges" viewBox="0 0 ${width} ${height}">${this.renderZoneEdges(zones, minX, minY)}</svg>
-          ${zones.map((zone) => this.renderZoneCard(zone, minX, minY)).join("")}
+      <section class="floor-section occupancy-graph-section">
+        <h3>Zone Graph</h3>
+        <div class="occupancy-board occupancy-graph" style="height:${height}px;width:${width}px">
+          ${this.renderFloorBands(layoutZones, minY, width)}
+          <svg class="zone-edges" viewBox="0 0 ${width} ${height}">${this.renderZoneEdges(layoutZones, minX, minY)}</svg>
+          ${layoutZones.map((zone) => this.renderZoneCard(zone, minX, minY)).join("")}
         </div>
-        ${this.renderFloorTransitions(floor)}
       </section>
     `;
   }
 
-  renderFloorTransitions(floor) {
-    const edges = crossFloorZoneEdges(this._config.map, floor);
-    if (!edges.length) return "";
-    return `
-      <div class="floor-transitions">
-        ${edges.map(({ local, remote }) => `
-          <span>
-            <strong>${escapeHtml(local.label)}</strong>
-            <em>${escapeHtml(labelFromValue(remote.floor))}</em>
-            ${escapeHtml(remote.label)}
-          </span>
-        `).join("")}
-      </div>
-    `;
+  renderFloorBands(zones, minY, width) {
+    return floorBands(zones).map((band) => {
+      const top = Number(band.top) - minY + 12;
+      const height = Math.max(120, Number(band.bottom) - Number(band.top) + 72);
+      return `
+        <div class="floor-band" style="top:${top}px;height:${height}px;width:${width - 24}px">
+          <span>${escapeHtml(titleFromId(band.floor))}</span>
+        </div>
+      `;
+    }).join("");
   }
 
   renderZoneEdges(zones, minX, minY) {
@@ -510,7 +509,7 @@ class PredictiveControlsPanel extends HTMLElement {
           const edgeId = [zone.zoneId, target.zoneId].sort().join("->");
           if (seen.has(edgeId)) continue;
           seen.add(edgeId);
-          lines.push(`<line x1="${Number(zone.position.x ?? 80) - minX + Number(zone.size.width ?? 210) / 2 + 24}" y1="${Number(zone.position.y ?? 80) - minY + Number(zone.size.height ?? 112) / 2 + 24}" x2="${Number(target.position.x ?? 80) - minX + Number(target.size.width ?? 210) / 2 + 24}" y2="${Number(target.position.y ?? 80) - minY + Number(target.size.height ?? 112) / 2 + 24}" />`);
+          lines.push(`<line data-edge="${escapeHtml(edgeId)}" x1="${Number(zone.position.x ?? 80) - minX + Number(zone.size.width ?? 210) / 2 + 24}" y1="${Number(zone.position.y ?? 80) - minY + Number(zone.size.height ?? 112) / 2 + 24}" x2="${Number(target.position.x ?? 80) - minX + Number(target.size.width ?? 210) / 2 + 24}" y2="${Number(target.position.y ?? 80) - minY + Number(target.size.height ?? 112) / 2 + 24}" />`);
         }
       }
     }
@@ -956,20 +955,20 @@ class PredictiveControlsPanel extends HTMLElement {
       .section-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
       .section-head small { color:var(--secondary-text-color); }
       .floor-section { overflow:auto; }
+      .occupancy-graph-section h3 { margin-top:0; }
       .occupancy-board { position:relative; overflow:auto; background:var(--secondary-background-color); border:1px solid var(--divider-color); border-radius:8px; }
+      .occupancy-graph { background:var(--secondary-background-color); }
+      .floor-band { position:absolute; left:12px; box-sizing:border-box; border:1px solid color-mix(in srgb, var(--divider-color) 78%, transparent); border-radius:8px; background:color-mix(in srgb, var(--card-background-color) 10%, transparent); pointer-events:none; }
+      .floor-band span { position:absolute; left:12px; top:10px; color:var(--primary-text-color); font-size:13px; font-weight:700; }
       .zone-edges { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
-      .zone-edges line { stroke:var(--divider-color); stroke-width:3; opacity:.8; }
-      .floor-transitions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
-      .floor-transitions span { display:inline-flex; align-items:center; gap:8px; border:1px solid var(--divider-color); border-radius:999px; padding:6px 10px; color:var(--secondary-text-color); }
-      .floor-transitions strong { color:var(--primary-text-color); }
-      .floor-transitions em { font-style:normal; font-size:11px; text-transform:uppercase; letter-spacing:0; color:var(--primary-color); }
-      .zone-card { position:absolute; box-sizing:border-box; border:1px solid var(--divider-color); border-left-width:6px; border-radius:8px; padding:12px; background:var(--card-background-color); box-shadow:var(--ha-card-box-shadow, none); }
+      .zone-edges line { stroke:var(--primary-color); stroke-width:3; opacity:.72; }
+      .zone-card { position:absolute; box-sizing:border-box; border:1px solid var(--divider-color); border-left-width:6px; border-radius:8px; padding:12px; background:var(--card-background-color); box-shadow:var(--ha-card-box-shadow, none); z-index:1; }
       .zone-card-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
       .zone-card-head strong, .zone-card small { overflow:hidden; text-overflow:ellipsis; }
       .zone-card small { display:block; margin-top:6px; color:var(--secondary-text-color); }
       .confidence-bar { height:8px; margin-top:10px; border-radius:999px; background:var(--divider-color); overflow:hidden; }
       .confidence-bar span { display:block; height:100%; background:var(--primary-color); }
-      .status-rejected { border-left-color:var(--disabled-text-color); opacity:.72; }
+      .status-rejected { border-left-color:var(--disabled-text-color); }
       .status-suspect { border-left-color:var(--warning-color, #f2a900); }
       .status-possible { border-left-color:var(--info-color, #4797ff); }
       .status-probable { border-left-color:var(--success-color, #43a047); }
