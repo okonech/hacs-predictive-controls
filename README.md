@@ -102,7 +102,7 @@ For each zone, the integration exposes:
   and `confirmed` states;
 - a motion-plausible binary sensor that turns on when the zone is probably
   occupied, part of the active movement corridor, or predicted next;
-- a predicted-next binary sensor and prediction-probability sensor for
+- a predicted-next binary sensor and zone prediction-probability sensor for
   pre-lighting adjacent zones before a person arrives.
 
 These entities are intended as an inference layer between raw motion sensors and

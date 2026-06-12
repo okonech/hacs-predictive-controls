@@ -20,6 +20,7 @@ from .const import (
     DOMAIN,
 )
 from .entity_catalog import serialize_candidates
+from .entity_registry import async_cleanup_stale_entities
 from .status import runtime_status_payload
 from .yaml_config import (
     DEFAULT_ACTIONS_YAML,
@@ -37,6 +38,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, websocket_save_config)
     websocket_api.async_register_command(hass, websocket_entities)
     websocket_api.async_register_command(hass, websocket_status)
+    websocket_api.async_register_command(hass, websocket_cleanup_entities)
 
 
 def _entry_for_message(hass: HomeAssistant, msg: dict[str, Any]) -> Any:
@@ -199,3 +201,33 @@ async def websocket_status(
     connection.send_message(
         websocket_api.result_message(msg["id"], runtime_status_payload(runtime))
     )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/cleanup_entities",
+        vol.Optional("entry_id"): str,
+        vol.Optional("dry_run", default=False): bool,
+    }
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+async def websocket_cleanup_entities(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    try:
+        entry = _entry_for_message(hass, msg)
+        runtime = hass.data[DOMAIN][entry.entry_id]
+    except (KeyError, ValueError) as exc:
+        connection.send_error(msg["id"], "not_found", str(exc))
+        return
+
+    result = await async_cleanup_stale_entities(
+        hass,
+        entry.entry_id,
+        runtime.map,
+        dry_run=bool(msg["dry_run"]),
+    )
+    connection.send_message(websocket_api.result_message(msg["id"], result))

@@ -353,10 +353,62 @@ test("panel renders expected occupants setting", async () => {
   assert.match(panel.innerHTML, /value="2"/);
   assert.match(panel.innerHTML, /Expected occupants entity/);
   assert.match(panel.innerHTML, /input_number\.expected_occupants/);
+  assert.match(panel.innerHTML, /Clean Stale Entities/);
+});
+
+test("panel cleans stale entities after preview and confirmation", async () => {
+  const Panel = await panelConstructor();
+  const calls = [];
+  const panel = new Panel();
+  panel._hass = {
+    callWS(message) {
+      calls.push(message);
+      if (message.dry_run) {
+        return Promise.resolve({ stale_count: 3 });
+      }
+      return Promise.resolve({ removed_count: 3 });
+    },
+  };
+  panel._config = { entry_id: "abc123" };
+  panel._tab = "settings";
+  globalThis.confirm = () => true;
+
+  await panel.cleanupEntities();
+
+  assert.deepEqual(calls, [
+    {
+      type: "predictive_controls/cleanup_entities",
+      entry_id: "abc123",
+      dry_run: true,
+    },
+    {
+      type: "predictive_controls/cleanup_entities",
+      entry_id: "abc123",
+      dry_run: false,
+    },
+  ]);
+  assert.match(panel.innerHTML, /Removed 3 stale entities\./);
+});
+
+test("panel reports when no stale entities are found", async () => {
+  const Panel = await panelConstructor();
+  const panel = new Panel();
+  panel._hass = {
+    callWS(message) {
+      assert.equal(message.dry_run, true);
+      return Promise.resolve({ stale_count: 0 });
+    },
+  };
+  panel._config = { entry_id: "abc123" };
+  panel._tab = "settings";
+
+  await panel.cleanupEntities();
+
+  assert.match(panel.innerHTML, /No stale entities found\./);
 });
 
 test("panel script parses when Home Assistant loads it as a classic script", async () => {
-  const source = await readFile(panelAssetUrl("panel-v0.1.10.js"), "utf8");
+  const source = await readFile(panelAssetUrl("panel-v0.1.11.js"), "utf8");
 
   assert.doesNotThrow(() => new vm.Script(source));
 });
@@ -364,7 +416,7 @@ test("panel script parses when Home Assistant loads it as a classic script", asy
 test("versioned panel asset matches the development panel asset", async () => {
   const [developmentSource, versionedSource] = await Promise.all([
     readFile(panelAssetUrl("panel.js"), "utf8"),
-    readFile(panelAssetUrl("panel-v0.1.10.js"), "utf8"),
+    readFile(panelAssetUrl("panel-v0.1.11.js"), "utf8"),
   ]);
 
   assert.equal(versionedSource, developmentSource);

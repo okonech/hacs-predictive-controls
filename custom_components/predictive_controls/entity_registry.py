@@ -1,0 +1,120 @@
+from __future__ import annotations
+
+from typing import Any
+
+from .const import DOMAIN
+from .model import PredictiveMap
+
+AGGREGATE_SENSOR_SUFFIXES = (
+    "next_node",
+    "predicted_next_zone",
+    "probable_inside_count",
+    "possible_inside_count",
+    "probable_occupied_zones",
+    "possible_occupied_zones",
+    "motion_plausible_zones",
+    "active_movement_corridor",
+    "occupancy_explanation",
+)
+
+AGGREGATE_BINARY_SENSOR_SUFFIXES = ("home_probable_occupancy",)
+
+ZONE_SENSOR_SUFFIXES = (
+    "confidence",
+    "status",
+    "zone_prediction_probability",
+)
+
+ZONE_BINARY_SENSOR_SUFFIXES = (
+    "probable_occupancy",
+    "possible_occupancy",
+    "motion_plausible",
+    "zone_predicted_next",
+)
+
+NODE_SENSOR_SUFFIXES = ("probability",)
+NODE_BINARY_SENSOR_SUFFIXES = ("predicted",)
+
+
+def expected_entity_unique_ids(
+    entry_id: str,
+    predictive_map: PredictiveMap,
+) -> set[str]:
+    """Return unique IDs currently provided by one config entry."""
+
+    unique_ids = {f"{entry_id}_{suffix}" for suffix in AGGREGATE_SENSOR_SUFFIXES}
+    unique_ids.update(
+        f"{entry_id}_{suffix}" for suffix in AGGREGATE_BINARY_SENSOR_SUFFIXES
+    )
+    for node_id in predictive_map.nodes:
+        unique_ids.update(
+            f"{entry_id}_{node_id}_{suffix}" for suffix in NODE_SENSOR_SUFFIXES
+        )
+        unique_ids.update(
+            f"{entry_id}_{node_id}_{suffix}" for suffix in NODE_BINARY_SENSOR_SUFFIXES
+        )
+    for zone in predictive_map.zones():
+        unique_ids.update(
+            f"{entry_id}_{zone}_{suffix}" for suffix in ZONE_SENSOR_SUFFIXES
+        )
+        unique_ids.update(
+            f"{entry_id}_{zone}_{suffix}" for suffix in ZONE_BINARY_SENSOR_SUFFIXES
+        )
+    return unique_ids
+
+
+def stale_entity_registry_entries(
+    entries: list[Any],
+    config_entry_id: str,
+    expected_unique_ids: set[str],
+) -> list[Any]:
+    """Return stale Predictive Controls entity-registry rows."""
+
+    return [
+        entry
+        for entry in entries
+        if getattr(entry, "platform", None) == DOMAIN
+        and getattr(entry, "config_entry_id", None) == config_entry_id
+        and getattr(entry, "unique_id", None) not in expected_unique_ids
+    ]
+
+
+async def async_cleanup_stale_entities(
+    hass: Any,
+    entry_id: str,
+    predictive_map: PredictiveMap,
+    *,
+    dry_run: bool = False,
+) -> dict[str, object]:
+    """Remove stale registry rows for one Predictive Controls config entry."""
+
+    from homeassistant.helpers import entity_registry as er
+
+    registry = er.async_get(hass)
+    expected = expected_entity_unique_ids(entry_id, predictive_map)
+    stale_entries = stale_entity_registry_entries(
+        list(registry.entities.values()),
+        entry_id,
+        expected,
+    )
+    stale_payload = [entity_registry_entry_payload(entry) for entry in stale_entries]
+    if not dry_run:
+        for entry in stale_entries:
+            registry.async_remove(entry.entity_id)
+    return {
+        "removed_count": 0 if dry_run else len(stale_entries),
+        "removed_entities": [] if dry_run else stale_payload,
+        "stale_count": len(stale_entries),
+        "stale_entities": stale_payload,
+        "expected_count": len(expected),
+        "dry_run": dry_run,
+    }
+
+
+def entity_registry_entry_payload(entry: Any) -> dict[str, object]:
+    return {
+        "entity_id": getattr(entry, "entity_id", None),
+        "unique_id": getattr(entry, "unique_id", None),
+        "name": getattr(entry, "name", None),
+        "original_name": getattr(entry, "original_name", None),
+    }

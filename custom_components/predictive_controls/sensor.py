@@ -332,7 +332,9 @@ class ZonePredictionProbabilitySensor(RuntimeSensor):
     ) -> None:
         super().__init__(runtime, entry_id)
         self.zone = zone
-        self._attr_name = f"{zone.replace('_', ' ').title()} Prediction Probability"
+        self._attr_name = (
+            f"{zone.replace('_', ' ').title()} Zone Prediction Probability"
+        )
         self._attr_unique_id = f"{entry_id}_{zone}_zone_prediction_probability"
         self._attr_native_unit_of_measurement = "%"
 
