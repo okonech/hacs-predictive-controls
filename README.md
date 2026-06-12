@@ -91,6 +91,12 @@ floor grouping, occupancy behavior, and visual placement in the occupancy tab.
 If omitted, the panel derives zones from node `zone`, `floor`, `role`, and
 `position` fields.
 
+Zone adjacency is derived from node `adjacent` edges. Cross-floor movement should
+be modeled as a normal edge between the two adjacent transition nodes, such as a
+bottom-of-staircase node connected only to the top-of-staircase or upstairs
+hallway node. The occupancy tab renders same-floor zone edges on each board and
+shows those cross-floor links as floor-transition chips.
+
 For each zone, the integration exposes:
 
 - a confidence percentage sensor;
@@ -152,6 +158,12 @@ needed to explain the configured number of people. For example, if two offices
 have fresh motion and `expected_occupants` is `2`, stale confidence in an
 unrelated bathroom or guest bedroom drops even if those sensors have not emitted
 another event.
+
+When the expected-occupant slots are already filled by active tracks, new motion
+outside the adjacent movement corridor is capped below `possible` and cannot
+steal the protected track. Zone prediction hints are also projected only through
+the current adjacent zone edge, so pre-lighting follows the configured graph
+instead of jumping to unrelated rooms or floors.
 
 Passive time decay also runs during periodic refreshes. This prevents cleared
 zones from keeping high confidence indefinitely just because no later event

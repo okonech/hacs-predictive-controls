@@ -209,6 +209,49 @@ test("panel renders live occupancy zones from configured map data", async () => 
   assert.match(panel.innerHTML, /7/);
 });
 
+test("panel renders cross-floor zone adjacency as floor transitions", async () => {
+  const Panel = await panelConstructor();
+  const panel = new Panel();
+  panel._hass = {};
+  panel._config = {
+    map: {
+      zones: {
+        staircase_bottom: {
+          label: "Bottom of Staircase",
+          floor: "first_floor",
+          position: { x: 120, y: 120 },
+        },
+        upstairs_hallway: {
+          label: "Upstairs Hallway",
+          floor: "second_floor",
+          position: { x: 120, y: 300 },
+        },
+      },
+      nodes: {
+        bottom_of_staircase_motion: {
+          zone: "staircase_bottom",
+          floor: "first_floor",
+          adjacent: ["top_of_staircase_motion"],
+        },
+        top_of_staircase_motion: {
+          zone: "upstairs_hallway",
+          floor: "second_floor",
+          adjacent: ["bottom_of_staircase_motion"],
+        },
+      },
+    },
+  };
+  panel._status = { zone_states: {}, occupancy_diagnostics: { tracks: [] } };
+  panel._tab = "occupancy";
+
+  panel.render();
+
+  assert.match(panel.innerHTML, /floor-transitions/);
+  assert.match(panel.innerHTML, /Bottom of Staircase/);
+  assert.match(panel.innerHTML, /Second Floor/);
+  assert.match(panel.innerHTML, /Upstairs Hallway/);
+});
+
 test("panel renders the editable map YAML tab", async () => {
   const Panel = await panelConstructor();
   const panel = new Panel();
@@ -408,7 +451,7 @@ test("panel reports when no stale entities are found", async () => {
 });
 
 test("panel script parses when Home Assistant loads it as a classic script", async () => {
-  const source = await readFile(panelAssetUrl("panel-v0.1.11.js"), "utf8");
+  const source = await readFile(panelAssetUrl("panel-v0.1.12.js"), "utf8");
 
   assert.doesNotThrow(() => new vm.Script(source));
 });
@@ -416,7 +459,7 @@ test("panel script parses when Home Assistant loads it as a classic script", asy
 test("versioned panel asset matches the development panel asset", async () => {
   const [developmentSource, versionedSource] = await Promise.all([
     readFile(panelAssetUrl("panel.js"), "utf8"),
-    readFile(panelAssetUrl("panel-v0.1.11.js"), "utf8"),
+    readFile(panelAssetUrl("panel-v0.1.12.js"), "utf8"),
   ]);
 
   assert.equal(versionedSource, developmentSource);

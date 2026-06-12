@@ -214,9 +214,41 @@ def test_staying_put_still_target_survives_unrelated_false_positive() -> None:
     states = engine.states
     assert states["living_room"].status == "confirmed"
     assert states["living_room"].confidence == 0.99
-    assert states["garage"].status == "possible"
+    assert states["garage"].status == "suspect"
+    assert states["garage"].confidence < 0.35
+    assert [track.zone for track in engine.tracks] == ["living_room"]
     assert states["guest_bedroom"].status == "rejected"
     assert states["master_bathroom"].status == "suspect"
+
+
+def test_saturated_predictions_stay_inside_adjacent_zone_corridor() -> None:
+    engine = ZoneConfidenceEngine(make_house_map(), expected_occupants=1)
+    now = datetime(2026, 6, 7, 12, tzinfo=UTC)
+
+    engine.apply_node_predictions(
+        {"upstairs_hallway_motion": 0.60},
+        source_node_id="office_motion",
+    )
+    assert engine.diagnostics.prediction_hints == {"upstairs_hallway": 0.60}
+
+    office = event("office", node_id="office_motion", event_at=now)
+    engine.observe(office)
+    engine.apply_node_predictions(
+        {
+            "upstairs_hallway_motion": 0.60,
+            "garage_motion": 0.40,
+        },
+        source_node_id="office_motion",
+    )
+
+    assert engine.diagnostics.prediction_hints == {"upstairs_hallway": 0.60}
+
+    engine.apply_node_predictions(
+        {"kitchen_motion": 0.90},
+        source_node_id="garage_motion",
+    )
+
+    assert engine.diagnostics.prediction_hints == {}
 
 
 def test_two_people_moving_in_separate_tracks_decay_unrelated_stale_rooms() -> None:

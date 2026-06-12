@@ -22,6 +22,8 @@ from .occupancy_scoring import (
     sustained_confidence_for_duration,
 )
 
+NON_ADJACENT_EVENT_CONFIDENCE_CAP = 0.34
+
 
 @dataclass(frozen=True)
 class ZoneState:
@@ -198,6 +200,15 @@ class OccupancyTracker:
             "node_id": event.node_id,
             "active_signal_count": len(self._active_events.get(event.zone, {})),
         }
+        nonadjacent_tracks = self._nonadjacent_saturated_track_zones(event)
+        if nonadjacent_tracks:
+            confidence = min(confidence, NON_ADJACENT_EVENT_CONFIDENCE_CAP)
+            track_list = ", ".join(nonadjacent_tracks)
+            reason = (
+                f"{reason}; non-adjacent to active track(s) "
+                f"({track_list}); capped as suspect"
+            )
+            explanation["nonadjacent_saturated_tracks"] = list(nonadjacent_tracks)
         if join_slot is not None:
             reason = (
                 f"{reason}; inferred additional occupant from "
@@ -229,15 +240,23 @@ class OccupancyTracker:
         self._update_tracks(event)
         return ZoneUpdate(event=event, previous=previous, current=current)
 
-    def apply_node_predictions(self, probabilities: Mapping[str, float]) -> None:
+    def apply_node_predictions(
+        self,
+        probabilities: Mapping[str, float],
+        source_node_id: str | None = None,
+    ) -> None:
         """Project node-level next-step predictions into zone-level hints."""
 
+        source_zone = self._zone_for_node(source_node_id)
+        allowed_zones = self._allowed_prediction_zones(source_zone)
         hints: dict[str, float] = {}
         for node_id, probability in probabilities.items():
             node = self._map.nodes.get(node_id)
             if node is None or probability <= 0:
                 continue
             zone = node.occupancy_zone
+            if allowed_zones is not None and zone not in allowed_zones:
+                continue
             hints[zone] = max(hints.get(zone, 0.0), float(probability))
         self._prediction_hints = hints
 
@@ -413,9 +432,12 @@ class OccupancyTracker:
         event: OccupancyEvent,
         active_zones: set[str],
     ) -> float:
+        if state.zone == event.zone and self._nonadjacent_saturated_track_zones(event):
+            return min(state.confidence, NON_ADJACENT_EVENT_CONFIDENCE_CAP)
+
         score = state.confidence
         score += self._prediction_hints.get(state.zone, 0.0) * 0.5
-        if state.zone == event.zone:
+        if event.state == "on" and state.zone == event.zone:
             score += 3.0
         if state.zone in active_zones:
             score += 2.0
@@ -568,6 +590,49 @@ class OccupancyTracker:
             return default_window
         return timedelta(seconds=configured_seconds)
 
+    def _nonadjacent_saturated_track_zones(
+        self, event: OccupancyEvent
+    ) -> tuple[str, ...]:
+        if event.state != "on":
+            return ()
+        track_zones = self._saturated_active_track_zones()
+        if not track_zones:
+            return ()
+        corridor = self.graph.movement_corridor(
+            track_zones,
+            radius=self.config.corridor_radius,
+        )
+        return () if event.zone in corridor else track_zones
+
+    def _allowed_prediction_zones(
+        self, source_zone: str | None
+    ) -> frozenset[str] | None:
+        if source_zone is None:
+            return None
+        track_zones = self._saturated_active_track_zones()
+        if not track_zones:
+            return None
+        saturated_corridor = self.graph.movement_corridor(
+            track_zones,
+            radius=self.config.corridor_radius,
+        )
+        if source_zone not in saturated_corridor:
+            return frozenset()
+        return self.graph.movement_corridor((source_zone,), radius=1)
+
+    def _saturated_active_track_zones(self) -> tuple[str, ...]:
+        occupant_limit = self.config.occupant_limit
+        active_tracks = tuple(track for track in self._tracks if track.active)
+        if occupant_limit is None or len(active_tracks) < occupant_limit:
+            return ()
+        return tuple(track.zone for track in active_tracks[:occupant_limit])
+
+    def _zone_for_node(self, node_id: str | None) -> str | None:
+        if node_id is None:
+            return None
+        node = self._map.nodes.get(node_id)
+        return None if node is None else node.occupancy_zone
+
     def _expire_inferences(self, now: datetime) -> None:
         self._join_slots = {
             zone: slot
@@ -606,6 +671,19 @@ class OccupancyTracker:
         self._tracks = tuple(
             self._track_from_zone(index + 1, zone)
             for index, zone in enumerate(zones)
+        )
+        self._update_protected_corridor()
+
+    def _update_protected_corridor(self) -> None:
+        track_zones = self._saturated_active_track_zones()
+        self._protected_tracks = track_zones
+        self._protected_corridor = tuple(
+            sorted(
+                self.graph.movement_corridor(
+                    track_zones,
+                    radius=self.config.corridor_radius,
+                )
+            )
         )
 
     def _track_from_zone(self, index: int, zone: str) -> AnonymousTrack:

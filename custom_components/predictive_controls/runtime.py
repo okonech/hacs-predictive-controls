@@ -182,7 +182,10 @@ class PredictiveControlsRuntime:
         action_decisions: tuple[ActionDecision, ...] = ()
         if occupancy_event.state == "on" and process_prediction_actions:
             update = self.engine.observe_node(node_id=occupancy_event.node_id, now=now)
-            self.confidence.apply_node_predictions(self.engine.probabilities)
+            self.confidence.apply_node_predictions(
+                self.engine.probabilities,
+                source_node_id=occupancy_event.node_id,
+            )
             action_decisions = update.action_decisions
             if update.learned_transition is not None:
                 source, target = update.learned_transition
@@ -206,7 +209,10 @@ class PredictiveControlsRuntime:
     def observe_node(self, node_id: str, now: datetime) -> None:
         self._sync_expected_occupants()
         update = self.engine.observe_node(node_id=node_id, now=now)
-        self.confidence.apply_node_predictions(self.engine.probabilities)
+        self.confidence.apply_node_predictions(
+            self.engine.probabilities,
+            source_node_id=node_id,
+        )
         if update.learned_transition is not None:
             source, target = update.learned_transition
             _LOGGER.debug("Learned transition %s -> %s", source, target)
