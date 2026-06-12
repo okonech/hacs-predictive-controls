@@ -97,11 +97,34 @@ For each zone, the integration exposes:
 - a status sensor with `rejected`, `suspect`, `possible`, `probable`, or
   `confirmed`;
 - a probable-occupancy binary sensor that turns on for `probable` and
-  `confirmed` states.
+  `confirmed` states;
+- a possible-occupancy binary sensor that turns on for `possible`, `probable`,
+  and `confirmed` states;
+- a motion-plausible binary sensor that turns on when the zone is probably
+  occupied, part of the active movement corridor, or predicted next;
+- a predicted-next binary sensor and prediction-probability sensor for
+  pre-lighting adjacent zones before a person arrives.
 
 These entities are intended as an inference layer between raw motion sensors and
 lighting automations. Existing predicted-node entities remain available for
 compatibility.
+
+The automation-facing aggregate entities are:
+
+- `sensor.probable_inside_count` and `sensor.possible_inside_count`, derived
+  from anonymous occupant tracks rather than named people;
+- `binary_sensor.home_probable_occupancy` for whole-home occupied/vacant logic;
+- `sensor.probable_occupied_zones`, `sensor.possible_occupied_zones`,
+  `sensor.motion_plausible_zones`, and `sensor.active_movement_corridor`, each
+  with the relevant zones in attributes;
+- `sensor.predicted_next_zone` with per-zone prediction probabilities in
+  attributes;
+- `sensor.occupancy_explanation` for a short human-readable summary.
+
+Room automations should normally use raw local motion for immediate turn-on,
+zone probable occupancy for sustained keep-on behavior, zone motion plausibility
+to block non-adjacent noisy triggers, and zone predicted-next entities for soft
+pre-lighting.
 
 ### Occupancy Tracking Architecture
 

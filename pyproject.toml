@@ -21,6 +21,7 @@ testpaths = ["tests"]
 addopts = [
   "--cov=custom_components.predictive_controls.markov",
   "--cov=custom_components.predictive_controls.engine",
+  "--cov=custom_components.predictive_controls.automation_summary",
   "--cov=custom_components.predictive_controls.events",
   "--cov=custom_components.predictive_controls.confidence",
   "--cov=custom_components.predictive_controls.occupancy_graph",
