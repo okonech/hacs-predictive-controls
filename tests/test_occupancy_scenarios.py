@@ -603,6 +603,88 @@ def test_transition_seconds_can_tighten_join_window() -> None:
     ]
 
 
+def test_adjacent_motion_latches_entry_plausibility_for_target_zone() -> None:
+    engine = ZoneConfidenceEngine(make_house_map(), expected_occupants=0)
+    now = datetime(2026, 6, 7, 12, tzinfo=UTC)
+
+    hallway = event(
+        "upstairs_hallway",
+        node_id="upstairs_hallway_motion",
+        role="transition_gate",
+        behavior="transient",
+        reliability=0.85,
+        event_at=now,
+    )
+    engine.observe(hallway)
+
+    plausibilities = {
+        plausibility.zone: plausibility
+        for plausibility in engine.diagnostics.entry_plausibilities
+    }
+    assert sorted(plausibilities) == [
+        "kitchen",
+        "office",
+        "shaila_office",
+        "upstairs_bathroom",
+    ]
+    assert plausibilities["office"].source_zone == "upstairs_hallway"
+    assert plausibilities["office"].source_node_id == "upstairs_hallway_motion"
+    assert plausibilities["office"].expires_at == now + timedelta(seconds=30)
+
+    assert not engine.expire_transient_state(now + timedelta(seconds=20))
+    assert engine.expire_transient_state(now + timedelta(seconds=31))
+    assert engine.diagnostics.entry_plausibilities == ()
+
+
+def test_entry_plausibility_uses_configured_transition_seconds() -> None:
+    predictive_map = PredictiveMap.from_mapping(
+        {
+            "nodes": {
+                "hallway_motion": {
+                    "zone": "hallway",
+                    "role": "transition_gate",
+                    "occupancy_behavior": "transient",
+                    "entities": {"motion": "binary_sensor.hallway_motion"},
+                    "adjacent": ["closet_motion", "bathroom_motion"],
+                    "transition_seconds": {
+                        "closet_motion": 12,
+                        "bathroom_motion": 45,
+                    },
+                },
+                "closet_motion": {
+                    "zone": "closet",
+                    "entities": {"motion": "binary_sensor.closet_motion"},
+                    "adjacent": ["hallway_motion"],
+                },
+                "bathroom_motion": {
+                    "zone": "bathroom",
+                    "entities": {"motion": "binary_sensor.bathroom_motion"},
+                    "adjacent": ["hallway_motion"],
+                },
+            }
+        }
+    )
+    engine = ZoneConfidenceEngine(predictive_map, expected_occupants=0)
+    now = datetime(2026, 6, 7, 12, tzinfo=UTC)
+
+    engine.observe(
+        event(
+            "hallway",
+            node_id="hallway_motion",
+            role="transition_gate",
+            behavior="transient",
+            event_at=now,
+        )
+    )
+
+    plausibilities = {
+        plausibility.zone: plausibility
+        for plausibility in engine.diagnostics.entry_plausibilities
+    }
+    assert plausibilities["closet"].expires_at == now + timedelta(seconds=12)
+    assert plausibilities["bathroom"].expires_at == now + timedelta(seconds=45)
+
+
 def test_two_independent_signals_in_same_room_can_fill_two_occupant_slots() -> None:
     engine = ZoneConfidenceEngine(make_house_map(), expected_occupants=2)
     now = datetime(2026, 6, 7, 12, tzinfo=UTC)

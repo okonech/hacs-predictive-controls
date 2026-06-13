@@ -19,10 +19,8 @@ async def async_setup_entry(
     runtime: PredictiveControlsRuntime = hass.data[DOMAIN][entry.entry_id]
     entities: list[SensorEntity] = [
         PredictedNextZoneSensor(runtime, entry.entry_id),
-        ProbableInsideCountSensor(runtime, entry.entry_id),
-        PossibleInsideCountSensor(runtime, entry.entry_id),
-        ProbableOccupiedZonesSensor(runtime, entry.entry_id),
-        PossibleOccupiedZonesSensor(runtime, entry.entry_id),
+        EntryPlausibleZonesSensor(runtime, entry.entry_id),
+        OccupancyHoldZonesSensor(runtime, entry.entry_id),
     ]
     entities.extend(
         ZoneConfidenceSensor(runtime, entry.entry_id, zone)
@@ -77,54 +75,6 @@ class PredictedNextZoneSensor(RuntimeSensor):
         }
 
 
-class ProbableInsideCountSensor(RuntimeSensor):
-    entity_description = SensorEntityDescription(
-        key="probable_inside_count",
-        name="Probable Inside Count",
-        icon="mdi:account-check-outline",
-    )
-
-    def __init__(self, runtime: PredictiveControlsRuntime, entry_id: str) -> None:
-        super().__init__(runtime, entry_id)
-        self._attr_unique_id = f"{entry_id}_probable_inside_count"
-
-    @property
-    def native_value(self) -> int:
-        return runtime_automation_summary(self.runtime).probable_inside_count
-
-    @property
-    def extra_state_attributes(self) -> dict[str, object]:
-        summary = runtime_automation_summary(self.runtime)
-        return {
-            "expected_inside_count": summary.expected_inside_count,
-            "probable_occupied_zones": list(summary.probable_occupied_zones),
-        }
-
-
-class PossibleInsideCountSensor(RuntimeSensor):
-    entity_description = SensorEntityDescription(
-        key="possible_inside_count",
-        name="Possible Inside Count",
-        icon="mdi:account-question-outline",
-    )
-
-    def __init__(self, runtime: PredictiveControlsRuntime, entry_id: str) -> None:
-        super().__init__(runtime, entry_id)
-        self._attr_unique_id = f"{entry_id}_possible_inside_count"
-
-    @property
-    def native_value(self) -> int:
-        return runtime_automation_summary(self.runtime).possible_inside_count
-
-    @property
-    def extra_state_attributes(self) -> dict[str, object]:
-        summary = runtime_automation_summary(self.runtime)
-        return {
-            "expected_inside_count": summary.expected_inside_count,
-            "possible_occupied_zones": list(summary.possible_occupied_zones),
-        }
-
-
 class ZoneListSensor(RuntimeSensor):
     _attr_icon = "mdi:floor-plan"
     _attr_zone_attribute = "zones"
@@ -147,22 +97,26 @@ class ZoneListSensor(RuntimeSensor):
         raise NotImplementedError
 
 
-class ProbableOccupiedZonesSensor(ZoneListSensor):
-    entity_key = "probable_occupied_zones"
-    entity_name = "Probable Occupied Zones"
+class EntryPlausibleZonesSensor(ZoneListSensor):
+    entity_key = "entry_plausible_zones"
+    entity_name = "Entry Plausible Zones"
+    _attr_icon = "mdi:map-marker-path"
+    _attr_zone_attribute = "entry_plausible_zones"
 
     @property
     def zones(self) -> tuple[str, ...]:
-        return runtime_automation_summary(self.runtime).probable_occupied_zones
+        return runtime_automation_summary(self.runtime).entry_plausible_zones
 
 
-class PossibleOccupiedZonesSensor(ZoneListSensor):
-    entity_key = "possible_occupied_zones"
-    entity_name = "Possible Occupied Zones"
+class OccupancyHoldZonesSensor(ZoneListSensor):
+    entity_key = "occupancy_hold_zones"
+    entity_name = "Occupancy Hold Zones"
+    _attr_icon = "mdi:account-clock-outline"
+    _attr_zone_attribute = "occupancy_hold_zones"
 
     @property
     def zones(self) -> tuple[str, ...]:
-        return runtime_automation_summary(self.runtime).possible_occupied_zones
+        return runtime_automation_summary(self.runtime).occupancy_hold_zones
 
 
 class ZoneConfidenceSensor(RuntimeSensor):

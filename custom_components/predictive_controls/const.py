@@ -1,6 +1,6 @@
 DOMAIN = "predictive_controls"
 NAME = "Predictive Controls"
-VERSION = "0.1.14"
+VERSION = "0.1.15"
 PANEL_FILENAME = "panel-v0.1.13.js"
 
 CONF_ACTIONS_YAML = "actions_yaml"

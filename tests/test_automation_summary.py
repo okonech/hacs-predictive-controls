@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 from custom_components.predictive_controls.automation_summary import (
+    _active_entry_plausible_zones,
     runtime_automation_summary,
 )
 from custom_components.predictive_controls.confidence import ZoneState
 from custom_components.predictive_controls.model import PredictiveMap
 from custom_components.predictive_controls.occupancy_tracker import (
     AnonymousTrack,
+    EntryPlausibility,
+    InferredDeparture,
     TrackerDiagnostics,
 )
 
@@ -73,9 +77,27 @@ def make_diagnostics() -> TrackerDiagnostics:
         protected_tracks=("living_room",),
         protected_corridor=("foyer", "living_room"),
         inferred_join_slots=(),
-        inferred_departures=(),
+        inferred_departures=(
+            InferredDeparture(
+                zone="kitchen",
+                via_zone="foyer",
+                via_node_id="foyer_motion",
+                destination_zone="living_room",
+                event_at=datetime(2026, 6, 7, 12, 1, tzinfo=UTC),
+                expires_at=datetime(2026, 6, 7, 12, 6, tzinfo=UTC),
+            ),
+        ),
         prediction_hints={"kitchen": 0.72, "office": 0.31},
         dwell_seconds={},
+        entry_plausibilities=(
+            EntryPlausibility(
+                zone="foyer",
+                source_zone="living_room",
+                source_node_id="living_motion",
+                event_at=datetime(2026, 6, 7, 12, tzinfo=UTC),
+                expires_at=datetime(2026, 6, 7, 12, 1, tzinfo=UTC),
+            ),
+        ),
     )
 
 
@@ -117,13 +139,15 @@ def test_summary_exposes_probable_and_possible_zone_contracts() -> None:
     assert not summary.zones["office"].possible_occupancy
 
 
-def test_summary_keeps_motion_plausibility_stricter_than_possible() -> None:
+def test_summary_exposes_entry_plausible_and_occupancy_hold_contracts() -> None:
     summary = runtime_automation_summary(make_runtime())
 
-    assert summary.motion_plausible_zones == ("foyer", "kitchen", "living_room")
-    assert summary.zones["foyer"].motion_plausible
-    assert summary.zones["kitchen"].motion_plausible
-    assert not summary.zones["office"].motion_plausible
+    assert summary.entry_plausible_zones == ("foyer", "kitchen")
+    assert summary.occupancy_hold_zones == ("living_room",)
+    assert summary.zones["foyer"].entry_plausible
+    assert summary.zones["kitchen"].entry_plausible
+    assert not summary.zones["office"].entry_plausible
+    assert not summary.zones["kitchen"].occupancy_hold
 
 
 def test_summary_exposes_zone_predictions_for_prelighting() -> None:
@@ -141,7 +165,43 @@ def test_prediction_threshold_can_be_tuned_for_zone_predictions() -> None:
     summary = runtime_automation_summary(make_runtime(), prediction_threshold=0.3)
 
     assert summary.predicted_zones == ("kitchen", "office")
-    assert summary.zones["office"].motion_plausible
+    assert summary.zones["office"].entry_plausible
+
+
+def test_expired_entry_plausibility_is_ignored_after_last_event() -> None:
+    runtime = make_runtime()
+    object.__setattr__(
+        runtime,
+        "last_occupancy_event",
+        SimpleNamespace(event_at=datetime(2026, 6, 7, 12, 2, tzinfo=UTC)),
+    )
+
+    summary = runtime_automation_summary(runtime)
+
+    assert summary.entry_plausible_zones == ("kitchen",)
+
+
+def test_entry_plausibility_filter_keeps_unexpired_valid_zones() -> None:
+    now = datetime(2026, 6, 7, 12, tzinfo=UTC)
+    diagnostics = SimpleNamespace(
+        entry_plausibilities=(
+            SimpleNamespace(
+                zone="foyer",
+                expires_at=now + timedelta(seconds=30),
+            ),
+            SimpleNamespace(
+                zone=None,
+                expires_at=now + timedelta(seconds=30),
+            ),
+        )
+    )
+
+    zones = _active_entry_plausible_zones(
+        diagnostics,
+        SimpleNamespace(event_at=now),
+    )
+
+    assert zones == {"foyer"}
 
 
 def test_summary_explanation_is_short_and_human_readable() -> None:

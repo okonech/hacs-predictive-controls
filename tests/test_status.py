@@ -8,6 +8,7 @@ from custom_components.predictive_controls.events import OccupancyEvent
 from custom_components.predictive_controls.markov import Prediction
 from custom_components.predictive_controls.occupancy_tracker import (
     AnonymousTrack,
+    EntryPlausibility,
     InferredDeparture,
     InferredJoinSlot,
     TrackerDiagnostics,
@@ -86,6 +87,15 @@ def make_diagnostics() -> TrackerDiagnostics:
         ),
         prediction_hints={"kitchen": 0.72},
         dwell_seconds={"living_room": {"samples": 2, "average_seconds": 1800.0}},
+        entry_plausibilities=(
+            EntryPlausibility(
+                zone="kitchen",
+                source_zone="living_room",
+                source_node_id="living_left",
+                event_at=datetime(2026, 6, 7, 12, 7, tzinfo=UTC),
+                expires_at=datetime(2026, 6, 7, 12, 7, 30, tzinfo=UTC),
+            ),
+        ),
     )
 
 
@@ -188,6 +198,15 @@ def test_runtime_status_payload_serializes_prediction_and_without_prediction() -
                 "destination_zone": "kitchen",
                 "event_at": "2026-06-07T12:06:00+00:00",
                 "expires_at": "2026-06-07T12:11:00+00:00",
+            }
+        ],
+        "entry_plausibilities": [
+            {
+                "zone": "kitchen",
+                "source_zone": "living_room",
+                "source_node_id": "living_left",
+                "event_at": "2026-06-07T12:07:00+00:00",
+                "expires_at": "2026-06-07T12:07:30+00:00",
             }
         ],
         "prediction_hints": {"kitchen": 0.72},

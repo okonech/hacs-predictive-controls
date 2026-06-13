@@ -59,6 +59,7 @@ class PredictiveControlsRuntime:
         self.last_zone_update: ZoneUpdate | None = None
         self._unsubscribe: object | None = None
         self._unsubscribe_refresh: object | None = None
+        self._unsubscribe_transient_refresh: object | None = None
 
     @property
     def chain(self) -> MarkovChain:
@@ -106,6 +107,9 @@ class PredictiveControlsRuntime:
         self._unsubscribe_refresh = async_track_time_interval(
             self.hass, self._async_refresh_active_confidence, timedelta(minutes=1)
         )
+        self._unsubscribe_transient_refresh = async_track_time_interval(
+            self.hass, self._async_expire_transient_state, timedelta(seconds=5)
+        )
         now = datetime.now().astimezone()
         self._sync_expected_occupants()
         for entity_id in self.map.entity_ids():
@@ -123,8 +127,11 @@ class PredictiveControlsRuntime:
             self._unsubscribe()
         if callable(self._unsubscribe_refresh):
             self._unsubscribe_refresh()
+        if callable(self._unsubscribe_transient_refresh):
+            self._unsubscribe_transient_refresh()
         self._unsubscribe = None
         self._unsubscribe_refresh = None
+        self._unsubscribe_transient_refresh = None
         await self.async_save_transition_counts()
 
     async def async_save_transition_counts(self) -> None:
@@ -165,6 +172,11 @@ class PredictiveControlsRuntime:
         self.last_zone_update = updates[-1]
         _LOGGER.debug("Refreshed %s active zone confidence states", len(updates))
         async_dispatcher_send(self.hass, DISPATCH_UPDATE)
+
+    @callback
+    def _async_expire_transient_state(self, now: datetime) -> None:
+        if self.confidence.expire_transient_state(now):
+            async_dispatcher_send(self.hass, DISPATCH_UPDATE)
 
     def observe_entity(
         self,

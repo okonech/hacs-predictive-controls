@@ -7,19 +7,17 @@ from .model import PredictiveMap
 
 AGGREGATE_SENSOR_SUFFIXES = (
     "predicted_next_zone",
-    "probable_inside_count",
-    "possible_inside_count",
-    "probable_occupied_zones",
-    "possible_occupied_zones",
+    "entry_plausible_zones",
+    "occupancy_hold_zones",
 )
 
-AGGREGATE_BINARY_SENSOR_SUFFIXES = ("home_probable_occupancy",)
+AGGREGATE_BINARY_SENSOR_SUFFIXES = ("home_occupancy_hold",)
 
 ZONE_SENSOR_SUFFIXES = ("confidence",)
 
 ZONE_BINARY_SENSOR_SUFFIXES = (
-    "probable_occupancy",
-    "possible_occupancy",
+    "entry_plausible",
+    "occupancy_hold",
     "zone_predicted_next",
 )
 

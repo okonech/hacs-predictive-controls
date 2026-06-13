@@ -26,14 +26,14 @@ async def async_setup_entry(
         entry.options.get(CONF_PREDICTION_THRESHOLD, DEFAULT_PREDICTION_THRESHOLD)
     )
     entities: list[BinarySensorEntity] = [
-        HomeProbableOccupancySensor(runtime, entry.entry_id)
+        HomeOccupancyHoldSensor(runtime, entry.entry_id)
     ]
     entities.extend(
-        ZoneProbableSensor(runtime, entry.entry_id, zone)
+        ZoneEntryPlausibleSensor(runtime, entry.entry_id, zone, threshold)
         for zone in runtime.map.zones()
     )
     entities.extend(
-        ZonePossibleSensor(runtime, entry.entry_id, zone)
+        ZoneOccupancyHoldSensor(runtime, entry.entry_id, zone)
         for zone in runtime.map.zones()
     )
     entities.extend(
@@ -60,60 +60,57 @@ class RuntimeBinarySensor(BinarySensorEntity):
         self.async_write_ha_state()
 
 
-class HomeProbableOccupancySensor(RuntimeBinarySensor):
+class HomeOccupancyHoldSensor(RuntimeBinarySensor):
     def __init__(self, runtime: PredictiveControlsRuntime, entry_id: str) -> None:
         super().__init__(runtime, entry_id)
-        self._attr_name = "Home Probable Occupancy"
-        self._attr_unique_id = f"{entry_id}_home_probable_occupancy"
+        self._attr_name = "Home Occupancy Hold"
+        self._attr_unique_id = f"{entry_id}_home_occupancy_hold"
 
     @property
     def is_on(self) -> bool:
-        return runtime_automation_summary(self.runtime).probable_inside_count > 0
+        return bool(runtime_automation_summary(self.runtime).occupancy_hold_zones)
 
     @property
     def extra_state_attributes(self) -> dict[str, object]:
         summary = runtime_automation_summary(self.runtime)
         return {
-            "probable_inside_count": summary.probable_inside_count,
+            "occupancy_hold_zones": list(summary.occupancy_hold_zones),
             "possible_inside_count": summary.possible_inside_count,
-            "probable_occupied_zones": list(summary.probable_occupied_zones),
         }
 
 
-class ZoneProbableSensor(RuntimeBinarySensor):
+class ZoneEntryPlausibleSensor(RuntimeBinarySensor):
     def __init__(
         self,
         runtime: PredictiveControlsRuntime,
         entry_id: str,
         zone: str,
+        threshold: float,
     ) -> None:
         super().__init__(runtime, entry_id)
         self.zone = zone
-        self._attr_name = f"{zone.replace('_', ' ').title()} Probable Occupancy"
-        self._attr_unique_id = f"{entry_id}_{zone}_probable_occupancy"
+        self.threshold = threshold
+        self._attr_name = f"{zone.replace('_', ' ').title()} Entry Plausible"
+        self._attr_unique_id = f"{entry_id}_{zone}_entry_plausible"
 
     @property
     def is_on(self) -> bool:
-        state = self.runtime.zone_states.get(self.zone)
-        return state is not None and state.status in {"probable", "confirmed"}
+        return runtime_automation_summary(self.runtime, self.threshold).zones[
+            self.zone
+        ].entry_plausible
 
     @property
     def extra_state_attributes(self) -> dict[str, object]:
-        state = self.runtime.zone_states.get(self.zone)
-        if state is None:
-            return {"confidence": 0.0, "status": "rejected"}
+        summary = runtime_automation_summary(self.runtime, self.threshold)
+        state = summary.zones[self.zone]
         return {
-            "confidence": state.confidence,
-            "status": state.status,
-            "occupancy_behavior": state.occupancy_behavior,
-            "active_since": state.active_since.isoformat()
-            if state.active_since is not None
-            else None,
-            "reason": state.reason,
+            "prediction_probability": state.prediction_probability,
+            "prediction_threshold": self.threshold,
+            "predicted_next": state.predicted_next,
         }
 
 
-class ZonePossibleSensor(RuntimeBinarySensor):
+class ZoneOccupancyHoldSensor(RuntimeBinarySensor):
     def __init__(
         self,
         runtime: PredictiveControlsRuntime,
@@ -122,19 +119,23 @@ class ZonePossibleSensor(RuntimeBinarySensor):
     ) -> None:
         super().__init__(runtime, entry_id)
         self.zone = zone
-        self._attr_name = f"{zone.replace('_', ' ').title()} Possible Occupancy"
-        self._attr_unique_id = f"{entry_id}_{zone}_possible_occupancy"
+        self._attr_name = f"{zone.replace('_', ' ').title()} Occupancy Hold"
+        self._attr_unique_id = f"{entry_id}_{zone}_occupancy_hold"
 
     @property
     def is_on(self) -> bool:
         return runtime_automation_summary(self.runtime).zones[
             self.zone
-        ].possible_occupancy
+        ].occupancy_hold
 
     @property
     def extra_state_attributes(self) -> dict[str, object]:
         state = runtime_automation_summary(self.runtime).zones[self.zone]
-        return {"confidence": state.confidence, "status": state.status}
+        return {
+            "confidence": state.confidence,
+            "status": state.status,
+            "possible_occupancy": state.possible_occupancy,
+        }
 
 
 class ZonePredictedSensor(RuntimeBinarySensor):

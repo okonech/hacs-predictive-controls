@@ -106,12 +106,18 @@ sticky decay.
 For each zone, the integration exposes:
 
 - a confidence percentage sensor, with status, timing, and reason attributes;
-- a probable-occupancy binary sensor that turns on for `probable` and
-  `confirmed` states;
-- a possible-occupancy binary sensor that turns on for `possible`, `probable`,
-  and `confirmed` states;
+- an entry-plausible binary sensor for deciding whether fresh local motion
+  follows a real path into the zone;
+- an occupancy-hold binary sensor for deciding whether a light should stay on
+  even after raw motion clears;
 - a predicted-next binary sensor for soft pre-lighting before a person arrives,
   with probability and threshold attributes.
+
+`entry_plausible` is intentionally based on prior adjacent/path evidence and
+current prediction hints, not on the same raw motion event that would trigger a
+room automation. This lets automations trigger from the destination room's raw
+motion sensor and read a precomputed plausibility condition without depending on
+Home Assistant callback ordering.
 
 These entities are intended as an inference layer between raw motion sensors and
 lighting automations. Node-level prediction, separate status sensors,
@@ -120,17 +126,15 @@ panel/status diagnostics instead of being exported as default HA entities.
 
 The automation-facing aggregate entities are:
 
-- `sensor.probable_inside_count` and `sensor.possible_inside_count`, derived
-  from anonymous occupant tracks rather than named people;
-- `binary_sensor.home_probable_occupancy` for whole-home occupied/vacant logic;
-- `sensor.probable_occupied_zones` and `sensor.possible_occupied_zones`, each
-  with the relevant zones in attributes;
+- `binary_sensor.home_occupancy_hold` for whole-home occupied/vacant logic;
+- `sensor.entry_plausible_zones` and `sensor.occupancy_hold_zones`, each with
+  the relevant zones in attributes;
 - `sensor.predicted_next_zone` with per-zone prediction probabilities in
   attributes.
 
 Room automations should normally use raw local motion for immediate turn-on,
-zone probable occupancy for sustained keep-on behavior, zone possible occupancy
-to prevent false-offs, and zone predicted-next entities for soft pre-lighting.
+zone entry-plausible as the turn-on guard, zone occupancy-hold to prevent
+false-offs, and zone predicted-next entities for soft pre-lighting.
 
 ### Occupancy Tracking Architecture
 

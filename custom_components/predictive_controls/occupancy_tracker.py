@@ -65,6 +65,7 @@ class TrackerConfig:
     departure_transition_window: timedelta = timedelta(minutes=3)
     departure_retention: timedelta = timedelta(minutes=5)
     departure_source_min_confidence: float = 0.35
+    entry_plausibility_window: timedelta = timedelta(seconds=30)
 
     @property
     def occupant_limit(self) -> int | None:
@@ -115,6 +116,17 @@ class InferredDeparture:
 
 
 @dataclass(frozen=True)
+class EntryPlausibility:
+    """Short-lived evidence that adjacent entry into one zone is plausible."""
+
+    zone: str
+    source_zone: str
+    source_node_id: str
+    event_at: datetime
+    expires_at: datetime
+
+
+@dataclass(frozen=True)
 class TrackerDiagnostics:
     """Structured diagnostics for panel and status payloads."""
 
@@ -126,6 +138,7 @@ class TrackerDiagnostics:
     inferred_departures: tuple[InferredDeparture, ...]
     prediction_hints: dict[str, float]
     dwell_seconds: dict[str, dict[str, float | int]]
+    entry_plausibilities: tuple[EntryPlausibility, ...] = ()
 
 
 class OccupancyTracker:
@@ -154,6 +167,7 @@ class OccupancyTracker:
         self._protected_corridor: tuple[str, ...] = ()
         self._join_slots: dict[str, InferredJoinSlot] = {}
         self._departures: dict[str, InferredDeparture] = {}
+        self._entry_plausibilities: dict[str, EntryPlausibility] = {}
         self._prediction_hints: dict[str, float] = {}
 
     @property
@@ -179,6 +193,10 @@ class OccupancyTracker:
             inferred_departures=tuple(self._departures.values()),
             prediction_hints=self._prediction_hints.copy(),
             dwell_seconds=self.dwell.payload(),
+            entry_plausibilities=tuple(
+                self._entry_plausibilities[zone]
+                for zone in sorted(self._entry_plausibilities)
+            ),
         )
 
     def state_for_zone(self, zone: str) -> ZoneState:
@@ -229,6 +247,8 @@ class OccupancyTracker:
                 f"({track_list}); capped as suspect"
             )
             explanation["nonadjacent_saturated_tracks"] = list(nonadjacent_tracks)
+        elif event.state == "on":
+            self._mark_entry_plausibilities(event)
         if join_slot is not None:
             reason = (
                 f"{reason}; inferred additional occupant from "
@@ -299,6 +319,11 @@ class OccupancyTracker:
             if update is not None:
                 updates.append(update)
         return tuple(updates)
+
+    def expire_transient_state(self, now: datetime) -> bool:
+        """Expire short-lived automation hints without changing zone confidence."""
+
+        return self._expire_inferences(now)
 
     def _refresh_active_zone(
         self, zone: str, active_event: OccupancyEvent, now: datetime
@@ -655,6 +680,38 @@ class OccupancyTracker:
             return default_window
         return timedelta(seconds=configured_seconds)
 
+    def _mark_entry_plausibilities(self, event: OccupancyEvent) -> None:
+        for target_zone in self.graph.neighbors(event.zone):
+            window = self._entry_plausibility_window_for_zone(event, target_zone)
+            self._entry_plausibilities[target_zone] = EntryPlausibility(
+                zone=target_zone,
+                source_zone=event.zone,
+                source_node_id=event.node_id,
+                event_at=event.event_at,
+                expires_at=event.event_at + window,
+            )
+
+    def _entry_plausibility_window_for_zone(
+        self,
+        event: OccupancyEvent,
+        target_zone: str,
+    ) -> timedelta:
+        configured_seconds = [
+            seconds
+            for node in self._map.nodes.values()
+            if node.occupancy_zone == target_zone
+            if (
+                seconds := self._map.transition_seconds_between_nodes(
+                    event.node_id,
+                    node.node_id,
+                )
+            )
+            is not None
+        ]
+        if not configured_seconds:
+            return self.config.entry_plausibility_window
+        return timedelta(seconds=max(configured_seconds))
+
     def _nonadjacent_saturated_track_zones(
         self, event: OccupancyEvent
     ) -> tuple[str, ...]:
@@ -698,7 +755,10 @@ class OccupancyTracker:
         node = self._map.nodes.get(node_id)
         return None if node is None else node.occupancy_zone
 
-    def _expire_inferences(self, now: datetime) -> None:
+    def _expire_inferences(self, now: datetime) -> bool:
+        previous_join_slots = self._join_slots
+        previous_departures = self._departures
+        previous_entry_plausibilities = self._entry_plausibilities
         self._join_slots = {
             zone: slot
             for zone, slot in self._join_slots.items()
@@ -709,6 +769,16 @@ class OccupancyTracker:
             for zone, departure in self._departures.items()
             if departure.expires_at >= now
         }
+        self._entry_plausibilities = {
+            zone: plausibility
+            for zone, plausibility in self._entry_plausibilities.items()
+            if plausibility.expires_at >= now
+        }
+        return (
+            previous_join_slots != self._join_slots
+            or previous_departures != self._departures
+            or previous_entry_plausibilities != self._entry_plausibilities
+        )
 
     def _learn_dwell_if_clear_finished(
         self, previous: ZoneState, event: OccupancyEvent

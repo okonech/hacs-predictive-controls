@@ -80,10 +80,8 @@ def test_sensor_platform_exports_only_automation_facing_entities(
 
     assert unique_ids == {
         "entry123_predicted_next_zone",
-        "entry123_probable_inside_count",
-        "entry123_possible_inside_count",
-        "entry123_probable_occupied_zones",
-        "entry123_possible_occupied_zones",
+        "entry123_entry_plausible_zones",
+        "entry123_occupancy_hold_zones",
         "entry123_living_room_confidence",
         "entry123_kitchen_confidence",
     }
@@ -97,11 +95,11 @@ def test_binary_sensor_platform_exports_only_automation_facing_entities(
     unique_ids = platform_unique_ids(binary_sensor_module, make_map())
 
     assert unique_ids == {
-        "entry123_home_probable_occupancy",
-        "entry123_living_room_probable_occupancy",
-        "entry123_kitchen_probable_occupancy",
-        "entry123_living_room_possible_occupancy",
-        "entry123_kitchen_possible_occupancy",
+        "entry123_home_occupancy_hold",
+        "entry123_living_room_entry_plausible",
+        "entry123_kitchen_entry_plausible",
+        "entry123_living_room_occupancy_hold",
+        "entry123_kitchen_occupancy_hold",
         "entry123_living_room_zone_predicted_next",
         "entry123_kitchen_zone_predicted_next",
     }
