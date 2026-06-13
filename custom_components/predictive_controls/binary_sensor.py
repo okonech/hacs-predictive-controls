@@ -29,19 +29,11 @@ async def async_setup_entry(
         HomeProbableOccupancySensor(runtime, entry.entry_id)
     ]
     entities.extend(
-        NodePredictedSensor(runtime, entry.entry_id, node_id, threshold)
-        for node_id in runtime.map.nodes
-    )
-    entities.extend(
         ZoneProbableSensor(runtime, entry.entry_id, zone)
         for zone in runtime.map.zones()
     )
     entities.extend(
         ZonePossibleSensor(runtime, entry.entry_id, zone)
-        for zone in runtime.map.zones()
-    )
-    entities.extend(
-        ZoneMotionPlausibleSensor(runtime, entry.entry_id, zone)
         for zone in runtime.map.zones()
     )
     entities.extend(
@@ -85,33 +77,6 @@ class HomeProbableOccupancySensor(RuntimeBinarySensor):
             "probable_inside_count": summary.probable_inside_count,
             "possible_inside_count": summary.possible_inside_count,
             "probable_occupied_zones": list(summary.probable_occupied_zones),
-        }
-
-
-class NodePredictedSensor(RuntimeBinarySensor):
-    def __init__(
-        self,
-        runtime: PredictiveControlsRuntime,
-        entry_id: str,
-        node_id: str,
-        threshold: float,
-    ) -> None:
-        super().__init__(runtime, entry_id)
-        self.node_id = node_id
-        self.threshold = threshold
-        label = runtime.map.nodes[node_id].label
-        self._attr_name = f"{label} Predicted"
-        self._attr_unique_id = f"{entry_id}_{node_id}_predicted"
-
-    @property
-    def is_on(self) -> bool:
-        return self.runtime.probabilities.get(self.node_id, 0.0) >= self.threshold
-
-    @property
-    def extra_state_attributes(self) -> dict[str, float]:
-        return {
-            "probability": self.runtime.probabilities.get(self.node_id, 0.0),
-            "threshold": self.threshold,
         }
 
 
@@ -170,36 +135,6 @@ class ZonePossibleSensor(RuntimeBinarySensor):
     def extra_state_attributes(self) -> dict[str, object]:
         state = runtime_automation_summary(self.runtime).zones[self.zone]
         return {"confidence": state.confidence, "status": state.status}
-
-
-class ZoneMotionPlausibleSensor(RuntimeBinarySensor):
-    def __init__(
-        self,
-        runtime: PredictiveControlsRuntime,
-        entry_id: str,
-        zone: str,
-    ) -> None:
-        super().__init__(runtime, entry_id)
-        self.zone = zone
-        self._attr_name = f"{zone.replace('_', ' ').title()} Motion Plausible"
-        self._attr_unique_id = f"{entry_id}_{zone}_motion_plausible"
-
-    @property
-    def is_on(self) -> bool:
-        return runtime_automation_summary(self.runtime).zones[
-            self.zone
-        ].motion_plausible
-
-    @property
-    def extra_state_attributes(self) -> dict[str, object]:
-        summary = runtime_automation_summary(self.runtime)
-        state = summary.zones[self.zone]
-        return {
-            "confidence": state.confidence,
-            "status": state.status,
-            "prediction_probability": state.prediction_probability,
-            "active_movement_corridor": list(summary.active_movement_corridor),
-        }
 
 
 class ZonePredictedSensor(RuntimeBinarySensor):

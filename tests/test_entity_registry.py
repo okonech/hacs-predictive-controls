@@ -51,21 +51,24 @@ def make_map() -> PredictiveMap:
     )
 
 
-def test_expected_entity_unique_ids_cover_node_zone_and_aggregate_entities() -> None:
+def test_expected_entity_unique_ids_cover_automation_facing_entities() -> None:
     unique_ids = expected_entity_unique_ids("entry123", make_map())
 
-    assert "entry123_next_node" in unique_ids
     assert "entry123_predicted_next_zone" in unique_ids
+    assert "entry123_probable_inside_count" in unique_ids
+    assert "entry123_possible_inside_count" in unique_ids
+    assert "entry123_probable_occupied_zones" in unique_ids
+    assert "entry123_possible_occupied_zones" in unique_ids
     assert "entry123_home_probable_occupancy" in unique_ids
-    assert "entry123_living_motion_probability" in unique_ids
-    assert "entry123_living_motion_predicted" in unique_ids
     assert "entry123_living_room_confidence" in unique_ids
-    assert "entry123_living_room_status" in unique_ids
     assert "entry123_living_room_probable_occupancy" in unique_ids
     assert "entry123_living_room_possible_occupancy" in unique_ids
-    assert "entry123_living_room_motion_plausible" in unique_ids
     assert "entry123_living_room_zone_predicted_next" in unique_ids
-    assert "entry123_living_room_zone_prediction_probability" in unique_ids
+    assert "entry123_living_motion_probability" not in unique_ids
+    assert "entry123_living_motion_predicted" not in unique_ids
+    assert "entry123_living_room_status" not in unique_ids
+    assert "entry123_living_room_motion_plausible" not in unique_ids
+    assert "entry123_living_room_zone_prediction_probability" not in unique_ids
 
 
 def test_stale_entries_only_include_this_integration_and_config_entry() -> None:
@@ -79,6 +82,18 @@ def test_stale_entries_only_include_this_integration_and_config_entry() -> None:
         FakeRegistryEntry(
             entity_id="sensor.entry_prediction_probability",
             unique_id="entry123_entry_probability",
+        ),
+        FakeRegistryEntry(
+            entity_id="sensor.living_room_status",
+            unique_id="entry123_living_room_status",
+        ),
+        FakeRegistryEntry(
+            entity_id="binary_sensor.living_room_motion_plausible",
+            unique_id="entry123_living_room_motion_plausible",
+        ),
+        FakeRegistryEntry(
+            entity_id="binary_sensor.living_motion_predicted",
+            unique_id="entry123_living_motion_predicted",
         ),
         FakeRegistryEntry(
             entity_id="sensor.foreign_stale",
@@ -95,7 +110,10 @@ def test_stale_entries_only_include_this_integration_and_config_entry() -> None:
     stale_entries = stale_entity_registry_entries(entries, "entry123", expected)
 
     assert [entry.entity_id for entry in stale_entries] == [
-        "sensor.entry_prediction_probability"
+        "sensor.entry_prediction_probability",
+        "sensor.living_room_status",
+        "binary_sensor.living_room_motion_plausible",
+        "binary_sensor.living_motion_predicted",
     ]
 
 

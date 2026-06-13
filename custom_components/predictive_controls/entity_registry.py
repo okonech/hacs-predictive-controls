@@ -6,34 +6,22 @@ from .const import DOMAIN
 from .model import PredictiveMap
 
 AGGREGATE_SENSOR_SUFFIXES = (
-    "next_node",
     "predicted_next_zone",
     "probable_inside_count",
     "possible_inside_count",
     "probable_occupied_zones",
     "possible_occupied_zones",
-    "motion_plausible_zones",
-    "active_movement_corridor",
-    "occupancy_explanation",
 )
 
 AGGREGATE_BINARY_SENSOR_SUFFIXES = ("home_probable_occupancy",)
 
-ZONE_SENSOR_SUFFIXES = (
-    "confidence",
-    "status",
-    "zone_prediction_probability",
-)
+ZONE_SENSOR_SUFFIXES = ("confidence",)
 
 ZONE_BINARY_SENSOR_SUFFIXES = (
     "probable_occupancy",
     "possible_occupancy",
-    "motion_plausible",
     "zone_predicted_next",
 )
-
-NODE_SENSOR_SUFFIXES = ("probability",)
-NODE_BINARY_SENSOR_SUFFIXES = ("predicted",)
 
 
 def expected_entity_unique_ids(
@@ -46,13 +34,6 @@ def expected_entity_unique_ids(
     unique_ids.update(
         f"{entry_id}_{suffix}" for suffix in AGGREGATE_BINARY_SENSOR_SUFFIXES
     )
-    for node_id in predictive_map.nodes:
-        unique_ids.update(
-            f"{entry_id}_{node_id}_{suffix}" for suffix in NODE_SENSOR_SUFFIXES
-        )
-        unique_ids.update(
-            f"{entry_id}_{node_id}_{suffix}" for suffix in NODE_BINARY_SENSOR_SUFFIXES
-        )
     for zone in predictive_map.zones():
         unique_ids.update(
             f"{entry_id}_{zone}_{suffix}" for suffix in ZONE_SENSOR_SUFFIXES
