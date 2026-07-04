@@ -4,4 +4,4 @@ from custom_components.predictive_controls.panel import panel_js_url
 
 
 def test_panel_js_url_is_versioned() -> None:
-    assert panel_js_url() == "/predictive_controls/static/panel-v0.1.13.js"
+    assert panel_js_url() == "/predictive_controls/static/panel-v0.1.16.js"

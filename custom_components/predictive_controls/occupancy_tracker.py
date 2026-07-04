@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
@@ -18,12 +19,14 @@ from .occupancy_scoring import (
     reason_for_departure_decay,
     reason_for_event,
     reason_for_inactive_decay,
+    reason_for_occupant_handoff,
     reason_for_sustained_event,
     status_for_confidence,
     sustained_confidence_for_duration,
 )
 
 NON_ADJACENT_EVENT_CONFIDENCE_CAP = 0.34
+JOIN_SLOT_RETAIN_CONFIDENCE = 0.05
 
 
 @dataclass(frozen=True)
@@ -66,6 +69,7 @@ class TrackerConfig:
     departure_retention: timedelta = timedelta(minutes=5)
     departure_source_min_confidence: float = 0.35
     entry_plausibility_window: timedelta = timedelta(seconds=30)
+    trail_window: timedelta = timedelta(minutes=3)
 
     @property
     def occupant_limit(self) -> int | None:
@@ -278,6 +282,7 @@ class OccupancyTracker:
         self._recent_events = [*self._recent_events[-24:], event]
         if event.state == "on":
             self._apply_departures(event)
+            self._release_migrated_join(event)
             self._reconcile_competing_zones(event)
         self._update_tracks(event)
         return ZoneUpdate(event=event, previous=previous, current=current)
@@ -468,7 +473,11 @@ class OccupancyTracker:
         active_zones: set[str],
     ) -> tuple[TrackCandidate, ...]:
         score = self._track_score(state, event, active_zones)
-        slots = max(1, len(self._active_events.get(state.zone, {})))
+        # An occupied zone is one occupant regardless of how many of its sensors
+        # (or overlapping sensor signals) fire at once. Extra occupants in a zone
+        # are only known from explicit join evidence, so the raw active-signal
+        # count must not inflate the occupant total.
+        slots = 1
         if self._join_slots.get(state.zone) is not None:
             slots += 1
         return tuple(TrackCandidate(zone=state.zone, score=score) for _ in range(slots))
@@ -556,6 +565,24 @@ class OccupancyTracker:
     def _apply_departures(self, event: OccupancyEvent) -> None:
         for departure in self._infer_departures(event):
             previous = self.state_for_zone(departure.zone)
+            if self._consume_join_slot(departure.zone):
+                current = replace(
+                    previous,
+                    updated_at=event.event_at,
+                    reason=reason_for_occupant_handoff(
+                        previous,
+                        previous.confidence,
+                        departure.via_zone,
+                        departure.destination_zone,
+                    ),
+                    explanation={
+                        "type": "occupant_handoff",
+                        "departure": departure_payload(departure),
+                        "trigger_zone": event.zone,
+                    },
+                )
+                self._states[departure.zone] = current
+                continue
             confidence = conflict_confidence(previous.confidence)
             current = replace(
                 previous,
@@ -720,10 +747,7 @@ class OccupancyTracker:
         track_zones = self._saturated_active_track_zones()
         if not track_zones:
             return ()
-        corridor = self.graph.movement_corridor(
-            track_zones,
-            radius=self.config.corridor_radius,
-        )
+        corridor = self._trail_corridor(track_zones, event.event_at)
         return () if event.zone in corridor else track_zones
 
     def _allowed_prediction_zones(
@@ -755,14 +779,88 @@ class OccupancyTracker:
         node = self._map.nodes.get(node_id)
         return None if node is None else node.occupancy_zone
 
+    def _consume_join_slot(self, zone: str) -> bool:
+        """Remove one extra-occupant slot for a zone, if present."""
+
+        return self._join_slots.pop(zone, None) is not None
+
+    def _trail_zones(self, now: datetime) -> set[str]:
+        """Zones with motion evidence recent enough to be part of a live trail."""
+
+        zones: set[str] = set()
+        for zone, state in self._states.items():
+            if self._active_events.get(zone):
+                zones.add(zone)
+            elif state.last_evidence_at is not None:
+                age = now - state.last_evidence_at
+                if timedelta(0) <= age <= self.config.trail_window:
+                    zones.add(zone)
+        return zones
+
+    def _connected_via_trail(
+        self, seed_zones: tuple[str, ...], trail: set[str]
+    ) -> set[str]:
+        component = set(seed_zones)
+        frontier = deque(component)
+        while frontier:
+            zone = frontier.popleft()
+            for neighbor in self.graph.neighbors(zone):
+                if neighbor in trail and neighbor not in component:
+                    component.add(neighbor)
+                    frontier.append(neighbor)
+        return component
+
+    def _trail_corridor(
+        self, seed_zones: tuple[str, ...], now: datetime
+    ) -> frozenset[str]:
+        """Corridor grown from tracks through recent motion breadcrumbs.
+
+        Full sensor coverage means every real move leaves a trail, so a zone is
+        only reachable from an occupied track when a chain of recent motion
+        connects them. The corridor follows that trail (plus a one-hop halo for
+        the next step) instead of a fixed radius, so a genuine multi-hop move is
+        not mistaken for a non-adjacent false positive.
+        """
+
+        component = self._connected_via_trail(seed_zones, self._trail_zones(now))
+        return self.graph.movement_corridor(
+            tuple(component),
+            radius=self.config.corridor_radius,
+        )
+
+    def _release_migrated_join(self, event: OccupancyEvent) -> str | None:
+        """Release a join slot when its extra occupant migrated along a trail.
+
+        When fresh room evidence is linked by a recent motion trail to a
+        different multi-occupant zone, one occupant has moved out of that zone,
+        so its extra-occupant slot is released and the count follows the person
+        instead of over-counting the origin. One-hop departures are handled by
+        `_apply_departures`, which runs first, so this only covers longer trails.
+        """
+
+        if event.occupancy_behavior == "transient" or event.role == "transition_gate":
+            return None
+        if not self._join_slots:
+            return None
+        reachable = self._connected_via_trail(
+            (event.zone,), self._trail_zones(event.event_at)
+        )
+        for zone in sorted(reachable):
+            if zone != event.zone and self._consume_join_slot(zone):
+                return zone
+        return None
+
     def _expire_inferences(self, now: datetime) -> bool:
         previous_join_slots = self._join_slots
         previous_departures = self._departures
         previous_entry_plausibilities = self._entry_plausibilities
+        # A join slot means an extra occupant is present in a zone, so it should
+        # persist while that zone stays occupied rather than expiring on a fixed
+        # timer. It is cleared when the zone empties or a departure consumes it.
         self._join_slots = {
             zone: slot
             for zone, slot in self._join_slots.items()
-            if slot.expires_at >= now
+            if self.state_for_zone(zone).confidence >= JOIN_SLOT_RETAIN_CONFIDENCE
         }
         self._departures = {
             zone: departure

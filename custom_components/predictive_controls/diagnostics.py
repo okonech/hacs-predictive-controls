@@ -32,6 +32,9 @@ async def async_get_config_entry_diagnostics(
         "entity_ids": runtime.map.entity_ids(),
         "zone_states": status["zone_states"],
         "recent_occupancy_events": status["recent_occupancy_events"],
+        "expected_occupants": status["expected_occupants"],
+        "expected_occupants_entity": runtime.expected_occupants_entity,
+        "occupancy_diagnostics": status["occupancy_diagnostics"],
         "last_source_node": runtime.last_source_node,
         "last_prediction": None
         if runtime.last_prediction is None

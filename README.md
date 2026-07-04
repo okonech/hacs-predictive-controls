@@ -1,8 +1,34 @@
 # Predictive Controls
 
-Predictive Controls is a Home Assistant custom integration for generic predictive automation. It learns first-order Markov transition probabilities from configured sensor nodes and exposes zone-level occupancy and predicted-next entities that normal Home Assistant automations can consume.
+Predictive Controls is a Home Assistant custom integration that turns a graph of
+motion/presence sensors into **zone-level occupancy inference** that ordinary
+automations can consume. It answers questions raw motion sensors cannot on their
+own:
 
-The first target use case is predictive lighting, but action configuration uses generic Home Assistant service calls so other domains can be added without redesigning the model.
+- *Is this zone still occupied even though motion just cleared?* — `occupancy_hold`
+- *Did fresh motion here follow a real path in, or is it spillover?* — `entry_plausible`
+- *Which zone is a person most likely to enter next?* — `predicted_next`
+- *How many people are inside, and where?* — anonymous multi-occupant tracking
+
+It models the home as anonymous people moving over a sensor adjacency graph,
+maintains a decaying **confidence** per zone, learns first-order Markov
+transition probabilities for prediction, and publishes a small, stable set of
+Home Assistant entities plus a graphical editor.
+
+The first target use case is predictive lighting, but actions are generic Home
+Assistant service calls, so other domains can be added without redesigning the
+model.
+
+### At a glance
+
+- **Input:** binary sensors (PIR, mmWave presence/target, radar) grouped into
+  *nodes*, and nodes grouped into *zones* on an *adjacency graph*.
+- **Core idea:** every real move is observed as a trail across adjacent zones,
+  so confidence flows along the graph; a detection with no connecting trail is
+  treated as a false positive.
+- **Output:** per-zone `confidence`, `occupancy_hold`, `entry_plausible`, and
+  `predicted_next` entities plus whole-home aggregates.
+- **Learning:** Markov edge probabilities for next-zone prediction.
 
 ## Installation
 
@@ -136,48 +162,174 @@ Room automations should normally use raw local motion for immediate turn-on,
 zone entry-plausible as the turn-on guard, zone occupancy-hold to prevent
 false-offs, and zone predicted-next entities for soft pre-lighting.
 
-### Occupancy Tracking Architecture
+## Entities
 
-Occupancy confidence is modeled as anonymous multi-person tracking over the
-configured adjacency graph. The system does not try to identify a specific
-person. Instead, it asks which set of occupied zones best explains the recent
-sensor evidence.
+For every configured zone (`<zone>` is the zone id):
 
-The implementation is split into small modules:
+| Entity | Value | Meaning |
+| --- | --- | --- |
+| `sensor.<zone>_confidence` | 0–100 % | Occupancy confidence, with `status`, `reason`, `occupancy_behavior`, and timing attributes |
+| `binary_sensor.<zone>_occupancy_hold` | on/off | Keep outputs on while the zone is still plausibly occupied (on at ≥ "possible") |
+| `binary_sensor.<zone>_entry_plausible` | on/off | Fresh local motion follows a real path into the zone |
+| `binary_sensor.<zone>_predicted_next` | on/off | Zone is predicted next *above threshold* (use this for gated pre-lighting) |
 
-- `occupancy_graph.py`: derives a zone-level graph from node adjacency and
-  answers neighbor, movement-corridor, and shortest-path questions;
-- `occupancy_scoring.py`: contains pure confidence math for sensor-on evidence,
-  clear events, sustained active evidence, passive time decay, and conflict
-  decay;
-- `occupancy_tracker.py`: keeps zone state, active sensor evidence, recent
-  events, and anonymous occupant-track reconciliation;
-- `confidence.py`: compatibility facade used by existing runtime, entity, and
-  test imports.
+Whole-home aggregates:
 
-When `expected_occupants` is greater than zero, fresh evidence competes with
-older explanations. The tracker preserves the strongest occupied tracks and
-their adjacent movement corridor, then sharply lowers stale zones that are not
-needed to explain the configured number of people. For example, if two offices
-have fresh motion and `expected_occupants` is `2`, stale confidence in an
-unrelated bathroom or guest bedroom drops even if those sensors have not emitted
-another event.
+| Entity | Value | Meaning |
+| --- | --- | --- |
+| `binary_sensor.home_occupancy_hold` | on/off | Any zone is currently held occupied |
+| `sensor.occupancy_hold_zones` | count | Held zones listed in the `occupancy_hold_zones` attribute |
+| `sensor.entry_plausible_zones` | count | Entry-plausible zones listed in attribute |
+| `sensor.predicted_next_zone` | zone id | Arg-max predicted zone, with `zone_probabilities` attribute |
 
-When the expected-occupant slots are already filled by active tracks, new motion
-outside the adjacent movement corridor is capped below `possible` and cannot
-steal the protected track. Zone prediction hints are also projected only through
-the current adjacent zone edge, so pre-lighting follows the configured graph
-instead of jumping to unrelated rooms or floors.
+> `sensor.predicted_next_zone` names the most likely zone *even when its
+> probability is below the threshold*. For pre-lighting decisions, trigger on the
+> per-zone `binary_sensor.<zone>_predicted_next`, which respects the threshold.
 
-Passive time decay also runs during periodic refreshes. This prevents cleared
-zones from keeping high confidence indefinitely just because no later event
-touched the same room.
+## Using it in automations
 
-The next learning layer should attach to these module boundaries: transition
-probabilities belong to graph edges, dwell-time distributions belong to zones,
-and sensor reliability belongs to node/entity bindings. Learning should only
-update those statistics when the tracker has a high-confidence explanation for
-which anonymous track produced the evidence.
+The recommended room pattern: turn on from **raw local motion**, turn off from
+the zone **occupancy-hold** clearing (which absorbs the still/decay/departure
+logic), and optionally pre-light from **predicted-next**.
+
+```yaml
+triggers:
+  - trigger: state
+    entity_id: binary_sensor.living_room_motion      # raw local presence
+    to: "on"
+    id: occupancy_detected
+  - trigger: state
+    entity_id: binary_sensor.living_room_occupancy_hold
+    to: "off"
+    id: occupancy_cleared
+actions:
+  - choose:
+      - conditions: [{ condition: trigger, id: occupancy_detected }]
+        sequence:
+          - action: light.turn_on
+            target: { entity_id: light.living_room }
+      - conditions: [{ condition: trigger, id: occupancy_cleared }]
+        sequence:
+          - action: light.turn_off
+            target: { entity_id: light.living_room }
+mode: restart
+```
+
+Turning on from raw motion (not `occupancy_hold`) keeps turn-on instant and
+immune to multi-occupant suppression, while `occupancy_hold` provides the
+false-off protection.
+
+## How It Works
+
+Occupancy is modeled as **anonymous multi-person tracking** over the zone
+adjacency graph. The system never identifies who someone is; it asks *which set
+of occupied zones best explains the recent sensor evidence*.
+
+### Zones, nodes, and the graph
+
+- A **node** is one sensor or a tightly coupled sensor cluster (for example an
+  mmWave device that exposes several target/moving/still entities).
+- A **zone** groups nodes into a place and carries a `role` and an
+  `occupancy_behavior`.
+- **Adjacency** is taken from node `adjacent` edges and collapsed to a
+  zone-level graph. Cross-floor movement is modeled as an edge between the two
+  transition nodes at the boundary (for example bottom-of-staircase ↔
+  top-of-staircase).
+
+### Confidence lifecycle
+
+Each zone holds a confidence in `[0, 1]` that maps to a status:
+
+| Status | Confidence | `occupancy_hold` |
+| --- | --- | --- |
+| rejected | < 0.05 | off |
+| suspect | 0.05–0.35 | off |
+| possible | 0.35–0.60 | on |
+| probable | 0.60–0.85 | on |
+| confirmed | ≥ 0.85 | on |
+
+- **On-evidence** sets a floor by role and signal type (a `still_target` in an
+  anchor room starts high; a hallway `transition_gate` starts lower) and nudges
+  confidence up on repeats.
+- **Sustained evidence** (a sensor that stays on) ramps confidence toward a
+  per-behavior cap over time.
+- **Passive decay** halves confidence on a per-behavior half-life once evidence
+  clears, and runs on a periodic refresh so nothing stays high forever.
+- **Conflict / departure decay** sharply cuts a zone (to roughly a third) when
+  the evidence is better explained elsewhere.
+
+Occupancy behaviors tune the growth cap and decay half-life:
+
+| Behavior | Typical zones | Passive half-life |
+| --- | --- | --- |
+| `transient` | hallways, stairs | ~90 s |
+| `ambiguous` | open-plan / overlapping | ~5 min |
+| `sustained` | offices, kitchens, closets | ~15 min |
+| `sticky` | living rooms, bathrooms | ~30 min |
+
+### Movement is always a trail
+
+With full sensor coverage a person cannot move between zones unobserved — every
+move leaves a **trail** of motion across adjacent zones. This is the core
+invariant:
+
+- Confidence and occupant tracks flow along the graph following recent motion
+  breadcrumbs (a **trail-following corridor**) rather than a fixed radius, so a
+  genuine multi-hop move is carried to its destination.
+- A detection that is **not connected by a recent trail** to any occupied track,
+  when the occupant count is already saturated, is treated as a **false
+  positive** and capped at "suspect".
+
+The only thing sensors cannot resolve is *how many* people walked a shared path;
+whether a move happened is never ambiguous.
+
+### Counting people (`expected_occupants`)
+
+Set `expected_occupants` (a fixed number, or bind it to an entity) to enable
+multi-occupant reasoning:
+
+- The tracker keeps the strongest N occupied **tracks** and their movement
+  corridor, and decays stale zones that are not needed to explain N people. So
+  two "stay" zones actively growing implies the rest of the house is clear.
+- **A zone counts as one occupant while occupied, regardless of how many of its
+  sensors or overlapping signals fire.** A slow walker trips both the "still"
+  and "moving" entities of one radar; that is one person, not two. Extra
+  occupants are added only from explicit join evidence.
+- **Join:** when someone enters an already-occupied zone via an adjacent
+  transition, an extra-occupant slot is added and persists while the zone stays
+  occupied.
+- **Departure / migration:** when a trail leads out of a multi-occupant zone,
+  one occupant slot is released and follows the person, so the count moves with
+  them instead of over-counting the origin. A single-occupant zone that is left
+  decays normally.
+
+With `expected_occupants` at `0`, the count/competition layer is disabled and
+each zone simply rises and decays on its own.
+
+### Prediction (pre-lighting)
+
+A first-order Markov chain learns node→node transition probabilities from
+observed movement. Predicted next zones are projected only along the current
+adjacent edge — so pre-lighting follows the configured graph instead of jumping
+to unrelated rooms or floors — and are published through the `predicted_next`
+entities and `sensor.predicted_next_zone`.
+
+### Code layout
+
+- `occupancy_graph.py` — zone graph: neighbors, movement corridors, distances.
+- `occupancy_scoring.py` — pure confidence math (on-floors, sustained ramp,
+  passive/conflict/departure decay, status thresholds).
+- `occupancy_tracker.py` — zone state, active evidence, trails, join/departure,
+  anonymous track reconciliation.
+- `occupancy_dwell.py` — learned per-zone dwell times feeding decay.
+- `markov.py` / `engine.py` — transition learning and next-zone prediction.
+- `automation_summary.py` — the stable automation-facing contract.
+- `confidence.py` — compatibility facade over the tracker.
+
+Learning updates attach to these boundaries: transition probabilities belong to
+graph edges, dwell-time distributions belong to zones, and sensor reliability
+belongs to node/entity bindings, updated only when the tracker has a
+high-confidence explanation for which anonymous track produced the evidence.
 
 ## Debugging
 

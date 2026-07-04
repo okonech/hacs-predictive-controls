@@ -216,3 +216,16 @@ def reason_for_clear_transition_decay(
         f"{destination_zone} had stronger active evidence; "
         f"confidence decayed to {status}"
     )
+
+
+def reason_for_occupant_handoff(
+    previous: ZoneStateView,
+    confidence: float,
+    via_zone: str,
+    destination_zone: str,
+) -> str:
+    status = status_for_confidence(confidence)
+    return (
+        f"one occupant left via {via_zone} toward {destination_zone}; "
+        f"remaining occupancy held at {status}"
+    )

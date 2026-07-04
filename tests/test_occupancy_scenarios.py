@@ -685,7 +685,7 @@ def test_entry_plausibility_uses_configured_transition_seconds() -> None:
     assert plausibilities["bathroom"].expires_at == now + timedelta(seconds=45)
 
 
-def test_two_independent_signals_in_same_room_can_fill_two_occupant_slots() -> None:
+def test_overlapping_signals_in_same_room_count_as_one_occupant() -> None:
     engine = ZoneConfidenceEngine(make_house_map(), expected_occupants=2)
     now = datetime(2026, 6, 7, 12, tzinfo=UTC)
     mark_stale_guest_and_bathroom(engine, now)
@@ -712,11 +712,54 @@ def test_two_independent_signals_in_same_room_can_fill_two_occupant_slots() -> N
     engine.observe(living_still)
     engine.observe(living_motion)
 
+    # The two radar signals overlap for a single person (a slow walker trips both
+    # still and moving), so they must count as ONE occupant, not two. With only
+    # one occupant accounted for, the count is not saturated and the stale
+    # bathroom is not competed away.
     states = engine.states
     assert states["living_room"].status == "confirmed"
-    assert states["guest_bedroom"].status == "rejected"
-    assert states["master_bathroom"].status == "suspect"
-    assert states["master_bathroom"].reason.count("living_room") == 2
+    assert [track.zone for track in engine.tracks].count("living_room") == 1
+    assert states["master_bathroom"].confidence > 0.70
+    assert "competed" not in states["master_bathroom"].reason
+
+
+def test_multi_signal_room_does_not_crowd_out_a_second_occupant() -> None:
+    engine = ZoneConfidenceEngine(make_house_map(), expected_occupants=2)
+    now = datetime(2026, 6, 7, 12, tzinfo=UTC)
+
+    # A second person settles in the office first.
+    engine.observe(event("office", node_id="office_motion", event_at=now))
+
+    # One person in the living room trips both radar signals.
+    engine.observe(
+        event(
+            "living_room",
+            node_id="living_still",
+            entity_id="binary_sensor.living_still",
+            role="anchor_sensor",
+            behavior="sticky",
+            signal_type="still_target",
+            reliability=0.9,
+            event_at=now + timedelta(seconds=1),
+        )
+    )
+    engine.observe(
+        event(
+            "living_room",
+            node_id="living_motion",
+            entity_id="binary_sensor.living_motion",
+            role="anchor_sensor",
+            behavior="sticky",
+            reliability=0.9,
+            event_at=now + timedelta(seconds=2),
+        )
+    )
+
+    # The living room's two overlapping signals must not fill both occupant slots
+    # and hide the office; both real occupants are counted in distinct zones.
+    track_zones = [track.zone for track in engine.tracks]
+    assert set(track_zones) == {"living_room", "office"}
+    assert track_zones.count("living_room") == 1
 
 
 def test_single_signal_in_same_room_does_not_fill_two_occupant_slots() -> None:
@@ -740,3 +783,218 @@ def test_single_signal_in_same_room_does_not_fill_two_occupant_slots() -> None:
     assert states["living_room"].status == "confirmed"
     assert states["master_bathroom"].confidence > 0.70
     assert "competed" not in states["master_bathroom"].reason
+
+
+def test_partial_departure_from_joined_room_retains_occupancy() -> None:
+    engine = ZoneConfidenceEngine(make_house_map(), expected_occupants=2)
+    now = datetime(2026, 6, 7, 12, tzinfo=UTC)
+
+    shaila = event("shaila_office", node_id="shaila_office_motion", event_at=now)
+    engine.observe(shaila)
+
+    hallway = event(
+        "upstairs_hallway",
+        node_id="upstairs_hallway_motion",
+        role="transition_gate",
+        behavior="transient",
+        reliability=0.85,
+        event_at=now + timedelta(seconds=30),
+    )
+    engine.observe(hallway)
+    engine.observe(replace(hallway, state="off", event_at=now + timedelta(seconds=45)))
+
+    # A second person transitions in and joins the occupied office.
+    joined = replace(shaila, event_at=now + timedelta(seconds=60))
+    engine.observe(joined)
+    assert engine.diagnostics.inferred_join_slots
+
+    # The joined office is now a saturated two-occupant track. That second person
+    # walks off to the kitchen via the hallway while the first stays put. The
+    # hallway breadcrumb links the kitchen back to the office, so the arrival is
+    # a real move (not a non-adjacent false positive) and the extra-occupant slot
+    # is released to follow the person.
+    kitchen = event(
+        "kitchen",
+        node_id="kitchen_motion",
+        reliability=0.8,
+        event_at=now + timedelta(minutes=2),
+    )
+    engine.observe(kitchen)
+
+    states = engine.states
+    assert engine.diagnostics.inferred_join_slots == ()
+    assert states["kitchen"].confidence > 0.34
+    assert states["kitchen"].status in {"probable", "confirmed"}
+    # The office is not abandoned; the remaining occupant keeps it occupied.
+    assert states["shaila_office"].status in {"probable", "confirmed"}
+
+
+def test_arrival_elsewhere_decrements_joined_room_without_abandoning() -> None:
+    engine = ZoneConfidenceEngine(make_house_map(), expected_occupants=2)
+    now = datetime(2026, 6, 7, 12, tzinfo=UTC)
+
+    shaila = event("shaila_office", node_id="shaila_office_motion", event_at=now)
+    engine.observe(shaila)
+
+    hallway = event(
+        "upstairs_hallway",
+        node_id="upstairs_hallway_motion",
+        role="transition_gate",
+        behavior="transient",
+        reliability=0.85,
+        event_at=now + timedelta(seconds=30),
+    )
+    engine.observe(hallway)
+    engine.observe(replace(hallway, state="off", event_at=now + timedelta(seconds=45)))
+
+    joined = replace(shaila, event_at=now + timedelta(seconds=60))
+    engine.observe(joined)
+    assert engine.diagnostics.inferred_join_slots
+
+    # The office sensor clears with no active destination yet, so no departure is
+    # inferred and the extra-occupant slot persists on the still-confident zone.
+    engine.observe(replace(shaila, state="off", event_at=now + timedelta(seconds=90)))
+    assert engine.diagnostics.inferred_join_slots
+    assert all(
+        departure.zone != "shaila_office"
+        for departure in engine.diagnostics.inferred_departures
+    )
+
+    # Someone now arrives in the office via the hallway. The inferred departure is
+    # a handoff from the joined room: it decrements the extra occupant instead of
+    # abandoning the room.
+    hallway2 = replace(hallway, event_at=now + timedelta(minutes=2))
+    engine.observe(hallway2)
+    engine.observe(
+        replace(hallway2, state="off", event_at=now + timedelta(minutes=2, seconds=15))
+    )
+    office = event(
+        "office",
+        node_id="office_motion",
+        event_at=now + timedelta(minutes=2, seconds=20),
+    )
+    engine.observe(office)
+
+    states = engine.states
+    assert engine.diagnostics.inferred_join_slots == ()
+    assert states["shaila_office"].explanation["type"] == "occupant_handoff"
+    assert "one occupant left" in states["shaila_office"].reason
+    assert states["shaila_office"].status in {"possible", "probable", "confirmed"}
+    assert all(
+        departure.zone != "shaila_office"
+        for departure in engine.diagnostics.inferred_departures
+    )
+
+
+def test_join_slot_persists_while_occupied_and_clears_when_zone_empties() -> None:
+    engine = ZoneConfidenceEngine(make_house_map(), expected_occupants=2)
+    now = datetime(2026, 6, 7, 12, tzinfo=UTC)
+
+    shaila = event("shaila_office", node_id="shaila_office_motion", event_at=now)
+    engine.observe(shaila)
+
+    hallway = event(
+        "upstairs_hallway",
+        node_id="upstairs_hallway_motion",
+        role="transition_gate",
+        behavior="transient",
+        reliability=0.85,
+        event_at=now + timedelta(seconds=30),
+    )
+    engine.observe(hallway)
+    engine.observe(replace(hallway, state="off", event_at=now + timedelta(seconds=45)))
+
+    joined = replace(shaila, event_at=now + timedelta(seconds=60))
+    engine.observe(joined)
+    assert engine.diagnostics.inferred_join_slots
+
+    # Well past the old fixed 5-minute retention, but the room is still occupied,
+    # so the extra-occupant slot must persist.
+    engine.refresh_active(now + timedelta(minutes=10))
+    engine.expire_transient_state(now + timedelta(minutes=10))
+    assert engine.diagnostics.inferred_join_slots
+
+    # The room fully empties and decays to rejected -> the join slot is cleared.
+    engine.observe(
+        replace(shaila, state="off", event_at=now + timedelta(minutes=10, seconds=30))
+    )
+    engine.refresh_active(now + timedelta(hours=4))
+    engine.expire_transient_state(now + timedelta(hours=4))
+    assert engine.diagnostics.inferred_join_slots == ()
+    assert engine.states["shaila_office"].status == "rejected"
+
+
+def test_multi_hop_trail_prevents_false_positive_cap() -> None:
+    engine = ZoneConfidenceEngine(make_house_map(), expected_occupants=2)
+    now = datetime(2026, 6, 7, 12, tzinfo=UTC)
+
+    # Two occupants are settled: the count is saturated by the two office tracks.
+    engine.observe(event("office", node_id="office_motion", event_at=now))
+    engine.observe(
+        event(
+            "shaila_office",
+            node_id="shaila_office_motion",
+            event_at=now + timedelta(seconds=1),
+        )
+    )
+
+    # A fresh motion trail runs office-cluster -> hallway -> kitchen. The kitchen
+    # is two hops from the saturated tracks, so a fixed radius-1 corridor would
+    # cap it as a non-adjacent false positive. The hallway breadcrumb links it,
+    # so the trail-following corridor recognizes it as a real move.
+    engine.observe(
+        event(
+            "upstairs_hallway",
+            node_id="upstairs_hallway_motion",
+            role="transition_gate",
+            behavior="transient",
+            reliability=0.85,
+            event_at=now + timedelta(seconds=30),
+        )
+    )
+    engine.observe(
+        event(
+            "kitchen",
+            node_id="kitchen_motion",
+            reliability=0.8,
+            event_at=now + timedelta(seconds=45),
+        )
+    )
+
+    states = engine.states
+    assert states["kitchen"].confidence > 0.34
+    assert states["kitchen"].status in {"probable", "confirmed"}
+    assert "capped as suspect" not in states["kitchen"].reason
+
+
+def test_disconnected_popup_is_capped_as_false_positive() -> None:
+    engine = ZoneConfidenceEngine(make_house_map(), expected_occupants=2)
+    now = datetime(2026, 6, 7, 12, tzinfo=UTC)
+
+    # Two occupants are settled in two rooms (count saturated).
+    engine.observe(event("office", node_id="office_motion", event_at=now))
+    engine.observe(
+        event(
+            "shaila_office",
+            node_id="shaila_office_motion",
+            event_at=now + timedelta(seconds=1),
+        )
+    )
+
+    # Bathroom motion pops up with no connecting motion trail through the hallway.
+    # Under full coverage a real move would have tripped the hallway, so with the
+    # count already saturated this is a false positive and must be capped.
+    engine.observe(
+        event(
+            "upstairs_bathroom",
+            node_id="upstairs_bathroom_motion",
+            behavior="sticky",
+            reliability=0.7,
+            event_at=now + timedelta(seconds=2),
+        )
+    )
+
+    states = engine.states
+    assert states["upstairs_bathroom"].confidence <= 0.34
+    assert states["upstairs_bathroom"].status == "suspect"
+    assert "capped as suspect" in states["upstairs_bathroom"].reason

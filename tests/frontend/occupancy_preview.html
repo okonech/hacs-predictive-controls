@@ -30,9 +30,10 @@
 <body>
   <predictive-controls-panel></predictive-controls-panel>
   <script type="module">
-    import "../../custom_components/predictive_controls/frontend/panel.js";
+    await import(`../../custom_components/predictive_controls/frontend/panel.js?ts=${Date.now()}`);
 
     const map = {
+      floors: ["basement", "first_floor", "second_floor"],
       zones: {
         entrance_hallway: { label: "Entrance Hallway", floor: "first_floor", role: "transition_gate", occupancy_behavior: "transient", position: { x: 120, y: 70 }, size: { width: 230, height: 110 } },
         first_floor_bathroom_laundry_room: { label: "Ground Floor Bathroom/Laundry Room", floor: "first_floor", role: "room_occupancy", occupancy_behavior: "sustained", position: { x: 420, y: 105 }, size: { width: 250, height: 120 } },
@@ -49,11 +50,12 @@
         master_bedroom_closet: { label: "Master Bedroom Closet", floor: "second_floor", role: "subzone_occupancy", occupancy_behavior: "sustained", position: { x: 90, y: 1050 }, size: { width: 250, height: 110 } },
         master_bathroom: { label: "Master Bathroom", floor: "second_floor", role: "room_occupancy", occupancy_behavior: "sticky", position: { x: 90, y: 1200 }, size: { width: 250, height: 120 } },
         shaila_office: { label: "Shaila Office", floor: "second_floor", role: "room_occupancy", occupancy_behavior: "sustained", position: { x: 590, y: 900 }, size: { width: 250, height: 120 } },
+        gym: { label: "Gym", floor: "basement", role: "room_occupancy", occupancy_behavior: "sustained", position: { x: 590, y: 1200 }, size: { width: 250, height: 120 } },
       },
       nodes: {
         entrance_mmwave_dimmer: { label: "Entrance mmWave Dimmer", floor: "first_floor", zone: "entrance_hallway", role: "transition_gate", occupancy_behavior: "transient", entities: { motion: "binary_sensor.entrance_mmwave_dimmer_motion_detection" }, adjacent: ["ground_floor_bathroom_laundry_room", "dining_room_motion", "kitchen_overhead_mmwave_dimmer"], position: { x: 120, y: 70 } },
         ground_floor_bathroom_laundry_room: { label: "Ground Floor Bathroom/Laundry Room PIR Motion", floor: "first_floor", zone: "first_floor_bathroom_laundry_room", role: "room_occupancy", entities: { motion: "binary_sensor.ground_floor_bathroom_laundry_room_motion_detection" }, adjacent: ["entrance_mmwave_dimmer"], position: { x: 420, y: 105 } },
-        dining_room_motion: { label: "Dining room motion", floor: "first_floor", zone: "dining_room", role: "ambiguous_open_plan", entities: { motion: "binary_sensor.dining_room_motion_motion_detection" }, adjacent: ["entrance_mmwave_dimmer", "kitchen_overhead_mmwave_dimmer", "living_room_fireplace_right", "foyer_pir_motion"], position: { x: 70, y: 285 } },
+        dining_room_motion: { label: "Dining room motion", floor: "first_floor", zone: "dining_room", role: "ambiguous_open_plan", entities: { motion: "binary_sensor.dining_room_motion_motion_detection" }, adjacent: ["entrance_mmwave_dimmer", "kitchen_overhead_mmwave_dimmer", "living_room_fireplace_right", "foyer_pir_motion", "gym_lights_motion"], position: { x: 70, y: 285 } },
         kitchen_overhead_mmwave_dimmer: { label: "Kitchen Overhead mmWave Dimmer", floor: "first_floor", zone: "kitchen", role: "room_occupancy", entities: { motion: "binary_sensor.mmwave_dimmer_motion_detection_2" }, adjacent: ["entrance_mmwave_dimmer", "dining_room_motion"], position: { x: 330, y: 260 } },
         foyer_pir_motion: { label: "Foyer PIR Motion", floor: "first_floor", zone: "foyer", role: "transition_gate", entities: { motion: "binary_sensor.foyer_pir_motion_motion_detection" }, adjacent: ["dining_room_motion", "bottom_of_staircase_motion"], position: { x: 70, y: 470 } },
         living_room_fireplace_left: { label: "Fireplace Monitor Left", floor: "first_floor", zone: "living_room", role: "anchor_sensor", entities: { target: "binary_sensor.apollo_msr_target", moving_target: "binary_sensor.apollo_msr_moving", still_target: "binary_sensor.apollo_msr_still" }, adjacent: ["guest_bedroom_motion", "living_room_fireplace_right"], position: { x: 560, y: 430 } },
@@ -67,6 +69,7 @@
         master_bedroom_closet: { label: "Master Bedroom Closet Motion", floor: "second_floor", zone: "master_bedroom_closet", role: "subzone_occupancy", entities: { motion: "binary_sensor.master_bedroom_closet_motion_detection" }, adjacent: ["master_bedroom_entrance", "master_bathroom_light_motion"], position: { x: 90, y: 1050 } },
         master_bathroom_light_motion: { label: "Master Bathroom Light Motion", floor: "second_floor", zone: "master_bathroom", role: "room_occupancy", entities: { motion: "binary_sensor.master_bathroom_motion_detection" }, adjacent: ["master_bedroom_closet"], position: { x: 90, y: 1200 } },
         shaila_office_fan_light: { label: "Shaila Office Fan Light", floor: "second_floor", zone: "shaila_office", role: "room_occupancy", entities: { motion: "binary_sensor.shaila_office_motion_detection" }, adjacent: ["top_of_staircase_motion"], position: { x: 590, y: 900 } },
+        gym_lights_motion: { label: "Gym Lights Motion", floor: "basement", zone: "gym", role: "room_occupancy", entities: { motion: "binary_sensor.gym_lights_motion_motion_detection" }, adjacent: ["dining_room_motion"], position: { x: 590, y: 1200 } },
       },
     };
 
