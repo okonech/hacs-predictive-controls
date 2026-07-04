@@ -5,12 +5,13 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 from custom_components.predictive_controls.automation_summary import (
-    _active_entry_plausible_zones,
+    _active_plausibility_zones,
     runtime_automation_summary,
 )
 from custom_components.predictive_controls.confidence import ZoneState
 from custom_components.predictive_controls.model import PredictiveMap
 from custom_components.predictive_controls.occupancy_tracker import (
+    ActivationPlausibility,
     AnonymousTrack,
     EntryPlausibility,
     InferredDeparture,
@@ -98,6 +99,16 @@ def make_diagnostics() -> TrackerDiagnostics:
                 expires_at=datetime(2026, 6, 7, 12, 1, tzinfo=UTC),
             ),
         ),
+        activation_plausibilities=(
+            ActivationPlausibility(
+                zone="foyer",
+                reason="fresh adjacent entry path before local detection",
+                source_zone="living_room",
+                source_node_id="living_motion",
+                event_at=datetime(2026, 6, 7, 12, tzinfo=UTC),
+                expires_at=datetime(2026, 6, 7, 12, 1, tzinfo=UTC),
+            ),
+        ),
     )
 
 
@@ -139,36 +150,38 @@ def test_summary_exposes_probable_and_possible_zone_contracts() -> None:
     assert not summary.zones["office"].possible_occupancy
 
 
-def test_summary_exposes_entry_plausible_and_occupancy_hold_contracts() -> None:
+def test_summary_exposes_activation_and_keep_on_contracts() -> None:
     summary = runtime_automation_summary(make_runtime())
 
-    assert summary.entry_plausible_zones == ("foyer", "kitchen")
-    assert summary.occupancy_hold_zones == ("living_room",)
-    assert summary.zones["foyer"].entry_plausible
-    assert summary.zones["kitchen"].entry_plausible
-    assert not summary.zones["office"].entry_plausible
-    assert not summary.zones["kitchen"].occupancy_hold
+    assert summary.activation_plausible_zones == ("foyer",)
+    assert summary.keep_on_zones == ("living_room",)
+    assert summary.diagnostic_entry_path_plausible_zones == ("foyer",)
+    assert summary.zones["foyer"].activation_plausible
+    assert summary.zones["foyer"].diagnostic_entry_path_plausible
+    assert not summary.zones["kitchen"].activation_plausible
+    assert not summary.zones["office"].activation_plausible
+    assert not summary.zones["kitchen"].keep_on
 
 
 def test_summary_exposes_zone_predictions_for_prelighting() -> None:
     summary = runtime_automation_summary(make_runtime())
 
-    assert summary.predicted_next_zone == "kitchen"
-    assert summary.predicted_next_probability == 0.72
-    assert summary.predicted_zones == ("kitchen",)
-    assert summary.zones["kitchen"].predicted_next
+    assert summary.diagnostic_predicted_next_zone == "kitchen"
+    assert summary.diagnostic_predicted_next_probability == 0.72
+    assert summary.prelight_plausible_zones == ("kitchen",)
+    assert summary.zones["kitchen"].prelight_plausible
     assert summary.zones["kitchen"].prediction_probability == 0.72
-    assert not summary.zones["office"].predicted_next
+    assert not summary.zones["office"].prelight_plausible
 
 
 def test_prediction_threshold_can_be_tuned_for_zone_predictions() -> None:
     summary = runtime_automation_summary(make_runtime(), prediction_threshold=0.3)
 
-    assert summary.predicted_zones == ("kitchen", "office")
-    assert summary.zones["office"].entry_plausible
+    assert summary.prelight_plausible_zones == ("kitchen", "office")
+    assert not summary.zones["office"].activation_plausible
 
 
-def test_expired_entry_plausibility_is_ignored_after_last_event() -> None:
+def test_expired_entry_path_plausibility_is_ignored_after_last_event() -> None:
     runtime = make_runtime()
     object.__setattr__(
         runtime,
@@ -178,10 +191,11 @@ def test_expired_entry_plausibility_is_ignored_after_last_event() -> None:
 
     summary = runtime_automation_summary(runtime)
 
-    assert summary.entry_plausible_zones == ("kitchen",)
+    assert summary.diagnostic_entry_path_plausible_zones == ()
+    assert summary.prelight_plausible_zones == ("kitchen",)
 
 
-def test_entry_plausibility_filter_keeps_unexpired_valid_zones() -> None:
+def test_plausibility_filter_keeps_unexpired_valid_zones() -> None:
     now = datetime(2026, 6, 7, 12, tzinfo=UTC)
     diagnostics = SimpleNamespace(
         entry_plausibilities=(
@@ -196,9 +210,10 @@ def test_entry_plausibility_filter_keeps_unexpired_valid_zones() -> None:
         )
     )
 
-    zones = _active_entry_plausible_zones(
+    zones = _active_plausibility_zones(
         diagnostics,
         SimpleNamespace(event_at=now),
+        "entry_plausibilities",
     )
 
     assert zones == {"foyer"}
@@ -237,8 +252,8 @@ def test_summary_handles_no_occupancy_or_predictions() -> None:
     assert summary.probable_inside_count == 0
     assert summary.possible_inside_count == 0
     assert summary.probable_occupied_zones == ()
-    assert summary.predicted_next_zone is None
-    assert summary.predicted_next_probability is None
+    assert summary.diagnostic_predicted_next_zone is None
+    assert summary.diagnostic_predicted_next_probability is None
     assert summary.explanation == "No zones are probably occupied."
 
 

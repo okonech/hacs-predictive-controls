@@ -54,14 +54,21 @@ def make_map() -> PredictiveMap:
 def test_expected_entity_unique_ids_cover_automation_facing_entities() -> None:
     unique_ids = expected_entity_unique_ids("entry123", make_map())
 
-    assert "entry123_predicted_next_zone" in unique_ids
-    assert "entry123_entry_plausible_zones" in unique_ids
-    assert "entry123_occupancy_hold_zones" in unique_ids
-    assert "entry123_home_occupancy_hold" in unique_ids
-    assert "entry123_living_room_confidence" in unique_ids
-    assert "entry123_living_room_entry_plausible" in unique_ids
-    assert "entry123_living_room_occupancy_hold" in unique_ids
-    assert "entry123_living_room_zone_predicted_next" in unique_ids
+    assert "entry123_diagnostic_predicted_next_zone" in unique_ids
+    assert "entry123_diagnostic_entry_path_plausible_zones" in unique_ids
+    assert "entry123_activation_plausible_zones" in unique_ids
+    assert "entry123_keep_on_zones" in unique_ids
+    assert "entry123_home_keep_on" in unique_ids
+    assert "entry123_living_room_diagnostic_confidence" in unique_ids
+    assert "entry123_living_room_activation_plausible" in unique_ids
+    assert "entry123_living_room_keep_on" in unique_ids
+    assert "entry123_living_room_prelight_plausible" in unique_ids
+    assert "entry123_living_room_diagnostic_entry_path_plausible" in unique_ids
+    assert "entry123_predicted_next_zone" not in unique_ids
+    assert "entry123_living_room_confidence" not in unique_ids
+    assert "entry123_living_room_entry_plausible" not in unique_ids
+    assert "entry123_living_room_occupancy_hold" not in unique_ids
+    assert "entry123_living_room_zone_predicted_next" not in unique_ids
     assert "entry123_living_motion_probability" not in unique_ids
     assert "entry123_living_motion_predicted" not in unique_ids
     assert "entry123_living_room_status" not in unique_ids
@@ -78,6 +85,18 @@ def test_stale_entries_only_include_this_integration_and_config_entry() -> None:
         FakeRegistryEntry(
             entity_id="sensor.living_room_confidence",
             unique_id="entry123_living_room_confidence",
+        ),
+        FakeRegistryEntry(
+            entity_id="sensor.living_room_diagnostic_confidence",
+            unique_id="entry123_living_room_diagnostic_confidence",
+        ),
+        FakeRegistryEntry(
+            entity_id="binary_sensor.living_room_keep_on",
+            unique_id="entry123_living_room_keep_on",
+        ),
+        FakeRegistryEntry(
+            entity_id="binary_sensor.living_room_activation_plausible",
+            unique_id="entry123_living_room_activation_plausible",
         ),
         FakeRegistryEntry(
             entity_id="sensor.entry_prediction_probability",
@@ -118,6 +137,7 @@ def test_stale_entries_only_include_this_integration_and_config_entry() -> None:
     stale_entries = stale_entity_registry_entries(entries, "entry123", expected)
 
     assert [entry.entity_id for entry in stale_entries] == [
+        "sensor.living_room_confidence",
         "sensor.entry_prediction_probability",
         "sensor.living_room_status",
         "binary_sensor.living_room_motion_plausible",
@@ -137,6 +157,10 @@ def test_async_cleanup_stale_entities_removes_only_obsolete_rows(
                 unique_id="entry123_living_room_confidence",
             ),
             FakeRegistryEntry(
+                entity_id="sensor.living_room_diagnostic_confidence",
+                unique_id="entry123_living_room_diagnostic_confidence",
+            ),
+            FakeRegistryEntry(
                 entity_id="sensor.entry_prediction_probability",
                 unique_id="entry123_entry_probability",
                 name="Entry Prediction Probability",
@@ -150,10 +174,19 @@ def test_async_cleanup_stale_entities_removes_only_obsolete_rows(
         async_cleanup_stale_entities(object(), "entry123", make_map())
     )
 
-    assert registry.removed == ["sensor.entry_prediction_probability"]
+    assert registry.removed == [
+        "sensor.living_room_confidence",
+        "sensor.entry_prediction_probability",
+    ]
     assert result == {
-        "removed_count": 1,
+        "removed_count": 2,
         "removed_entities": [
+            {
+                "entity_id": "sensor.living_room_confidence",
+                "unique_id": "entry123_living_room_confidence",
+                "name": None,
+                "original_name": None,
+            },
             {
                 "entity_id": "sensor.entry_prediction_probability",
                 "unique_id": "entry123_entry_probability",
@@ -161,8 +194,14 @@ def test_async_cleanup_stale_entities_removes_only_obsolete_rows(
                 "original_name": "Entry Prediction Probability",
             }
         ],
-        "stale_count": 1,
+        "stale_count": 2,
         "stale_entities": [
+            {
+                "entity_id": "sensor.living_room_confidence",
+                "unique_id": "entry123_living_room_confidence",
+                "name": None,
+                "original_name": None,
+            },
             {
                 "entity_id": "sensor.entry_prediction_probability",
                 "unique_id": "entry123_entry_probability",

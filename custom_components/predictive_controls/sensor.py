@@ -18,12 +18,13 @@ async def async_setup_entry(
 ) -> None:
     runtime: PredictiveControlsRuntime = hass.data[DOMAIN][entry.entry_id]
     entities: list[SensorEntity] = [
-        PredictedNextZoneSensor(runtime, entry.entry_id),
-        EntryPlausibleZonesSensor(runtime, entry.entry_id),
-        OccupancyHoldZonesSensor(runtime, entry.entry_id),
+        DiagnosticPredictedNextZoneSensor(runtime, entry.entry_id),
+        DiagnosticEntryPathPlausibleZonesSensor(runtime, entry.entry_id),
+        ActivationPlausibleZonesSensor(runtime, entry.entry_id),
+        KeepOnZonesSensor(runtime, entry.entry_id),
     ]
     entities.extend(
-        ZoneConfidenceSensor(runtime, entry.entry_id, zone)
+        ZoneDiagnosticConfidenceSensor(runtime, entry.entry_id, zone)
         for zone in runtime.map.zones()
     )
     async_add_entities(entities)
@@ -46,27 +47,27 @@ class RuntimeSensor(SensorEntity):
         self.async_write_ha_state()
 
 
-class PredictedNextZoneSensor(RuntimeSensor):
+class DiagnosticPredictedNextZoneSensor(RuntimeSensor):
     entity_description = SensorEntityDescription(
-        key="predicted_next_zone",
-        name="Predicted Next Zone",
+        key="diagnostic_predicted_next_zone",
+        name="Diagnostic Predicted Next Zone",
         icon="mdi:map-marker-path",
     )
 
     def __init__(self, runtime: PredictiveControlsRuntime, entry_id: str) -> None:
         super().__init__(runtime, entry_id)
-        self._attr_unique_id = f"{entry_id}_predicted_next_zone"
+        self._attr_unique_id = f"{entry_id}_diagnostic_predicted_next_zone"
 
     @property
     def native_value(self) -> str | None:
-        return runtime_automation_summary(self.runtime).predicted_next_zone
+        return runtime_automation_summary(self.runtime).diagnostic_predicted_next_zone
 
     @property
     def extra_state_attributes(self) -> dict[str, object]:
         summary = runtime_automation_summary(self.runtime)
         return {
-            "probability": summary.predicted_next_probability,
-            "predicted_zones": list(summary.predicted_zones),
+            "probability": summary.diagnostic_predicted_next_probability,
+            "prelight_plausible_zones": list(summary.prelight_plausible_zones),
             "zone_probabilities": {
                 zone: state.prediction_probability
                 for zone, state in summary.zones.items()
@@ -97,36 +98,50 @@ class ZoneListSensor(RuntimeSensor):
         raise NotImplementedError
 
 
-class EntryPlausibleZonesSensor(ZoneListSensor):
-    entity_key = "entry_plausible_zones"
-    entity_name = "Entry Plausible Zones"
+class DiagnosticEntryPathPlausibleZonesSensor(ZoneListSensor):
+    entity_key = "diagnostic_entry_path_plausible_zones"
+    entity_name = "Diagnostic Entry Path Plausible Zones"
     _attr_icon = "mdi:map-marker-path"
-    _attr_zone_attribute = "entry_plausible_zones"
+    _attr_zone_attribute = "diagnostic_entry_path_plausible_zones"
 
     @property
     def zones(self) -> tuple[str, ...]:
-        return runtime_automation_summary(self.runtime).entry_plausible_zones
+        return (
+            runtime_automation_summary(self.runtime)
+            .diagnostic_entry_path_plausible_zones
+        )
 
 
-class OccupancyHoldZonesSensor(ZoneListSensor):
-    entity_key = "occupancy_hold_zones"
-    entity_name = "Occupancy Hold Zones"
+class ActivationPlausibleZonesSensor(ZoneListSensor):
+    entity_key = "activation_plausible_zones"
+    entity_name = "Activation Plausible Zones"
+    _attr_icon = "mdi:motion-sensor"
+    _attr_zone_attribute = "activation_plausible_zones"
+
+    @property
+    def zones(self) -> tuple[str, ...]:
+        return runtime_automation_summary(self.runtime).activation_plausible_zones
+
+
+class KeepOnZonesSensor(ZoneListSensor):
+    entity_key = "keep_on_zones"
+    entity_name = "Keep On Zones"
     _attr_icon = "mdi:account-clock-outline"
-    _attr_zone_attribute = "occupancy_hold_zones"
+    _attr_zone_attribute = "keep_on_zones"
 
     @property
     def zones(self) -> tuple[str, ...]:
-        return runtime_automation_summary(self.runtime).occupancy_hold_zones
+        return runtime_automation_summary(self.runtime).keep_on_zones
 
 
-class ZoneConfidenceSensor(RuntimeSensor):
+class ZoneDiagnosticConfidenceSensor(RuntimeSensor):
     def __init__(
         self, runtime: PredictiveControlsRuntime, entry_id: str, zone: str
     ) -> None:
         super().__init__(runtime, entry_id)
         self.zone = zone
-        self._attr_name = f"{zone.replace('_', ' ').title()} Confidence"
-        self._attr_unique_id = f"{entry_id}_{zone}_confidence"
+        self._attr_name = f"{zone.replace('_', ' ').title()} Diagnostic Confidence"
+        self._attr_unique_id = f"{entry_id}_{zone}_diagnostic_confidence"
         self._attr_native_unit_of_measurement = "%"
 
     @property

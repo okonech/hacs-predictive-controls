@@ -232,6 +232,111 @@ def test_staying_put_still_target_survives_unrelated_false_positive() -> None:
     assert states["master_bathroom"].status == "suspect"
 
 
+def test_activation_plausible_requires_prior_path_or_hold() -> None:
+    engine = ZoneConfidenceEngine(make_house_map(), expected_occupants=0)
+    now = datetime(2026, 6, 7, 12, tzinfo=UTC)
+
+    first_living_hit = event(
+        "living_room",
+        node_id="living_motion",
+        entity_id="binary_sensor.living_motion",
+        role="anchor_sensor",
+        behavior="sticky",
+        signal_type="target",
+        event_at=now,
+    )
+    engine.observe(first_living_hit)
+
+    assert engine.states["living_room"].status == "probable"
+    assert engine.diagnostics.activation_plausibilities == ()
+
+    engine.observe(
+        replace(
+            first_living_hit,
+            state="off",
+            event_at=now + timedelta(seconds=5),
+        )
+    )
+    engine.observe(
+        replace(
+            first_living_hit,
+            state="on",
+            event_at=now + timedelta(seconds=10),
+        )
+    )
+
+    activations = engine.diagnostics.activation_plausibilities
+    assert len(activations) == 1
+    activation = activations[0]
+    assert activation.zone == "living_room"
+    assert activation.reason == "zone already held occupied before local detection"
+
+
+def test_activation_plausible_follows_adjacent_entry_path() -> None:
+    engine = ZoneConfidenceEngine(make_house_map(), expected_occupants=0)
+    now = datetime(2026, 6, 7, 12, tzinfo=UTC)
+
+    dining = event(
+        "upstairs_hallway",
+        node_id="upstairs_hallway_motion",
+        role="transition_gate",
+        behavior="transient",
+        event_at=now,
+    )
+    engine.observe(dining)
+    kitchen = event(
+        "kitchen",
+        node_id="kitchen_motion",
+        event_at=now + timedelta(seconds=10),
+    )
+    engine.observe(kitchen)
+
+    activations = engine.diagnostics.activation_plausibilities
+    assert len(activations) == 1
+    activation = activations[0]
+    assert activation.zone == "kitchen"
+    assert activation.reason == "fresh adjacent entry path before local detection"
+    assert activation.source_zone == "upstairs_hallway"
+    assert activation.source_node_id == "upstairs_hallway_motion"
+
+
+def test_activation_plausible_from_same_zone_corroboration_expires() -> None:
+    engine = ZoneConfidenceEngine(make_house_map(), expected_occupants=0)
+    now = datetime(2026, 6, 7, 12, tzinfo=UTC)
+
+    left = event(
+        "living_room",
+        node_id="living_still",
+        entity_id="binary_sensor.living_still",
+        role="anchor_sensor",
+        behavior="sticky",
+        signal_type="still_target",
+        event_at=now,
+    )
+    right = event(
+        "living_room",
+        node_id="living_motion",
+        entity_id="binary_sensor.living_motion",
+        role="anchor_sensor",
+        behavior="sticky",
+        signal_type="target",
+        event_at=now + timedelta(seconds=1),
+    )
+
+    engine.observe(left)
+    engine.observe(right)
+
+    activations = engine.diagnostics.activation_plausibilities
+    assert len(activations) == 1
+    activation = activations[0]
+    assert activation.zone == "living_room"
+    assert activation.reason == "another same-zone sensor was already active"
+    assert activation.expires_at == now + timedelta(seconds=6)
+
+    assert engine.expire_transient_state(now + timedelta(seconds=7))
+    assert engine.diagnostics.activation_plausibilities == ()
+
+
 def test_saturated_predictions_stay_inside_adjacent_zone_corridor() -> None:
     engine = ZoneConfidenceEngine(make_house_map(), expected_occupants=1)
     now = datetime(2026, 6, 7, 12, tzinfo=UTC)

@@ -6,19 +6,21 @@ from .const import DOMAIN
 from .model import PredictiveMap
 
 AGGREGATE_SENSOR_SUFFIXES = (
-    "predicted_next_zone",
-    "entry_plausible_zones",
-    "occupancy_hold_zones",
+    "diagnostic_predicted_next_zone",
+    "diagnostic_entry_path_plausible_zones",
+    "activation_plausible_zones",
+    "keep_on_zones",
 )
 
-AGGREGATE_BINARY_SENSOR_SUFFIXES = ("home_occupancy_hold",)
+AGGREGATE_BINARY_SENSOR_SUFFIXES = ("home_keep_on",)
 
-ZONE_SENSOR_SUFFIXES = ("confidence",)
+ZONE_SENSOR_SUFFIXES = ("diagnostic_confidence",)
 
 ZONE_BINARY_SENSOR_SUFFIXES = (
-    "entry_plausible",
-    "occupancy_hold",
-    "zone_predicted_next",
+    "activation_plausible",
+    "keep_on",
+    "prelight_plausible",
+    "diagnostic_entry_path_plausible",
 )
 
 

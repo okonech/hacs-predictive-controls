@@ -7,6 +7,7 @@ from custom_components.predictive_controls.confidence import ZoneState
 from custom_components.predictive_controls.events import OccupancyEvent
 from custom_components.predictive_controls.markov import Prediction
 from custom_components.predictive_controls.occupancy_tracker import (
+    ActivationPlausibility,
     AnonymousTrack,
     EntryPlausibility,
     InferredDeparture,
@@ -94,6 +95,16 @@ def make_diagnostics() -> TrackerDiagnostics:
                 source_node_id="living_left",
                 event_at=datetime(2026, 6, 7, 12, 7, tzinfo=UTC),
                 expires_at=datetime(2026, 6, 7, 12, 7, 30, tzinfo=UTC),
+            ),
+        ),
+        activation_plausibilities=(
+            ActivationPlausibility(
+                zone="kitchen",
+                reason="fresh adjacent entry path before local detection",
+                source_zone="living_room",
+                source_node_id="living_left",
+                event_at=datetime(2026, 6, 7, 12, 7, tzinfo=UTC),
+                expires_at=datetime(2026, 6, 7, 12, 7, 5, tzinfo=UTC),
             ),
         ),
     )
@@ -207,6 +218,16 @@ def test_runtime_status_payload_serializes_prediction_and_without_prediction() -
                 "source_node_id": "living_left",
                 "event_at": "2026-06-07T12:07:00+00:00",
                 "expires_at": "2026-06-07T12:07:30+00:00",
+            }
+        ],
+        "activation_plausibilities": [
+            {
+                "zone": "kitchen",
+                "reason": "fresh adjacent entry path before local detection",
+                "source_zone": "living_room",
+                "source_node_id": "living_left",
+                "event_at": "2026-06-07T12:07:00+00:00",
+                "expires_at": "2026-06-07T12:07:05+00:00",
             }
         ],
         "prediction_hints": {"kitchen": 0.72},

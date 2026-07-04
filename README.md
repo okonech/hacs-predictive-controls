@@ -5,9 +5,9 @@ motion/presence sensors into **zone-level occupancy inference** that ordinary
 automations can consume. It answers questions raw motion sensors cannot on their
 own:
 
-- *Is this zone still occupied even though motion just cleared?* — `occupancy_hold`
-- *Did fresh motion here follow a real path in, or is it spillover?* — `entry_plausible`
-- *Which zone is a person most likely to enter next?* — `predicted_next`
+- *Is this zone still occupied even though motion just cleared?* — `keep_on`
+- *Is a fresh raw detection plausible enough to turn something on?* — `activation_plausible`
+- *Which zone is a person most likely to enter next?* — `prelight_plausible`
 - *How many people are inside, and where?* — anonymous multi-occupant tracking
 
 It models the home as anonymous people moving over a sensor adjacency graph,
@@ -26,8 +26,9 @@ model.
 - **Core idea:** every real move is observed as a trail across adjacent zones,
   so confidence flows along the graph; a detection with no connecting trail is
   treated as a false positive.
-- **Output:** per-zone `confidence`, `occupancy_hold`, `entry_plausible`, and
-  `predicted_next` entities plus whole-home aggregates.
+- **Output:** per-zone `activation_plausible`, `keep_on`, and
+  `prelight_plausible` entities plus diagnostic confidence/path/prediction
+  entities and whole-home aggregates.
 - **Learning:** Markov edge probabilities for next-zone prediction.
 
 ## Installation
@@ -131,19 +132,19 @@ sticky decay.
 
 For each zone, the integration exposes:
 
-- a confidence percentage sensor, with status, timing, and reason attributes;
-- an entry-plausible binary sensor for deciding whether fresh local motion
-  follows a real path into the zone;
-- an occupancy-hold binary sensor for deciding whether a light should stay on
-  even after raw motion clears;
-- a predicted-next binary sensor for soft pre-lighting before a person arrives,
-  with probability and threshold attributes.
+- an activation-plausible binary sensor for deciding whether a fresh raw local
+  detection is safe enough to turn outputs on;
+- a keep-on binary sensor for deciding whether outputs should stay on even
+  after raw motion clears;
+- a prelight-plausible binary sensor for soft pre-lighting before a person
+  arrives, with probability and threshold attributes;
+- diagnostic confidence and entry-path sensors, with status, timing, source,
+  and reason attributes for troubleshooting.
 
-`entry_plausible` is intentionally based on prior adjacent/path evidence and
-current prediction hints, not on the same raw motion event that would trigger a
-room automation. This lets automations trigger from the destination room's raw
-motion sensor and read a precomputed plausibility condition without depending on
-Home Assistant callback ordering.
+`activation_plausible` is intentionally stricter than occupancy confidence. It
+is based on evidence that existed before the raw local detection: a fresh
+adjacent entry path, another same-zone sensor already active, or the zone already
+being held occupied. Prediction alone does not make activation plausible.
 
 These entities are intended as an inference layer between raw motion sensors and
 lighting automations. Node-level prediction, separate status sensors,
@@ -152,15 +153,19 @@ panel/status diagnostics instead of being exported as default HA entities.
 
 The automation-facing aggregate entities are:
 
-- `binary_sensor.home_occupancy_hold` for whole-home occupied/vacant logic;
-- `sensor.entry_plausible_zones` and `sensor.occupancy_hold_zones`, each with
-  the relevant zones in attributes;
-- `sensor.predicted_next_zone` with per-zone prediction probabilities in
-  attributes.
+- `binary_sensor.home_keep_on` for whole-home occupied/vacant logic;
+- `sensor.activation_plausible_zones` and `sensor.keep_on_zones`, each with the
+  relevant zones in attributes.
+
+The diagnostic aggregate entities are:
+
+- `sensor.diagnostic_entry_path_plausible_zones` for fresh adjacent path hints;
+- `sensor.diagnostic_predicted_next_zone` with per-zone prediction
+  probabilities in attributes.
 
 Room automations should normally use raw local motion for immediate turn-on,
-zone entry-plausible as the turn-on guard, zone occupancy-hold to prevent
-false-offs, and zone predicted-next entities for soft pre-lighting.
+zone activation-plausible as the turn-on guard, zone keep-on to prevent
+false-offs, and zone prelight-plausible entities for soft pre-lighting.
 
 ## Entities
 
@@ -168,29 +173,32 @@ For every configured zone (`<zone>` is the zone id):
 
 | Entity | Value | Meaning |
 | --- | --- | --- |
-| `sensor.<zone>_confidence` | 0–100 % | Occupancy confidence, with `status`, `reason`, `occupancy_behavior`, and timing attributes |
-| `binary_sensor.<zone>_occupancy_hold` | on/off | Keep outputs on while the zone is still plausibly occupied (on at ≥ "possible") |
-| `binary_sensor.<zone>_entry_plausible` | on/off | Fresh local motion follows a real path into the zone |
-| `binary_sensor.<zone>_predicted_next` | on/off | Zone is predicted next *above threshold* (use this for gated pre-lighting) |
+| `binary_sensor.<zone>_activation_plausible` | on/off | Fresh raw local detection is plausible enough to turn outputs on |
+| `binary_sensor.<zone>_keep_on` | on/off | Keep outputs on while the zone is still plausibly occupied (on at ≥ "possible") |
+| `binary_sensor.<zone>_prelight_plausible` | on/off | Zone is predicted next *above threshold* (use this for gated pre-lighting) |
+| `sensor.<zone>_diagnostic_confidence` | 0–100 % | Diagnostic occupancy confidence, with `status`, `reason`, `occupancy_behavior`, and timing attributes |
+| `binary_sensor.<zone>_diagnostic_entry_path_plausible` | on/off | Diagnostic fresh adjacent/path evidence into the zone, without prediction mixed in |
 
 Whole-home aggregates:
 
 | Entity | Value | Meaning |
 | --- | --- | --- |
-| `binary_sensor.home_occupancy_hold` | on/off | Any zone is currently held occupied |
-| `sensor.occupancy_hold_zones` | count | Held zones listed in the `occupancy_hold_zones` attribute |
-| `sensor.entry_plausible_zones` | count | Entry-plausible zones listed in attribute |
-| `sensor.predicted_next_zone` | zone id | Arg-max predicted zone, with `zone_probabilities` attribute |
+| `binary_sensor.home_keep_on` | on/off | Any zone currently wants outputs kept on |
+| `sensor.activation_plausible_zones` | count | Activation-plausible zones listed in the `activation_plausible_zones` attribute |
+| `sensor.keep_on_zones` | count | Keep-on zones listed in the `keep_on_zones` attribute |
+| `sensor.diagnostic_entry_path_plausible_zones` | count | Diagnostic entry-path zones listed in attribute |
+| `sensor.diagnostic_predicted_next_zone` | zone id | Diagnostic arg-max predicted zone, with `zone_probabilities` attribute |
 
-> `sensor.predicted_next_zone` names the most likely zone *even when its
+> `sensor.diagnostic_predicted_next_zone` names the most likely zone *even when its
 > probability is below the threshold*. For pre-lighting decisions, trigger on the
-> per-zone `binary_sensor.<zone>_predicted_next`, which respects the threshold.
+> per-zone `binary_sensor.<zone>_prelight_plausible`, which respects the threshold.
 
 ## Using it in automations
 
-The recommended room pattern: turn on from **raw local motion**, turn off from
-the zone **occupancy-hold** clearing (which absorbs the still/decay/departure
-logic), and optionally pre-light from **predicted-next**.
+The recommended room pattern: trigger from **raw local motion**, require the
+zone **activation-plausible** guard before turning on, turn off from the zone
+**keep-on** clearing (which absorbs the still/decay/departure logic), and
+optionally pre-light from **prelight-plausible**.
 
 ```yaml
 triggers:
@@ -199,13 +207,16 @@ triggers:
     to: "on"
     id: occupancy_detected
   - trigger: state
-    entity_id: binary_sensor.living_room_occupancy_hold
+    entity_id: binary_sensor.living_room_keep_on
     to: "off"
     id: occupancy_cleared
 actions:
   - choose:
       - conditions: [{ condition: trigger, id: occupancy_detected }]
         sequence:
+          - condition: state
+            entity_id: binary_sensor.living_room_activation_plausible
+            state: "on"
           - action: light.turn_on
             target: { entity_id: light.living_room }
       - conditions: [{ condition: trigger, id: occupancy_cleared }]
@@ -215,8 +226,8 @@ actions:
 mode: restart
 ```
 
-Turning on from raw motion (not `occupancy_hold`) keeps turn-on instant and
-immune to multi-occupant suppression, while `occupancy_hold` provides the
+Triggering from raw motion keeps the automation low-latency, while
+`activation_plausible` blocks isolated raw hits and `keep_on` provides the
 false-off protection.
 
 ## How It Works
@@ -240,7 +251,7 @@ of occupied zones best explains the recent sensor evidence*.
 
 Each zone holds a confidence in `[0, 1]` that maps to a status:
 
-| Status | Confidence | `occupancy_hold` |
+| Status | Confidence | `keep_on` |
 | --- | --- | --- |
 | rejected | < 0.05 | off |
 | suspect | 0.05–0.35 | off |
@@ -311,8 +322,8 @@ each zone simply rises and decays on its own.
 A first-order Markov chain learns node→node transition probabilities from
 observed movement. Predicted next zones are projected only along the current
 adjacent edge — so pre-lighting follows the configured graph instead of jumping
-to unrelated rooms or floors — and are published through the `predicted_next`
-entities and `sensor.predicted_next_zone`.
+to unrelated rooms or floors — and are published through the
+`prelight_plausible` entities and `sensor.diagnostic_predicted_next_zone`.
 
 ### Code layout
 

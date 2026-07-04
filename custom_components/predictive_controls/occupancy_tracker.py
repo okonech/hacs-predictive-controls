@@ -27,6 +27,7 @@ from .occupancy_scoring import (
 
 NON_ADJACENT_EVENT_CONFIDENCE_CAP = 0.34
 JOIN_SLOT_RETAIN_CONFIDENCE = 0.05
+ACTIVATION_RETAIN_CONFIDENCE = 0.35
 
 
 @dataclass(frozen=True)
@@ -69,6 +70,7 @@ class TrackerConfig:
     departure_retention: timedelta = timedelta(minutes=5)
     departure_source_min_confidence: float = 0.35
     entry_plausibility_window: timedelta = timedelta(seconds=30)
+    activation_plausibility_window: timedelta = timedelta(seconds=5)
     trail_window: timedelta = timedelta(minutes=3)
 
     @property
@@ -131,6 +133,18 @@ class EntryPlausibility:
 
 
 @dataclass(frozen=True)
+class ActivationPlausibility:
+    """Short-lived authorization for acting on a raw local detection."""
+
+    zone: str
+    reason: str
+    source_zone: str | None
+    source_node_id: str | None
+    event_at: datetime
+    expires_at: datetime
+
+
+@dataclass(frozen=True)
 class TrackerDiagnostics:
     """Structured diagnostics for panel and status payloads."""
 
@@ -143,6 +157,7 @@ class TrackerDiagnostics:
     prediction_hints: dict[str, float]
     dwell_seconds: dict[str, dict[str, float | int]]
     entry_plausibilities: tuple[EntryPlausibility, ...] = ()
+    activation_plausibilities: tuple[ActivationPlausibility, ...] = ()
 
 
 class OccupancyTracker:
@@ -172,6 +187,7 @@ class OccupancyTracker:
         self._join_slots: dict[str, InferredJoinSlot] = {}
         self._departures: dict[str, InferredDeparture] = {}
         self._entry_plausibilities: dict[str, EntryPlausibility] = {}
+        self._activation_plausibilities: dict[str, ActivationPlausibility] = {}
         self._prediction_hints: dict[str, float] = {}
 
     @property
@@ -201,6 +217,10 @@ class OccupancyTracker:
                 self._entry_plausibilities[zone]
                 for zone in sorted(self._entry_plausibilities)
             ),
+            activation_plausibilities=tuple(
+                self._activation_plausibilities[zone]
+                for zone in sorted(self._activation_plausibilities)
+            ),
         )
 
     def state_for_zone(self, zone: str) -> ZoneState:
@@ -209,6 +229,12 @@ class OccupancyTracker:
     def observe(self, event: OccupancyEvent) -> ZoneUpdate:
         previous = self.state_for_zone(event.zone)
         self._expire_inferences(event.event_at)
+        activation_plausibility = self._infer_activation_plausibility(
+            previous,
+            event,
+        )
+        if activation_plausibility is not None:
+            self._activation_plausibilities[event.zone] = activation_plausibility
         self._track_active_event(event)
         self._learn_dwell_if_clear_finished(previous, event)
         join_slot = self._infer_join_slot(previous, event)
@@ -718,6 +744,45 @@ class OccupancyTracker:
                 expires_at=event.event_at + window,
             )
 
+    def _infer_activation_plausibility(
+        self,
+        previous: ZoneState,
+        event: OccupancyEvent,
+    ) -> ActivationPlausibility | None:
+        if event.state != "on":
+            return None
+        window = self.config.activation_plausibility_window
+        for active_event in self._active_events.get(event.zone, {}).values():
+            if active_event.node_id != event.node_id:
+                return ActivationPlausibility(
+                    zone=event.zone,
+                    reason="another same-zone sensor was already active",
+                    source_zone=event.zone,
+                    source_node_id=active_event.node_id,
+                    event_at=event.event_at,
+                    expires_at=event.event_at + window,
+                )
+        if previous.confidence >= ACTIVATION_RETAIN_CONFIDENCE:
+            return ActivationPlausibility(
+                zone=event.zone,
+                reason="zone already held occupied before local detection",
+                source_zone=event.zone,
+                source_node_id=previous.last_node_id,
+                event_at=event.event_at,
+                expires_at=event.event_at + window,
+            )
+        entry_plausibility = self._entry_plausibilities.get(event.zone)
+        if entry_plausibility is not None:
+            return ActivationPlausibility(
+                zone=event.zone,
+                reason="fresh adjacent entry path before local detection",
+                source_zone=entry_plausibility.source_zone,
+                source_node_id=entry_plausibility.source_node_id,
+                event_at=event.event_at,
+                expires_at=event.event_at + window,
+            )
+        return None
+
     def _entry_plausibility_window_for_zone(
         self,
         event: OccupancyEvent,
@@ -854,6 +919,7 @@ class OccupancyTracker:
         previous_join_slots = self._join_slots
         previous_departures = self._departures
         previous_entry_plausibilities = self._entry_plausibilities
+        previous_activation_plausibilities = self._activation_plausibilities
         # A join slot means an extra occupant is present in a zone, so it should
         # persist while that zone stays occupied rather than expiring on a fixed
         # timer. It is cleared when the zone empties or a departure consumes it.
@@ -872,10 +938,16 @@ class OccupancyTracker:
             for zone, plausibility in self._entry_plausibilities.items()
             if plausibility.expires_at >= now
         }
+        self._activation_plausibilities = {
+            zone: plausibility
+            for zone, plausibility in self._activation_plausibilities.items()
+            if plausibility.expires_at >= now
+        }
         return (
             previous_join_slots != self._join_slots
             or previous_departures != self._departures
             or previous_entry_plausibilities != self._entry_plausibilities
+            or previous_activation_plausibilities != self._activation_plausibilities
         )
 
     def _learn_dwell_if_clear_finished(

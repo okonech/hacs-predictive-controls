@@ -79,11 +79,12 @@ def test_sensor_platform_exports_only_automation_facing_entities(
     unique_ids = platform_unique_ids(sensor_module, make_map())
 
     assert unique_ids == {
-        "entry123_predicted_next_zone",
-        "entry123_entry_plausible_zones",
-        "entry123_occupancy_hold_zones",
-        "entry123_living_room_confidence",
-        "entry123_kitchen_confidence",
+        "entry123_diagnostic_predicted_next_zone",
+        "entry123_diagnostic_entry_path_plausible_zones",
+        "entry123_activation_plausible_zones",
+        "entry123_keep_on_zones",
+        "entry123_living_room_diagnostic_confidence",
+        "entry123_kitchen_diagnostic_confidence",
     }
 
 
@@ -95,13 +96,15 @@ def test_binary_sensor_platform_exports_only_automation_facing_entities(
     unique_ids = platform_unique_ids(binary_sensor_module, make_map())
 
     assert unique_ids == {
-        "entry123_home_occupancy_hold",
-        "entry123_living_room_entry_plausible",
-        "entry123_kitchen_entry_plausible",
-        "entry123_living_room_occupancy_hold",
-        "entry123_kitchen_occupancy_hold",
-        "entry123_living_room_zone_predicted_next",
-        "entry123_kitchen_zone_predicted_next",
+        "entry123_home_keep_on",
+        "entry123_living_room_activation_plausible",
+        "entry123_kitchen_activation_plausible",
+        "entry123_living_room_keep_on",
+        "entry123_kitchen_keep_on",
+        "entry123_living_room_prelight_plausible",
+        "entry123_kitchen_prelight_plausible",
+        "entry123_living_room_diagnostic_entry_path_plausible",
+        "entry123_kitchen_diagnostic_entry_path_plausible",
     }
 
 

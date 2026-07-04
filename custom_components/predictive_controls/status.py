@@ -67,6 +67,10 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
             entry_plausibility_payload(plausibility)
             for plausibility in diagnostics.entry_plausibilities
         ],
+        "activation_plausibilities": [
+            activation_plausibility_payload(plausibility)
+            for plausibility in diagnostics.activation_plausibilities
+        ],
         "prediction_hints": diagnostics.prediction_hints,
         "dwell_seconds": diagnostics.dwell_seconds,
         "tracks": [track_payload(track) for track in diagnostics.tracks],
@@ -110,6 +114,17 @@ def departure_payload(departure: Any) -> dict[str, Any]:
 def entry_plausibility_payload(plausibility: Any) -> dict[str, Any]:
     return {
         "zone": plausibility.zone,
+        "source_zone": plausibility.source_zone,
+        "source_node_id": plausibility.source_node_id,
+        "event_at": plausibility.event_at.isoformat(),
+        "expires_at": plausibility.expires_at.isoformat(),
+    }
+
+
+def activation_plausibility_payload(plausibility: Any) -> dict[str, Any]:
+    return {
+        "zone": plausibility.zone,
+        "reason": plausibility.reason,
         "source_zone": plausibility.source_zone,
         "source_node_id": plausibility.source_node_id,
         "event_at": plausibility.event_at.isoformat(),
