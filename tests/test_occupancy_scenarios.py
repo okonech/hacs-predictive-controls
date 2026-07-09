@@ -790,6 +790,99 @@ def test_entry_plausibility_uses_configured_transition_seconds() -> None:
     assert plausibilities["bathroom"].expires_at == now + timedelta(seconds=45)
 
 
+def test_active_adjacent_transition_keeps_alex_office_entry_plausible() -> None:
+    predictive_map = PredictiveMap.from_mapping(
+        {
+            "nodes": {
+                "top_of_staircase_motion": {
+                    "zone": "upstairs_hallway",
+                    "role": "transition_gate",
+                    "occupancy_behavior": "transient",
+                    "entities": {"motion": "binary_sensor.top_of_staircase_motion"},
+                    "adjacent": ["alex_office_motion"],
+                },
+                "alex_office_motion": {
+                    "zone": "alex_office",
+                    "role": "room_occupancy",
+                    "occupancy_behavior": "sustained",
+                    "entities": {"motion": "binary_sensor.alex_office_motion"},
+                    "adjacent": ["top_of_staircase_motion"],
+                },
+            }
+        }
+    )
+    engine = ZoneConfidenceEngine(predictive_map, expected_occupants=0)
+    now = datetime(2026, 7, 9, 1, 33, 55, tzinfo=UTC)
+
+    hallway = event(
+        "upstairs_hallway",
+        node_id="top_of_staircase_motion",
+        role="transition_gate",
+        behavior="transient",
+        event_at=now,
+    )
+    office = event(
+        "alex_office",
+        node_id="alex_office_motion",
+        event_at=now + timedelta(seconds=50),
+    )
+
+    engine.observe(hallway)
+    engine.observe(office)
+
+    activations = engine.diagnostics.activation_plausibilities
+    assert len(activations) == 1
+    assert activations[0].zone == "alex_office"
+    assert activations[0].reason == "active adjacent transition before local detection"
+    assert activations[0].source_zone == "upstairs_hallway"
+    assert activations[0].source_node_id == "top_of_staircase_motion"
+
+
+def test_cleared_adjacent_transition_still_uses_entry_plausibility_window() -> None:
+    predictive_map = PredictiveMap.from_mapping(
+        {
+            "nodes": {
+                "hallway_motion": {
+                    "zone": "hallway",
+                    "role": "transition_gate",
+                    "occupancy_behavior": "transient",
+                    "entities": {"motion": "binary_sensor.hallway_motion"},
+                    "adjacent": ["office_motion"],
+                },
+                "office_motion": {
+                    "zone": "office",
+                    "role": "room_occupancy",
+                    "occupancy_behavior": "sustained",
+                    "entities": {"motion": "binary_sensor.office_motion"},
+                    "adjacent": ["hallway_motion"],
+                },
+            }
+        }
+    )
+    engine = ZoneConfidenceEngine(predictive_map, expected_occupants=0)
+    now = datetime(2026, 7, 9, 1, 33, 55, tzinfo=UTC)
+
+    hallway = event(
+        "hallway",
+        node_id="hallway_motion",
+        role="transition_gate",
+        behavior="transient",
+        event_at=now,
+    )
+    engine.observe(hallway)
+    engine.observe(replace(hallway, state="off", event_at=now + timedelta(seconds=5)))
+    engine.expire_transient_state(now + timedelta(seconds=31))
+    engine.observe(
+        event(
+            "office",
+            node_id="office_motion",
+            event_at=now + timedelta(seconds=50),
+        )
+    )
+
+    assert engine.diagnostics.activation_plausibilities == ()
+
+
 def test_overlapping_signals_in_same_room_count_as_one_occupant() -> None:
     engine = ZoneConfidenceEngine(make_house_map(), expected_occupants=2)
     now = datetime(2026, 6, 7, 12, tzinfo=UTC)

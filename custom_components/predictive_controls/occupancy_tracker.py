@@ -588,6 +588,28 @@ class OccupancyTracker:
             return recent
         return None
 
+    def _active_adjacent_transition(
+        self, event: OccupancyEvent
+    ) -> OccupancyEvent | None:
+        active_transitions = sorted(
+            (
+                active_event
+                for zone_events in self._active_events.values()
+                for active_event in zone_events.values()
+                if active_event.event_at <= event.event_at
+                if active_event.zone != event.zone
+                if (
+                    active_event.occupancy_behavior == "transient"
+                    or active_event.role == "transition_gate"
+                )
+                if self.graph.distance(active_event.zone, event.zone, max_depth=1)
+                is not None
+            ),
+            key=lambda item: item.event_at,
+            reverse=True,
+        )
+        return active_transitions[0] if active_transitions else None
+
     def _apply_departures(self, event: OccupancyEvent) -> None:
         for departure in self._infer_departures(event):
             previous = self.state_for_zone(departure.zone)
@@ -778,6 +800,16 @@ class OccupancyTracker:
                 reason="fresh adjacent entry path before local detection",
                 source_zone=entry_plausibility.source_zone,
                 source_node_id=entry_plausibility.source_node_id,
+                event_at=event.event_at,
+                expires_at=event.event_at + window,
+            )
+        active_transition = self._active_adjacent_transition(event)
+        if active_transition is not None:
+            return ActivationPlausibility(
+                zone=event.zone,
+                reason="active adjacent transition before local detection",
+                source_zone=active_transition.zone,
+                source_node_id=active_transition.node_id,
                 event_at=event.event_at,
                 expires_at=event.event_at + window,
             )
