@@ -838,10 +838,19 @@ def test_active_adjacent_transition_keeps_alex_office_entry_plausible() -> None:
     assert activations[0].source_node_id == "top_of_staircase_motion"
 
 
-def test_occupied_adjacent_subzone_keeps_master_bathroom_entry_plausible() -> None:
+def test_real_master_bathroom_entry_timing_stays_plausible() -> None:
     predictive_map = PredictiveMap.from_mapping(
         {
             "nodes": {
+                "master_bedroom_entrance_motion": {
+                    "zone": "master_bedroom_entrance",
+                    "role": "transition_gate",
+                    "occupancy_behavior": "transient",
+                    "entities": {
+                        "motion": "binary_sensor.master_bedroom_entrance_motion"
+                    },
+                    "adjacent": ["master_bedroom_closet_motion"],
+                },
                 "master_bedroom_closet_motion": {
                     "zone": "master_bedroom_closet",
                     "role": "subzone_occupancy",
@@ -849,7 +858,10 @@ def test_occupied_adjacent_subzone_keeps_master_bathroom_entry_plausible() -> No
                     "entities": {
                         "motion": "binary_sensor.master_bedroom_closet_motion"
                     },
-                    "adjacent": ["master_bathroom_motion"],
+                    "adjacent": [
+                        "master_bedroom_entrance_motion",
+                        "master_bathroom_motion",
+                    ],
                 },
                 "master_bathroom_motion": {
                     "zone": "master_bathroom",
@@ -862,22 +874,35 @@ def test_occupied_adjacent_subzone_keeps_master_bathroom_entry_plausible() -> No
         }
     )
     engine = ZoneConfidenceEngine(predictive_map, expected_occupants=0)
-    now = datetime(2026, 7, 9, 5, 35, 58, tzinfo=UTC)
+    entrance_on_at = datetime(2026, 7, 9, 5, 35, 55, 947381, tzinfo=UTC)
+    closet_on_at = datetime(2026, 7, 9, 5, 35, 58, 318498, tzinfo=UTC)
+    entrance_off_at = datetime(2026, 7, 9, 5, 36, 11, 169601, tzinfo=UTC)
+    bathroom_on_at = datetime(2026, 7, 9, 5, 41, 31, 470139, tzinfo=UTC)
+    closet_off_at = datetime(2026, 7, 9, 5, 42, 46, 325430, tzinfo=UTC)
 
+    entrance = event(
+        "master_bedroom_entrance",
+        node_id="master_bedroom_entrance_motion",
+        role="transition_gate",
+        behavior="transient",
+        event_at=entrance_on_at,
+    )
     closet = event(
         "master_bedroom_closet",
         node_id="master_bedroom_closet_motion",
         role="subzone_occupancy",
-        event_at=now,
+        event_at=closet_on_at,
     )
     bathroom = event(
         "master_bathroom",
         node_id="master_bathroom_motion",
         behavior="sticky",
-        event_at=now + timedelta(minutes=5, seconds=33),
+        event_at=bathroom_on_at,
     )
 
+    engine.observe(entrance)
     engine.observe(closet)
+    engine.observe(replace(entrance, state="off", event_at=entrance_off_at))
     engine.refresh_active(bathroom.event_at)
     engine.expire_transient_state(bathroom.event_at)
     engine.observe(bathroom)
@@ -888,6 +913,8 @@ def test_occupied_adjacent_subzone_keeps_master_bathroom_entry_plausible() -> No
     assert activations[0].reason == "occupied adjacent area before local detection"
     assert activations[0].source_zone == "master_bedroom_closet"
     assert activations[0].source_node_id == "master_bedroom_closet_motion"
+
+    engine.observe(replace(closet, state="off", event_at=closet_off_at))
 
 
 def test_cleared_adjacent_transition_still_uses_entry_plausibility_window() -> None:
