@@ -833,9 +833,61 @@ def test_active_adjacent_transition_keeps_alex_office_entry_plausible() -> None:
     activations = engine.diagnostics.activation_plausibilities
     assert len(activations) == 1
     assert activations[0].zone == "alex_office"
-    assert activations[0].reason == "active adjacent transition before local detection"
+    assert activations[0].reason == "occupied adjacent area before local detection"
     assert activations[0].source_zone == "upstairs_hallway"
     assert activations[0].source_node_id == "top_of_staircase_motion"
+
+
+def test_occupied_adjacent_subzone_keeps_master_bathroom_entry_plausible() -> None:
+    predictive_map = PredictiveMap.from_mapping(
+        {
+            "nodes": {
+                "master_bedroom_closet_motion": {
+                    "zone": "master_bedroom_closet",
+                    "role": "subzone_occupancy",
+                    "occupancy_behavior": "sustained",
+                    "entities": {
+                        "motion": "binary_sensor.master_bedroom_closet_motion"
+                    },
+                    "adjacent": ["master_bathroom_motion"],
+                },
+                "master_bathroom_motion": {
+                    "zone": "master_bathroom",
+                    "role": "room_occupancy",
+                    "occupancy_behavior": "sticky",
+                    "entities": {"motion": "binary_sensor.master_bathroom_motion"},
+                    "adjacent": ["master_bedroom_closet_motion"],
+                },
+            }
+        }
+    )
+    engine = ZoneConfidenceEngine(predictive_map, expected_occupants=0)
+    now = datetime(2026, 7, 9, 5, 35, 58, tzinfo=UTC)
+
+    closet = event(
+        "master_bedroom_closet",
+        node_id="master_bedroom_closet_motion",
+        role="subzone_occupancy",
+        event_at=now,
+    )
+    bathroom = event(
+        "master_bathroom",
+        node_id="master_bathroom_motion",
+        behavior="sticky",
+        event_at=now + timedelta(minutes=5, seconds=33),
+    )
+
+    engine.observe(closet)
+    engine.refresh_active(bathroom.event_at)
+    engine.expire_transient_state(bathroom.event_at)
+    engine.observe(bathroom)
+
+    activations = engine.diagnostics.activation_plausibilities
+    assert len(activations) == 1
+    assert activations[0].zone == "master_bathroom"
+    assert activations[0].reason == "occupied adjacent area before local detection"
+    assert activations[0].source_zone == "master_bedroom_closet"
+    assert activations[0].source_node_id == "master_bedroom_closet_motion"
 
 
 def test_cleared_adjacent_transition_still_uses_entry_plausibility_window() -> None:

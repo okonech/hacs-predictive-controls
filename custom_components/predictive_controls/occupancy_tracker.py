@@ -588,27 +588,41 @@ class OccupancyTracker:
             return recent
         return None
 
-    def _active_adjacent_transition(
+    def _adjacent_occupied_source(
         self, event: OccupancyEvent
-    ) -> OccupancyEvent | None:
-        active_transitions = sorted(
-            (
-                active_event
-                for zone_events in self._active_events.values()
-                for active_event in zone_events.values()
-                if active_event.event_at <= event.event_at
-                if active_event.zone != event.zone
-                if (
-                    active_event.occupancy_behavior == "transient"
-                    or active_event.role == "transition_gate"
-                )
-                if self.graph.distance(active_event.zone, event.zone, max_depth=1)
-                is not None
-            ),
-            key=lambda item: item.event_at,
-            reverse=True,
-        )
-        return active_transitions[0] if active_transitions else None
+    ) -> tuple[str, str | None] | None:
+        candidates: list[tuple[datetime, str, str | None]] = []
+        for zone, state in self._states.items():
+            if zone == event.zone:
+                continue
+            if state.confidence < ACTIVATION_RETAIN_CONFIDENCE:
+                continue
+            if self.graph.distance(zone, event.zone, max_depth=1) is None:
+                continue
+            evidence_at = state.last_evidence_at or state.updated_at
+            if evidence_at is None or evidence_at > event.event_at:
+                continue
+
+            source_node_id = state.last_node_id
+            active_source = max(
+                (
+                    active_event
+                    for active_event in self._active_events.get(zone, {}).values()
+                    if active_event.event_at <= event.event_at
+                ),
+                key=lambda item: item.event_at,
+                default=None,
+            )
+            if active_source is not None:
+                source_node_id = active_source.node_id
+                evidence_at = max(evidence_at, active_source.event_at)
+            candidates.append((evidence_at, zone, source_node_id))
+
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        if not candidates:
+            return None
+        _, source_zone, source_node_id = candidates[0]
+        return source_zone, source_node_id
 
     def _apply_departures(self, event: OccupancyEvent) -> None:
         for departure in self._infer_departures(event):
@@ -803,13 +817,14 @@ class OccupancyTracker:
                 event_at=event.event_at,
                 expires_at=event.event_at + window,
             )
-        active_transition = self._active_adjacent_transition(event)
-        if active_transition is not None:
+        adjacent_source = self._adjacent_occupied_source(event)
+        if adjacent_source is not None:
+            source_zone, source_node_id = adjacent_source
             return ActivationPlausibility(
                 zone=event.zone,
-                reason="active adjacent transition before local detection",
-                source_zone=active_transition.zone,
-                source_node_id=active_transition.node_id,
+                reason="occupied adjacent area before local detection",
+                source_zone=source_zone,
+                source_node_id=source_node_id,
                 event_at=event.event_at,
                 expires_at=event.event_at + window,
             )
