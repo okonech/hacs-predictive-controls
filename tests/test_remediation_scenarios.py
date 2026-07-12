@@ -105,12 +105,11 @@ def snapshot_event(predictive_map: PredictiveMap, entity_id: str) -> OccupancyEv
     )
 
 
-def test_r01_actual_map_two_occupant_bootstrap_performance() -> None:
+def test_r01_reference_map_two_occupant_bootstrap_performance() -> None:
     map_path = (
-        Path(__file__).resolve().parents[2]
-        / "homelab"
-        / "home-assistant"
-        / "predictive-controls-map.yaml"
+        Path(__file__).resolve().parents[1]
+        / "benchmarks"
+        / "reference-map.yaml"
     )
     predictive_map = load_predictive_map(map_path.read_text())
     events = tuple(
