@@ -12,7 +12,7 @@ requirements and public entity contract in this document remain normative.
 
 The current-state assessment below records the pre-remediation baseline at this
 document's creation. It is retained for design traceability, not as a statement
-about the 0.1.18 implementation candidate. The candidate is not considered a
+about the 0.1.19 implementation candidate. The candidate is not considered a
 completed production cutover until the remediation companion's seven-day
 external rollout gate is recorded and reviewed.
 

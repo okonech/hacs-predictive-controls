@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.19 release candidate
+
+### Fixed
+
+- Extended the Home Assistant `Store` migration hook to accept both version-1 and version-2 persistence wrappers. Version 1 was present in a deployed installation and still prevented config-entry setup in 0.1.18.
+
+### Rollout status
+
+This hotfix replaces the setup-broken 0.1.18 candidate. The seven-day Home Assistant shadow/soak gate remains uncollected and must restart on the exact 0.1.19 code revision.
+
 ## 0.1.18 release candidate
 
 ### Fixed

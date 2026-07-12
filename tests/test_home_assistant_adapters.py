@@ -446,7 +446,7 @@ def test_panel_registration_and_unregistration(monkeypatch: pytest.MonkeyPatch) 
     assert len(static_paths) == 1
     assert len(fake.registered_panels) == 2
     assert fake.removed_panels == [DOMAIN, DOMAIN]
-    assert module.panel_js_url().endswith("panel-v0.1.18.js")
+    assert module.panel_js_url().endswith("panel-v0.1.19.js")
 
 
 def make_runtime() -> SimpleNamespace:
@@ -535,7 +535,11 @@ def test_entity_lifecycles_properties_and_diagnostics(
     }
 
 
-def test_integration_setup_unload_and_reload(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("legacy_store_version", (1, 2))
+def test_integration_setup_unload_and_reload(
+    monkeypatch: pytest.MonkeyPatch,
+    legacy_store_version: int,
+) -> None:
     install_homeassistant(monkeypatch)
     integration = importlib.import_module("custom_components.predictive_controls")
     calls: list[tuple[str, object]] = []
@@ -560,7 +564,9 @@ def test_integration_setup_unload_and_reload(monkeypatch: pytest.MonkeyPatch) ->
             raise NotImplementedError
 
         async def async_load(self) -> dict[str, object]:
-            return await self._async_migrate_func(2, 1, legacy_payload)
+            return await self._async_migrate_func(
+                legacy_store_version, 1, legacy_payload
+            )
 
     class Runtime:
         def __init__(self, *_args: object, **_kwargs: object) -> None:
@@ -630,7 +636,7 @@ def test_integration_setup_unload_and_reload(monkeypatch: pytest.MonkeyPatch) ->
     assert ("restore", legacy_payload) in calls
     with pytest.raises(NotImplementedError):
         asyncio.run(
-            stores[0]._async_migrate_func(1, 1, legacy_payload)  # noqa: SLF001
+            stores[0]._async_migrate_func(0, 1, legacy_payload)  # noqa: SLF001
         )
     second = Entry()
     second.entry_id = "entry2"
