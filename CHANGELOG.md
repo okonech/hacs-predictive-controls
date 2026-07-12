@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.18 release candidate
+
+### Fixed
+
+- Added the required Home Assistant `Store` migration hook so existing version-2 persistence wrappers load into schema 3 instead of aborting config-entry setup with `NotImplementedError`.
+- Preserved legacy transition and policy data for the existing semantic migration and validation path.
+
+### Rollout status
+
+This hotfix replaces the setup-broken 0.1.17 candidate. The seven-day Home Assistant shadow/soak gate remains uncollected and must restart on the exact 0.1.18 code revision.
+
 ## 0.1.17 release candidate
 
 ### Changed

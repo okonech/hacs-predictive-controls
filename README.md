@@ -342,7 +342,7 @@ The hard callback ceiling is 100 ms; an over-budget update completes its state
 change atomically but suppresses activation and predictive actions. Routine core
 and runtime tail latency should remain at or below 30 ms.
 
-The 0.1.17 release-candidate benchmark uses the checked-in 16-zone, 17-node,
+The 0.1.18 release-candidate benchmark uses the checked-in 16-zone, 17-node,
 23-entity reference map with two occupants and 10,000 deterministic events. On
 CPython 3.12.13 it measured a 15.389 ms core maximum and 17.953 ms runtime
 maximum, retained all 153 exact configurations, and pruned zero occupancy

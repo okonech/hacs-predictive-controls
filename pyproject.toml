@@ -1,6 +1,6 @@
 [project]
 name = "hacs-predictive-controls"
-version = "0.1.17"
+version = "0.1.18"
 description = "Home Assistant custom integration for Markov-chain predictive controls"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -53,6 +53,7 @@ module = [
   "custom_components.predictive_controls.panel",
   "custom_components.predictive_controls.runtime",
   "custom_components.predictive_controls.sensor",
+  "custom_components.predictive_controls.storage",
   "custom_components.predictive_controls.websocket",
 ]
 disable_error_code = [

@@ -159,32 +159,32 @@ test("panel renders live occupancy zones from configured map data", async () => 
     transition_counts: {
       living_left: { kitchen: 7 },
     },
-        occupancy_diagnostics: {
-          expected_occupants: 2,
-          protected_corridor: ["living_room", "kitchen"],
-          tracks: [
-            {
-              track_id: "track_1",
-              zone: "living_room",
-              confidence: 0.91,
-              active: true,
-              source_entities: ["binary_sensor.living_still"],
-            },
-          ],
-          inferred_join_slots: [
-            {
-              zone: "living_room",
-              source_zone: "foyer",
-            },
-          ],
-          inferred_departures: [
-            {
-              zone: "office",
-              via_zone: "hall",
-              destination_zone: "kitchen",
-            },
-          ],
+    occupancy_diagnostics: {
+      expected_occupants: 2,
+      protected_corridor: ["living_room", "kitchen"],
+      tracks: [
+        {
+          track_id: "track_1",
+          zone: "living_room",
+          confidence: 0.91,
+          active: true,
+          source_entities: ["binary_sensor.living_still"],
         },
+      ],
+      inferred_join_slots: [
+        {
+          zone: "living_room",
+          source_zone: "foyer",
+        },
+      ],
+      inferred_departures: [
+        {
+          zone: "office",
+          via_zone: "hall",
+          destination_zone: "kitchen",
+        },
+      ],
+    },
   };
   panel._statusUpdated = new Date("2026-06-07T12:00:00Z");
   panel._tab = "occupancy";
@@ -483,7 +483,7 @@ test("panel reports when no stale entities are found", async () => {
 });
 
 test("panel script parses when Home Assistant loads it as a classic script", async () => {
-  const source = await readFile(panelAssetUrl("panel-v0.1.17.js"), "utf8");
+  const source = await readFile(panelAssetUrl("panel-v0.1.18.js"), "utf8");
 
   assert.doesNotThrow(() => new vm.Script(source));
 });
@@ -491,7 +491,7 @@ test("panel script parses when Home Assistant loads it as a classic script", asy
 test("versioned panel asset matches the development panel asset", async () => {
   const [developmentSource, versionedSource] = await Promise.all([
     readFile(panelAssetUrl("panel.js"), "utf8"),
-    readFile(panelAssetUrl("panel-v0.1.17.js"), "utf8"),
+    readFile(panelAssetUrl("panel-v0.1.18.js"), "utf8"),
   ]);
 
   assert.equal(versionedSource, developmentSource);

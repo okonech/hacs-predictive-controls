@@ -446,7 +446,7 @@ def test_panel_registration_and_unregistration(monkeypatch: pytest.MonkeyPatch) 
     assert len(static_paths) == 1
     assert len(fake.registered_panels) == 2
     assert fake.removed_panels == [DOMAIN, DOMAIN]
-    assert module.panel_js_url().endswith("panel-v0.1.17.js")
+    assert module.panel_js_url().endswith("panel-v0.1.18.js")
 
 
 def make_runtime() -> SimpleNamespace:
@@ -539,19 +539,35 @@ def test_integration_setup_unload_and_reload(monkeypatch: pytest.MonkeyPatch) ->
     install_homeassistant(monkeypatch)
     integration = importlib.import_module("custom_components.predictive_controls")
     calls: list[tuple[str, object]] = []
+    legacy_payload = {
+        "schema_version": 2,
+        "transition_counts": {"office": {"hall": 2.0}},
+    }
+    stores: list[Store] = []
 
     class Store:
-        def __init__(self, *_args: object) -> None:
-            pass
+        def __init__(self, _hass: object, version: int, key: str) -> None:
+            self.version = version
+            self.key = key
+            stores.append(self)
+
+        async def _async_migrate_func(
+            self,
+            _old_major_version: int,
+            _old_minor_version: int,
+            _old_data: dict[str, object],
+        ) -> dict[str, object]:
+            raise NotImplementedError
 
         async def async_load(self) -> dict[str, object]:
-            return {}
+            return await self._async_migrate_func(2, 1, legacy_payload)
 
     class Runtime:
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             self.stopped = False
 
-        def restore_stored_state(self, *_args: object) -> bool:
+        def restore_stored_state(self, stored: object, _now: object) -> bool:
+            calls.append(("restore", stored))
             return False
 
         def start(self) -> None:
@@ -574,6 +590,7 @@ def test_integration_setup_unload_and_reload(monkeypatch: pytest.MonkeyPatch) ->
     websocket_module.__dict__["async_register_websocket_commands"] = register_websocket
     storage_module = sys.modules["homeassistant.helpers.storage"]
     storage_module.__dict__["Store"] = Store
+    import_fresh("custom_components.predictive_controls.storage")
     monkeypatch.setitem(sys.modules, panel_module.__name__, panel_module)
     monkeypatch.setitem(sys.modules, runtime_module.__name__, runtime_module)
     monkeypatch.setitem(sys.modules, websocket_module.__name__, websocket_module)
@@ -608,6 +625,13 @@ def test_integration_setup_unload_and_reload(monkeypatch: pytest.MonkeyPatch) ->
 
     entry = Entry()
     assert asyncio.run(integration.async_setup_entry(hass, entry))
+    assert stores[0].version == 3
+    assert stores[0].key == "predictive_controls_entry_transitions"
+    assert ("restore", legacy_payload) in calls
+    with pytest.raises(NotImplementedError):
+        asyncio.run(
+            stores[0]._async_migrate_func(1, 1, legacy_payload)  # noqa: SLF001
+        )
     second = Entry()
     second.entry_id = "entry2"
     assert asyncio.run(integration.async_setup_entry(hass, second))

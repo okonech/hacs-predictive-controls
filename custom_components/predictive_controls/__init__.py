@@ -36,10 +36,10 @@ PLATFORM_NAMES = ["sensor", "binary_sensor"]
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     from homeassistant.const import Platform
-    from homeassistant.helpers.storage import Store
 
     from .panel import async_register_panel
     from .runtime import PredictiveControlsRuntime
+    from .storage import PredictiveControlsStore
     from .websocket import async_register_websocket_commands
 
     domain_data = hass.data.setdefault(DOMAIN, {})
@@ -65,7 +65,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     expected_occupants_entity = str(
         options.get(CONF_EXPECTED_OCCUPANTS_ENTITY, DEFAULT_EXPECTED_OCCUPANTS_ENTITY)
     ).strip()
-    transition_store = Store(
+    transition_store = PredictiveControlsStore(
         hass,
         STORAGE_VERSION,
         f"{DOMAIN}_{entry.entry_id}_transitions",
