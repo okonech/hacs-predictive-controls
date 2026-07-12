@@ -12,7 +12,7 @@ def make_map() -> PredictiveMap:
             "nodes": {
                 "entry": {"adjacent": ["hall", "kitchen"]},
                 "hall": {"adjacent": ["entry", "kitchen"], "initial_weight": 2},
-                "kitchen": {"adjacent": ["hall"]},
+                "kitchen": {"adjacent": ["entry", "hall"]},
                 "office": {"adjacent": []},
             }
         }
@@ -28,8 +28,9 @@ def test_initial_probabilities_use_smoothed_node_weights() -> None:
     }
 
 
-def test_observed_transitions_update_probabilities_without_mutating_counts_copy(
-) -> None:
+def test_observed_transitions_update_probabilities_without_mutating_counts_copy() -> (
+    None
+):
     chain = MarkovChain(make_map())
 
     assert chain.observe("entry", "kitchen", weight=3)
@@ -62,7 +63,7 @@ def test_restore_counts_keeps_only_valid_current_edges() -> None:
 
     assert chain.counts["entry"] == {"hall": 2.0, "kitchen": 3.5}
     assert chain.counts["hall"] == {"entry": 0.0, "kitchen": 0.0}
-    assert chain.counts["kitchen"] == {"hall": 0.0}
+    assert chain.counts["kitchen"] == {"entry": 0.0, "hall": 0.0}
 
 
 def test_invalid_transition_is_not_learned() -> None:

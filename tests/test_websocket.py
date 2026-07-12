@@ -8,9 +8,12 @@ from custom_components.predictive_controls.yaml_config import map_yaml_from_payl
 def test_map_yaml_from_message_prefers_dirty_raw_yaml() -> None:
     raw_yaml = "nodes:\n  entry:\n    adjacent: []\n"
 
-    assert map_yaml_from_payload(
-        {"map": {"nodes": {}}, "map_yaml": raw_yaml, "map_yaml_dirty": True}
-    ) == raw_yaml
+    assert (
+        map_yaml_from_payload(
+            {"map": {"nodes": {}}, "map_yaml": raw_yaml, "map_yaml_dirty": True}
+        )
+        == raw_yaml
+    )
 
 
 def test_map_yaml_from_message_uses_raw_yaml_without_map() -> None:
@@ -35,9 +38,7 @@ def test_map_yaml_from_message_prefers_map_when_raw_yaml_not_dirty() -> None:
 
 
 def test_map_yaml_from_message_dumps_map_when_raw_yaml_missing() -> None:
-    map_yaml = map_yaml_from_payload(
-        {"map": {"nodes": {"entry": {"adjacent": []}}}}
-    )
+    map_yaml = map_yaml_from_payload({"map": {"nodes": {"entry": {"adjacent": []}}}})
 
     assert map_yaml.startswith("nodes:\n")
     assert "entry:" in map_yaml

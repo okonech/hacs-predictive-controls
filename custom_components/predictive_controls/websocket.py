@@ -136,8 +136,8 @@ async def websocket_save_config(
         if transition_window < 1:
             raise ValueError("transition_window_seconds must be positive")
         expected_occupants = int(msg["expected_occupants"])
-        if expected_occupants < 0:
-            raise ValueError("expected_occupants must be zero or positive")
+        if not 0 <= expected_occupants <= 2:
+            raise ValueError("expected_occupants must be between zero and two")
         expected_occupants_entity = str(msg["expected_occupants_entity"]).strip()
         if expected_occupants_entity and "." not in expected_occupants_entity:
             raise ValueError("expected_occupants_entity must be an entity id")

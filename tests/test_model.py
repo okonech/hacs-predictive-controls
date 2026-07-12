@@ -32,7 +32,7 @@ def test_predictive_map_parses_nodes_and_entities() -> None:
                     "review_required": True,
                 },
                 "hall": {"adjacent": ["entry"]},
-            }
+            },
         }
     )
 
@@ -41,15 +41,16 @@ def test_predictive_map_parses_nodes_and_entities() -> None:
     assert predictive_map.nodes["entry"].occupancy_zone == "entry_hall"
     assert predictive_map.nodes["entry"].role == "transition_gate"
     assert predictive_map.zone_configs["entry_hall"].occupancy_behavior == "transient"
-    assert predictive_map.occupancy_behavior_for_node(
-        predictive_map.nodes["entry"]
-    ) == "transient"
+    assert (
+        predictive_map.occupancy_behavior_for_node(predictive_map.nodes["entry"])
+        == "transient"
+    )
     assert predictive_map.zone_occupancy_behavior("entry_hall") == "transient"
     assert predictive_map.zone_occupancy_behavior("missing") == "sustained"
     assert predictive_map.nodes["entry"].initial_weight == 2.0
     assert predictive_map.nodes["entry"].transition_seconds == {"hall": 12.0}
     assert predictive_map.transition_seconds_between_nodes("entry", "hall") == 12.0
-    assert predictive_map.transition_seconds_between_nodes("hall", "entry") == 12.0
+    assert predictive_map.transition_seconds_between_nodes("hall", "entry") is None
     assert predictive_map.transition_seconds_between_nodes("entry", "missing") is None
     assert predictive_map.nodes["entry"].review_required
     assert predictive_map.node_for_entity("binary_sensor.entry") == "entry"
@@ -83,7 +84,7 @@ def test_predictive_map_parses_nodes_and_entities() -> None:
         ),
         (
             {"nodes": {"entry": {"transition_seconds": {"hall": 0}}}},
-            "must be positive",
+            "must be finite and positive",
         ),
         ({"nodes": {"entry": {"initial_weight": "heavy"}}}, "must be numeric"),
         ({"nodes": {"entry": {"initial_weight": 0}}}, "must be positive"),
@@ -119,6 +120,37 @@ def test_predictive_map_parses_nodes_and_entities() -> None:
             {"nodes": {"entry": {"transition_seconds": {"hall": 12}}}},
             "Transition timing targets are not defined: hall",
         ),
+        (
+            {
+                "nodes": {
+                    "entry": {"adjacent": ["hall"]},
+                    "hall": {"adjacent": []},
+                }
+            },
+            "Physical adjacency must be reciprocal: entry -> hall",
+        ),
+        (
+            {
+                "nodes": {
+                    "entry": {"transition_seconds": {"hall": 12}},
+                    "hall": {},
+                }
+            },
+            "Transition timing requires physical adjacency: entry -> hall",
+        ),
+        (
+            {"nodes": {"entry": {"transition_seconds": {"entry": float("nan")}}}},
+            "must be finite and positive",
+        ),
+        (
+            {
+                "nodes": {
+                    "entry": {"entities": {"motion": "binary_sensor.shared"}},
+                    "hall": {"entities": {"motion": "binary_sensor.shared"}},
+                }
+            },
+            "Entity binding must be unique: binary_sensor.shared",
+        ),
     ],
 )
 def test_predictive_map_rejects_invalid_config(raw: object, message: str) -> None:
@@ -135,9 +167,7 @@ def test_initial_reliability_alias_is_supported() -> None:
 
 
 def test_empty_zone_metadata_is_supported() -> None:
-    predictive_map = PredictiveMap.from_mapping(
-        {"zones": None, "nodes": {"entry": {}}}
-    )
+    predictive_map = PredictiveMap.from_mapping({"zones": None, "nodes": {"entry": {}}})
 
     assert predictive_map.zones() == ("entry",)
 
@@ -166,9 +196,12 @@ def test_node_occupancy_behavior_can_override_zone() -> None:
         }
     )
 
-    assert predictive_map.occupancy_behavior_for_node(
-        predictive_map.nodes["office_motion"]
-    ) == "sticky"
+    assert (
+        predictive_map.occupancy_behavior_for_node(
+            predictive_map.nodes["office_motion"]
+        )
+        == "sticky"
+    )
     assert predictive_map.zone_occupancy_behavior("office") == "sustained"
     assert predictive_map.zone_occupancy_behavior("hall") == "transient"
 
@@ -197,3 +230,23 @@ def test_zone_neighbors_follow_node_adjacency() -> None:
     assert predictive_map.zone_neighbors("office") == ("hall",)
     assert predictive_map.zone_neighbors("hall") == ("bathroom", "office")
     assert predictive_map.zone_neighbors("missing") == ()
+
+
+def test_transition_timing_overrides_are_strictly_directed() -> None:
+    predictive_map = PredictiveMap.from_mapping(
+        {
+            "nodes": {
+                "entry": {
+                    "adjacent": ["hall"],
+                    "transition_seconds": {"hall": 12},
+                },
+                "hall": {
+                    "adjacent": ["entry"],
+                    "transition_seconds": {"entry": 30},
+                },
+            }
+        }
+    )
+
+    assert predictive_map.transition_seconds_between_nodes("entry", "hall") == 12.0
+    assert predictive_map.transition_seconds_between_nodes("hall", "entry") == 30.0

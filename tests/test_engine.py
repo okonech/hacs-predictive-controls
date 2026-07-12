@@ -13,7 +13,8 @@ def make_map() -> PredictiveMap:
             "nodes": {
                 "entry": {"adjacent": ["hall", "kitchen"]},
                 "hall": {"adjacent": ["entry", "kitchen"]},
-                "kitchen": {"adjacent": ["hall"]},
+                "kitchen": {"adjacent": ["entry", "hall"]},
+                "office": {"adjacent": []},
             }
         }
     )
@@ -82,13 +83,13 @@ def test_engine_does_not_learn_outside_window_or_invalid_transition() -> None:
     engine.observe_node("entry", now)
     outside_window = engine.observe_node("hall", now + timedelta(seconds=31))
     engine.observe_node("kitchen", now + timedelta(seconds=32))
-    invalid_transition = engine.observe_node("entry", now + timedelta(seconds=33))
+    invalid_transition = engine.observe_node("office", now + timedelta(seconds=33))
 
     assert outside_window.learned_transition is None
     assert invalid_transition.learned_transition is None
     assert engine.chain.counts["entry"] == {"hall": 0.0, "kitchen": 0.0}
     assert engine.chain.counts["hall"] == {"entry": 0.0, "kitchen": 1.0}
-    assert engine.chain.counts["kitchen"] == {"hall": 0.0}
+    assert engine.chain.counts["kitchen"] == {"entry": 0.0, "hall": 0.0}
 
 
 def test_engine_learns_interleaved_two_person_paths() -> None:
@@ -112,9 +113,7 @@ def test_engine_learns_interleaved_two_person_paths() -> None:
         "master_bedroom_entrance",
     )
     assert engine.chain.counts["entrance"] == {"kitchen": 1.0, "dining": 0.0}
-    assert engine.chain.counts["top_staircase"] == {
-        "master_bedroom_entrance": 1.0
-    }
+    assert engine.chain.counts["top_staircase"] == {"master_bedroom_entrance": 1.0}
 
 
 def test_engine_ignores_interleaved_false_positive_for_transition_matching() -> None:
@@ -157,3 +156,25 @@ def test_engine_keeps_prediction_none_for_dead_end() -> None:
 
     assert update.prediction is None
     assert engine.probabilities == {}
+
+
+def test_projected_predictions_fire_actions_without_learning_raw_pairs() -> None:
+    engine = PredictiveEngine(make_map(), (make_action(),), timedelta(seconds=30))
+    now = datetime(2026, 6, 6, tzinfo=UTC)
+
+    empty = engine.project_predictions({}, "hall", now)
+    projected = engine.project_predictions(
+        {"hall": 0.2, "kitchen": 0.8},
+        "hall",
+        now + timedelta(seconds=1),
+    )
+
+    assert empty.prediction is None
+    assert projected.learned_transition is None
+    assert projected.prediction is not None
+    assert projected.prediction.node_id == "kitchen"
+    assert projected.prediction.probability == 0.8
+    assert [decision.action.action_id for decision in projected.action_decisions] == [
+        "prelight_kitchen"
+    ]
+    assert engine.chain.counts["hall"]["kitchen"] == 0.0

@@ -41,7 +41,16 @@ def replay_events(
     refresh_before_events: bool = True,
 ) -> ReplayResult:
     steps: list[ReplayStep] = []
-    for event in sorted(events, key=lambda item: item.event_at):
+    for event in sorted(
+        events,
+        key=lambda item: (
+            item.event_at,
+            item.entity_id,
+            item.node_id,
+            item.signal_type,
+            item.state,
+        ),
+    ):
         if refresh_before_events:
             tracker.refresh_active(event.event_at)
         update = tracker.observe(event)
@@ -92,9 +101,7 @@ def replay_summary(result: ReplayResult) -> dict[str, Any]:
         },
         "tracks": [track.zone for track in result.final_diagnostics.tracks],
         "inferred_join_count": len(result.final_diagnostics.inferred_join_slots),
-        "inferred_departure_count": len(
-            result.final_diagnostics.inferred_departures
-        ),
+        "inferred_departure_count": len(result.final_diagnostics.inferred_departures),
     }
 
 
@@ -117,7 +124,18 @@ def history_events_from_states(
         event = event_from_entity(predictive_map, entity_id, state, event_at)
         if event is not None:
             events.append(event)
-    return tuple(sorted(events, key=lambda item: item.event_at))
+    return tuple(
+        sorted(
+            events,
+            key=lambda item: (
+                item.event_at,
+                item.entity_id,
+                item.node_id,
+                item.signal_type,
+                item.state,
+            ),
+        )
+    )
 
 
 def _flatten_history_rows(

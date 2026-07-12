@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .markov import MarkovChain
 from .model import PredictiveMap
 from .occupancy_scoring import (
     CONFIDENCE_STATUSES,
@@ -33,9 +34,10 @@ class ZoneConfidenceEngine(OccupancyTracker):
         self,
         predictive_map: PredictiveMap,
         expected_occupants: int | None = None,
+        chain: MarkovChain | None = None,
     ) -> None:
         config = TrackerConfig(expected_occupants=expected_occupants or 0)
-        super().__init__(predictive_map, config=config)
+        super().__init__(predictive_map, config=config, chain=chain)
 
 
 __all__ = [

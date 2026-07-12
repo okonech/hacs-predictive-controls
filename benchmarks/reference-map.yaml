@@ -1,0 +1,270 @@
+version: 1
+source: sanitized_reference_map
+purpose: Reproducible 16-zone performance fixture for two-occupant inference.
+
+floors:
+  - basement
+  - first_floor
+  - second_floor
+
+zones:
+  entrance_hallway:
+    floor: first_floor
+    role: transition_gate
+    occupancy_behavior: transient
+  bathroom_laundry:
+    floor: first_floor
+    role: room_occupancy
+    occupancy_behavior: sustained
+  dining_room:
+    floor: first_floor
+    role: transition_gate
+    occupancy_behavior: transient
+  kitchen:
+    floor: first_floor
+    role: room_occupancy
+    occupancy_behavior: sustained
+  foyer:
+    floor: first_floor
+    role: transition_gate
+    occupancy_behavior: transient
+  living_room:
+    floor: first_floor
+    role: anchor_sensor
+    occupancy_behavior: sticky
+  staircase_bottom:
+    floor: first_floor
+    role: transition_gate
+    occupancy_behavior: transient
+  guest_bedroom:
+    floor: first_floor
+    role: room_occupancy
+    occupancy_behavior: sustained
+  upstairs_hallway:
+    floor: second_floor
+    role: transition_gate
+    occupancy_behavior: transient
+  upstairs_bathroom:
+    floor: second_floor
+    role: room_occupancy
+    occupancy_behavior: sticky
+  office_a:
+    floor: second_floor
+    role: room_occupancy
+    occupancy_behavior: sustained
+  bedroom_entrance:
+    floor: second_floor
+    role: transition_gate
+    occupancy_behavior: transient
+  bedroom_closet:
+    floor: second_floor
+    role: subzone_occupancy
+    occupancy_behavior: sustained
+  primary_bathroom:
+    floor: second_floor
+    role: room_occupancy
+    occupancy_behavior: sticky
+  office_b:
+    floor: second_floor
+    role: room_occupancy
+    occupancy_behavior: sustained
+  gym:
+    floor: basement
+    role: room_occupancy
+    occupancy_behavior: sustained
+
+nodes:
+  entrance_sensor:
+    floor: first_floor
+    zone: entrance_hallway
+    role: transition_gate
+    entities:
+      motion: binary_sensor.benchmark_entrance_motion
+    adjacent:
+      - bathroom_laundry_sensor
+      - dining_sensor
+      - kitchen_sensor
+    initial_weight: 0.75
+
+  bathroom_laundry_sensor:
+    floor: first_floor
+    zone: bathroom_laundry
+    role: room_occupancy
+    entities:
+      motion: binary_sensor.benchmark_bathroom_laundry_motion
+    adjacent:
+      - entrance_sensor
+    initial_weight: 0.8
+
+  dining_sensor:
+    floor: first_floor
+    zone: dining_room
+    role: transition_gate
+    entities:
+      motion: binary_sensor.benchmark_dining_motion
+    adjacent:
+      - entrance_sensor
+      - kitchen_sensor
+      - living_right_sensor
+      - foyer_sensor
+      - gym_sensor
+    initial_weight: 0.75
+
+  kitchen_sensor:
+    floor: first_floor
+    zone: kitchen
+    role: room_occupancy
+    entities:
+      motion: binary_sensor.benchmark_kitchen_motion
+    adjacent:
+      - entrance_sensor
+      - dining_sensor
+    initial_weight: 0.8
+
+  foyer_sensor:
+    floor: first_floor
+    zone: foyer
+    role: transition_gate
+    entities:
+      motion: binary_sensor.benchmark_foyer_motion
+    adjacent:
+      - dining_sensor
+      - stairs_bottom_sensor
+    initial_weight: 0.85
+
+  living_left_sensor:
+    floor: first_floor
+    zone: living_room
+    role: anchor_sensor
+    entities:
+      target: binary_sensor.benchmark_living_left_target
+      moving_target: binary_sensor.benchmark_living_left_moving
+      still_target: binary_sensor.benchmark_living_left_still
+      zone_3_occupancy: binary_sensor.benchmark_living_left_zone
+    adjacent:
+      - guest_bedroom_sensor
+      - living_right_sensor
+    initial_weight: 0.9
+
+  living_right_sensor:
+    floor: first_floor
+    zone: living_room
+    role: anchor_sensor
+    entities:
+      target: binary_sensor.benchmark_living_right_target
+      moving_target: binary_sensor.benchmark_living_right_moving
+      still_target: binary_sensor.benchmark_living_right_still
+      zone_3_occupancy: binary_sensor.benchmark_living_right_zone
+    adjacent:
+      - dining_sensor
+      - living_left_sensor
+    initial_weight: 0.9
+
+  stairs_bottom_sensor:
+    floor: first_floor
+    zone: staircase_bottom
+    role: transition_gate
+    entities:
+      motion: binary_sensor.benchmark_stairs_bottom_motion
+    adjacent:
+      - foyer_sensor
+      - guest_bedroom_sensor
+      - stairs_top_sensor
+    initial_weight: 0.85
+
+  guest_bedroom_sensor:
+    floor: first_floor
+    zone: guest_bedroom
+    role: room_occupancy
+    entities:
+      motion: binary_sensor.benchmark_guest_bedroom_motion
+    adjacent:
+      - stairs_bottom_sensor
+      - living_left_sensor
+    initial_weight: 0.75
+
+  stairs_top_sensor:
+    floor: second_floor
+    zone: upstairs_hallway
+    role: transition_gate
+    entities:
+      motion: binary_sensor.benchmark_stairs_top_motion
+    adjacent:
+      - stairs_bottom_sensor
+      - upstairs_bathroom_sensor
+      - office_a_sensor
+      - bedroom_entrance_sensor
+      - office_b_sensor
+    initial_weight: 0.85
+
+  upstairs_bathroom_sensor:
+    floor: second_floor
+    zone: upstairs_bathroom
+    role: room_occupancy
+    entities:
+      motion: binary_sensor.benchmark_upstairs_bathroom_motion
+    adjacent:
+      - stairs_top_sensor
+    initial_weight: 0.7
+
+  office_a_sensor:
+    floor: second_floor
+    zone: office_a
+    role: room_occupancy
+    entities:
+      motion: binary_sensor.benchmark_office_a_motion
+    adjacent:
+      - stairs_top_sensor
+    initial_weight: 0.75
+
+  bedroom_entrance_sensor:
+    floor: second_floor
+    zone: bedroom_entrance
+    role: transition_gate
+    entities:
+      motion: binary_sensor.benchmark_bedroom_entrance_motion
+    adjacent:
+      - bedroom_closet_sensor
+      - stairs_top_sensor
+    initial_weight: 0.8
+
+  bedroom_closet_sensor:
+    floor: second_floor
+    zone: bedroom_closet
+    role: subzone_occupancy
+    entities:
+      motion: binary_sensor.benchmark_bedroom_closet_motion
+    adjacent:
+      - bedroom_entrance_sensor
+      - primary_bathroom_sensor
+    initial_weight: 0.8
+
+  primary_bathroom_sensor:
+    floor: second_floor
+    zone: primary_bathroom
+    role: room_occupancy
+    entities:
+      motion: binary_sensor.benchmark_primary_bathroom_motion
+    adjacent:
+      - bedroom_closet_sensor
+    initial_weight: 0.7
+
+  office_b_sensor:
+    floor: second_floor
+    zone: office_b
+    role: room_occupancy
+    entities:
+      motion: binary_sensor.benchmark_office_b_motion
+    adjacent:
+      - stairs_top_sensor
+    initial_weight: 0.75
+
+  gym_sensor:
+    floor: basement
+    zone: gym
+    role: room_occupancy
+    entities:
+      motion: binary_sensor.benchmark_gym_motion
+    adjacent:
+      - dining_sensor
+    initial_weight: 0.75

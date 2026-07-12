@@ -55,7 +55,22 @@ def runtime_automation_summary(
     diagnostics = runtime.confidence.diagnostics
     zone_ids = tuple(runtime.map.zones())
     states = runtime.zone_states
-    prediction_hints = dict(getattr(diagnostics, "prediction_hints", {}))
+    joint_authoritative = bool(getattr(diagnostics, "joint_posterior", ()))
+    prediction_hints = dict(
+        getattr(diagnostics, "joint_prediction_hints", {})
+        if joint_authoritative
+        else getattr(diagnostics, "prediction_hints", {})
+    )
+    joint_marginals = dict(
+        getattr(diagnostics, "joint_occupied_marginals", {})
+        if joint_authoritative
+        else {}
+    )
+    joint_policy_states = dict(
+        getattr(diagnostics, "joint_policy_states", {})
+        if joint_authoritative
+        else {}
+    )
     movement_corridor = tuple(sorted(getattr(diagnostics, "protected_corridor", ())))
     entry_path_plausible_zones_from_diagnostics = _active_plausibility_zones(
         diagnostics,
@@ -80,6 +95,9 @@ def runtime_automation_summary(
             entry_path_plausible_zones_from_diagnostics,
             departed_zones,
             prediction_threshold,
+            joint_marginals.get(zone),
+            joint_policy_states.get(zone),
+            getattr(getattr(runtime, "last_occupancy_event", None), "event_at", None),
         )
         for zone in zone_ids
     }
@@ -106,8 +124,16 @@ def runtime_automation_summary(
     )
     return AutomationSummary(
         expected_inside_count=int(getattr(runtime, "expected_occupants", 0) or 0),
-        probable_inside_count=_track_count(diagnostics, PROBABLE_CONFIDENCE),
-        possible_inside_count=_track_count(diagnostics, POSSIBLE_CONFIDENCE),
+        probable_inside_count=(
+            int(getattr(runtime, "expected_occupants", 0) or 0)
+            if joint_authoritative
+            else _track_count(diagnostics, PROBABLE_CONFIDENCE)
+        ),
+        possible_inside_count=(
+            int(getattr(runtime, "expected_occupants", 0) or 0)
+            if joint_authoritative
+            else _track_count(diagnostics, POSSIBLE_CONFIDENCE)
+        ),
         probable_occupied_zones=probable_occupied_zones,
         possible_occupied_zones=possible_occupied_zones,
         activation_plausible_zones=activation_plausible_zones,
@@ -134,16 +160,33 @@ def _zone_automation_state(
     entry_path_plausible_zones: set[str],
     departed_zones: set[str],
     prediction_threshold: float,
+    joint_marginal: float | None = None,
+    joint_policy_state: Any = None,
+    event_at: datetime | None = None,
 ) -> ZoneAutomationState:
-    confidence = float(getattr(state, "confidence", 0.0) if state is not None else 0.0)
-    status = str(
-        getattr(state, "status", "rejected") if state is not None else "rejected"
-    )
+    if joint_marginal is None:
+        confidence = float(
+            getattr(state, "confidence", 0.0) if state is not None else 0.0
+        )
+        status = str(
+            getattr(state, "status", "rejected") if state is not None else "rejected"
+        )
+    else:
+        confidence = float(joint_marginal)
+        status = _joint_status(confidence)
     probable_occupancy = status in PROBABLE_STATUSES
     possible_occupancy = status in POSSIBLE_STATUSES
     prelight_plausible = prediction_probability >= prediction_threshold
-    keep_on = possible_occupancy and zone not in departed_zones
-    activation_plausible = zone in activation_plausible_zones
+    if joint_policy_state is None:
+        keep_on = possible_occupancy and zone not in departed_zones
+        activation_plausible = zone in activation_plausible_zones
+    else:
+        keep_on = bool(getattr(joint_policy_state, "keep_on", False))
+        expires_at = getattr(joint_policy_state, "activation_expires_at", None)
+        activation_plausible = bool(
+            isinstance(expires_at, datetime)
+            and (not isinstance(event_at, datetime) or expires_at > event_at)
+        )
     diagnostic_entry_path_plausible = zone in entry_path_plausible_zones
     return ZoneAutomationState(
         zone=zone,
@@ -219,3 +262,15 @@ def _explanation(
 
 def _label(zone: str) -> str:
     return zone.replace("_", " ").title()
+
+
+def _joint_status(confidence: float) -> str:
+    if confidence >= 0.85:
+        return "confirmed"
+    if confidence >= PROBABLE_CONFIDENCE:
+        return "probable"
+    if confidence >= POSSIBLE_CONFIDENCE:
+        return "possible"
+    if confidence > 0.0:
+        return "suspect"
+    return "rejected"

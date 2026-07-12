@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from custom_components.predictive_controls.confidence import ZoneConfidenceEngine
 from custom_components.predictive_controls.events import OccupancyEvent
 from custom_components.predictive_controls.model import PredictiveMap
@@ -49,7 +51,7 @@ def event(zone: str, state: str, event_at: datetime) -> OccupancyEvent:
 
 
 def test_replay_events_applies_sorted_trace_and_snapshots_states() -> None:
-    tracker = ZoneConfidenceEngine(make_map())
+    tracker = ZoneConfidenceEngine(make_map(), expected_occupants=1)
     now = datetime(2026, 6, 7, 12, tzinfo=UTC)
 
     result = replay_events(
@@ -62,14 +64,14 @@ def test_replay_events_applies_sorted_trace_and_snapshots_states() -> None:
 
     assert len(result.steps) == 2
     assert result.steps[0].event.state == "on"
-    assert result.steps[0].zone_states["office"].status == "probable"
-    assert result.steps[0].diagnostics.expected_occupants == 0
+    assert result.steps[0].zone_states["office"].status == "confirmed"
+    assert result.steps[0].diagnostics.expected_occupants == 1
     assert result.final_states["office"].status == "possible"
-    assert result.final_diagnostics.expected_occupants == 0
+    assert result.final_diagnostics.expected_occupants == 1
 
 
 def test_replay_events_can_skip_refresh_between_events() -> None:
-    tracker = ZoneConfidenceEngine(make_map())
+    tracker = ZoneConfidenceEngine(make_map(), expected_occupants=1)
     now = datetime(2026, 6, 7, 12, tzinfo=UTC)
 
     result = replay_events(
@@ -78,7 +80,7 @@ def test_replay_events_can_skip_refresh_between_events() -> None:
         refresh_before_events=False,
     )
 
-    assert result.final_states["office"].confidence == 0.432
+    assert result.final_states["office"].confidence == pytest.approx(0.5102389078498295)
 
 
 def test_history_events_from_states_imports_home_assistant_history_rows() -> None:
@@ -122,7 +124,7 @@ def test_history_events_from_states_imports_home_assistant_history_rows() -> Non
 
 
 def test_replay_history_states_imports_and_summarizes_real_history_shape() -> None:
-    tracker = ZoneConfidenceEngine(make_map())
+    tracker = ZoneConfidenceEngine(make_map(), expected_occupants=1)
     payload = [
         [
             {
@@ -143,6 +145,6 @@ def test_replay_history_states_imports_and_summarizes_real_history_shape() -> No
 
     assert summary["event_count"] == 2
     assert summary["final_zones"]["office"]["status"] == "possible"
-    assert summary["tracks"] == ["office"]
+    assert summary["tracks"] == []
     assert summary["inferred_join_count"] == 0
     assert summary["inferred_departure_count"] == 0

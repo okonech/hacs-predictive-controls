@@ -70,6 +70,44 @@ class PredictiveEngine:
             action_decisions=action_decisions,
         )
 
+    def project_predictions(
+        self,
+        probabilities: dict[str, float],
+        source_node: str,
+        now: datetime,
+    ) -> EngineUpdate:
+        """Project posterior-consistent probabilities without raw-event learning."""
+
+        self.last_source_node = source_node
+        self.last_event_at = now
+        self.probabilities = dict(sorted(probabilities.items()))
+        self.last_prediction = (
+            None
+            if not self.probabilities
+            else Prediction(
+                node_id=max(
+                    self.probabilities,
+                    key=lambda node_id: (self.probabilities[node_id], node_id),
+                ),
+                probability=max(self.probabilities.values()),
+            )
+        )
+        action_decisions = evaluate_actions(
+            self.actions,
+            self.probabilities,
+            source_node,
+            self.last_fired,
+            now,
+        )
+        for decision in action_decisions:
+            self.last_fired[decision.action.action_id] = now
+        return EngineUpdate(
+            source_node=source_node,
+            learned_transition=None,
+            prediction=self.last_prediction,
+            action_decisions=action_decisions,
+        )
+
     def _learn_transition(
         self, node_id: str, now: datetime
     ) -> tuple[str, str] | None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -81,6 +82,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         transition_store=transition_store,
         transition_counts=stored_transitions.get("transition_counts"),
     )
+    runtime.restore_stored_state(stored_transitions, datetime.now().astimezone())
     runtime.start()
 
     domain_data[entry.entry_id] = runtime

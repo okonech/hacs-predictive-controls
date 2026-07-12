@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 
 def runtime_status_payload(runtime: Any) -> dict[str, Any]:
     """Serialize live runtime status for diagnostics and WebSocket clients."""
 
-    return {
+    payload = {
         "zone_states": {
             zone: zone_state_payload(state)
             for zone, state in runtime.zone_states.items()
@@ -29,6 +30,10 @@ def runtime_status_payload(runtime: Any) -> dict[str, Any]:
             runtime.confidence.diagnostics
         ),
     }
+    latency_metrics = getattr(runtime, "latency_metrics", None)
+    if latency_metrics is not None:
+        payload["latency"] = latency_metrics
+    return payload
 
 
 def zone_state_payload(state: Any) -> dict[str, Any]:
@@ -52,7 +57,7 @@ def zone_state_payload(state: Any) -> dict[str, Any]:
 
 
 def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
-    return {
+    payload = {
         "expected_occupants": diagnostics.expected_occupants,
         "protected_tracks": list(diagnostics.protected_tracks),
         "protected_corridor": list(diagnostics.protected_corridor),
@@ -75,6 +80,176 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
         "dwell_seconds": diagnostics.dwell_seconds,
         "tracks": [track_payload(track) for track in diagnostics.tracks],
     }
+    joint_posterior = getattr(diagnostics, "joint_posterior", ())
+    joint_provenance = getattr(diagnostics, "joint_last_provenance", None)
+    if joint_posterior or joint_provenance is not None:
+        payload["joint"] = {
+            "hypotheses": [
+                {
+                    "probability": math.exp(hypothesis.log_probability),
+                    "positions": [
+                        {
+                            "zone": position.zone,
+                            "incoming_zone": position.incoming_zone,
+                            "entered_at": position.entered_at.isoformat()
+                            if position.entered_at is not None
+                            else None,
+                        }
+                        for position in hypothesis.key.positions
+                    ],
+                }
+                for hypothesis in joint_posterior
+            ],
+            "occupied_marginals": getattr(
+                diagnostics,
+                "joint_occupied_marginals",
+                {},
+            ),
+            "count_marginals": getattr(diagnostics, "joint_count_marginals", {}),
+            "posterior_entropy": getattr(
+                diagnostics,
+                "joint_posterior_entropy",
+                0.0,
+            ),
+            "pruned_probability": getattr(
+                diagnostics,
+                "joint_pruned_probability",
+                0.0,
+            ),
+            "performance": getattr(diagnostics, "joint_performance", {}),
+            "requested_occupants": getattr(
+                diagnostics,
+                "joint_requested_occupants",
+                diagnostics.expected_occupants,
+            ),
+            "unsupported_count": getattr(
+                diagnostics,
+                "joint_unsupported_count",
+                None,
+            ),
+            "policy": {
+                zone: {
+                    "keep_on": state.keep_on,
+                    "activation_expires_at": state.activation_expires_at.isoformat()
+                    if state.activation_expires_at is not None
+                    else None,
+                    "last_trusted_at": state.last_trusted_at.isoformat()
+                    if state.last_trusted_at is not None
+                    else None,
+                    "last_release_cause": None
+                    if state.last_release_cause is None
+                    else state.last_release_cause.value,
+                    "recovery_eligible": state.recovery_eligible,
+                    "reason": state.reason,
+                    "evidence_ids": list(state.evidence_ids),
+                }
+                for zone, state in getattr(
+                    diagnostics,
+                    "joint_policy_states",
+                    {},
+                ).items()
+            },
+            "policy_decisions": [
+                {
+                    "zone": decision.zone,
+                    "action": decision.action,
+                    "accepted": decision.accepted,
+                    "reason_code": decision.reason_code,
+                    "gate_values": dict(decision.gate_values),
+                    "evidence_ids": list(decision.evidence_ids),
+                }
+                for decision in getattr(
+                    diagnostics,
+                    "joint_policy_decisions",
+                    (),
+                )
+            ],
+            "movement_evidence": [
+                {
+                    "path_key": list(evidence.path_key),
+                    "origin_zone": evidence.origin_zone,
+                    "source_zone": evidence.source_zone,
+                    "target_zone": evidence.target_zone,
+                    "coherent_probability": evidence.coherent_probability,
+                    "source_node_id": evidence.source_node_id,
+                    "target_node_id": evidence.target_node_id,
+                    "evidence_ids": list(evidence.evidence_ids),
+                    "disposition": evidence.disposition,
+                }
+                for evidence in getattr(
+                    diagnostics,
+                    "joint_movement_evidence",
+                    (),
+                )
+            ],
+            "directional_contexts": [
+                {
+                    "positions": [position.zone for position in key.positions],
+                    "contexts": [
+                        {
+                            "origin_zone": context.origin_zone,
+                            "previous_node_id": context.previous_node_id,
+                            "current_node_id": context.current_node_id,
+                            "started_at": context.started_at.isoformat()
+                            if context.started_at is not None
+                            else None,
+                            "last_event_at": context.last_event_at.isoformat()
+                            if context.last_event_at is not None
+                            else None,
+                            "evidence_ids": list(context.evidence_ids),
+                            "probability": math.exp(context.log_probability),
+                            "disposition": context.disposition,
+                        }
+                        for context in contexts
+                    ],
+                }
+                for key, contexts in getattr(
+                    diagnostics,
+                    "joint_directional_contexts",
+                    {},
+                ).items()
+            ],
+            "prediction_leases": [
+                {
+                    "path_key": list(lease.path_key),
+                    "target_zone": lease.target_zone,
+                    "probability": lease.probability,
+                    "expires_at": lease.expires_at.isoformat(),
+                    "reason": lease.reason,
+                }
+                for lease in getattr(diagnostics, "joint_prediction_leases", ())
+            ],
+            "prediction_hints": getattr(
+                diagnostics,
+                "joint_prediction_hints",
+                {},
+            ),
+            "last_provenance": None
+            if joint_provenance is None
+            else {
+                "event_id": joint_provenance.event_id,
+                "evidence_episode_id": joint_provenance.evidence_episode_id,
+                "entity_id": joint_provenance.entity_id,
+                "node_id": joint_provenance.node_id,
+                "zone": joint_provenance.zone,
+                "state": joint_provenance.state,
+                "signal_type": joint_provenance.signal_type,
+                "reliability": joint_provenance.reliability,
+                "log_likelihood_by_count": list(
+                    joint_provenance.log_likelihood_by_count
+                ),
+                "disposition": joint_provenance.disposition,
+            },
+            "restore": {
+                "status": getattr(
+                    diagnostics,
+                    "joint_restore_status",
+                    "not_attempted",
+                ),
+                "reason": getattr(diagnostics, "joint_restore_reason", None),
+            },
+        }
+    return payload
 
 
 def track_payload(track: Any) -> dict[str, Any]:

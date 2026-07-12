@@ -104,7 +104,7 @@ def passive_decay_half_life_seconds(occupancy_behavior: str) -> float:
     return {
         "transient": 90.0,
         "ambiguous": 300.0,
-        "sustained": 900.0,
+        "sustained": 300.0,
         "sticky": 1800.0,
     }.get(occupancy_behavior, 600.0)
 
@@ -136,7 +136,7 @@ def clear_factor_for_event(event: OccupancyEvent) -> float:
     if event.occupancy_behavior == "sticky":
         return 0.85 if event.signal_type == "still_target" else 0.80
     if event.occupancy_behavior == "sustained":
-        return 0.70
+        return 1.0
     if event.role == "transition_gate":
         return 0.25
     if event.role == "ambiguous_open_plan":
@@ -144,7 +144,7 @@ def clear_factor_for_event(event: OccupancyEvent) -> float:
     if event.role == "anchor_sensor":
         return 0.80 if event.signal_type == "still_target" else 0.65
     if event.role in {"room_occupancy", "subzone_occupancy"}:
-        return 0.70
+        return 1.0
     return 0.60
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -112,10 +113,10 @@ class NodeConfig:
                     f"Node {node_id!r} transition_seconds for {target_id!r} "
                     "must be numeric"
                 ) from exc
-            if parsed_seconds <= 0:
+            if not math.isfinite(parsed_seconds) or parsed_seconds <= 0:
                 raise PredictiveMapError(
                     f"Node {node_id!r} transition_seconds for {target_id!r} "
-                    "must be positive"
+                    "must be finite and positive"
                 )
             parsed_transition_seconds[target_id] = parsed_seconds
 
@@ -221,6 +222,18 @@ class PredictiveMap:
             joined = ", ".join(unknown_targets)
             raise PredictiveMapError(f"Adjacent nodes are not defined: {joined}")
 
+        nonreciprocal_edges = sorted(
+            (node.node_id, target)
+            for node in nodes.values()
+            for target in node.adjacent
+            if node.node_id not in nodes[target].adjacent
+        )
+        if nonreciprocal_edges:
+            source, target = nonreciprocal_edges[0]
+            raise PredictiveMapError(
+                f"Physical adjacency must be reciprocal: {source} -> {target}"
+            )
+
         unknown_timed_targets = sorted(
             {
                 target
@@ -234,6 +247,30 @@ class PredictiveMap:
             raise PredictiveMapError(
                 f"Transition timing targets are not defined: {joined}"
             )
+
+        timing_without_edges = sorted(
+            (node.node_id, target)
+            for node in nodes.values()
+            for target in node.transition_seconds
+            if target not in node.adjacent
+        )
+        if timing_without_edges:
+            source, target = timing_without_edges[0]
+            raise PredictiveMapError(
+                f"Transition timing requires physical adjacency: {source} -> {target}"
+            )
+
+        binding_owners: dict[str, tuple[str, str]] = {}
+        duplicate_bindings: set[str] = set()
+        for node in nodes.values():
+            for signal_type, entity_id in node.entities.items():
+                owner = (node.node_id, signal_type)
+                if entity_id in binding_owners and binding_owners[entity_id] != owner:
+                    duplicate_bindings.add(entity_id)
+                binding_owners[entity_id] = owner
+        if duplicate_bindings:
+            entity_id = sorted(duplicate_bindings)[0]
+            raise PredictiveMapError(f"Entity binding must be unique: {entity_id}")
 
         return cls(nodes=nodes, zone_configs=zone_configs)
 
@@ -268,14 +305,11 @@ class PredictiveMap:
         self, source_node_id: str, target_node_id: str
     ) -> float | None:
         source = self.nodes.get(source_node_id)
-        if source is not None and target_node_id in source.transition_seconds:
-            return source.transition_seconds[target_node_id]
-
-        target = self.nodes.get(target_node_id)
-        if target is not None and source_node_id in target.transition_seconds:
-            return target.transition_seconds[source_node_id]
-
-        return None
+        return (
+            None
+            if source is None
+            else source.transition_seconds.get(target_node_id)
+        )
 
     def zone_neighbors(self, zone: str) -> tuple[str, ...]:
         neighbors: set[str] = set()

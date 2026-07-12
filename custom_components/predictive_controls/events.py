@@ -27,10 +27,12 @@ def event_from_entity(
     entity_id: str,
     state: str,
     event_at: datetime,
+    *,
+    allow_unsupported_state: bool = False,
 ) -> OccupancyEvent | None:
     """Normalize one mapped entity state change."""
 
-    if state not in {"on", "off"}:
+    if state not in {"on", "off"} and not allow_unsupported_state:
         return None
 
     binding = predictive_map.entity_binding_for_entity(entity_id)

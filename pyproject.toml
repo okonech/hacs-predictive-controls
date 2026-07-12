@@ -1,6 +1,6 @@
 [project]
 name = "hacs-predictive-controls"
-version = "0.1.16"
+version = "0.1.17"
 description = "Home Assistant custom integration for Markov-chain predictive controls"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -18,24 +18,11 @@ test = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+  "scenario: timestamped acceptance, remediation, restart, or runtime lifecycle scenario",
+]
 addopts = [
-  "--cov=custom_components.predictive_controls.markov",
-  "--cov=custom_components.predictive_controls.engine",
-  "--cov=custom_components.predictive_controls.automation_summary",
-  "--cov=custom_components.predictive_controls.events",
-  "--cov=custom_components.predictive_controls.confidence",
-  "--cov=custom_components.predictive_controls.occupancy_graph",
-  "--cov=custom_components.predictive_controls.occupancy_dwell",
-  "--cov=custom_components.predictive_controls.occupancy_replay",
-  "--cov=custom_components.predictive_controls.occupancy_scoring",
-  "--cov=custom_components.predictive_controls.occupancy_settings",
-  "--cov=custom_components.predictive_controls.occupancy_tracker",
-  "--cov=custom_components.predictive_controls.status",
-  "--cov=custom_components.predictive_controls.model",
-  "--cov=custom_components.predictive_controls.entity_catalog",
-  "--cov=custom_components.predictive_controls.entity_registry",
-  "--cov=custom_components.predictive_controls.actions",
-  "--cov=custom_components.predictive_controls.yaml_config",
+  "--cov=custom_components.predictive_controls",
   "--cov-report=term-missing",
   "--cov-fail-under=100",
 ]

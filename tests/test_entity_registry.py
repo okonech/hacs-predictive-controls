@@ -170,9 +170,7 @@ def test_async_cleanup_stale_entities_removes_only_obsolete_rows(
     )
     install_fake_entity_registry(monkeypatch, registry)
 
-    result = asyncio.run(
-        async_cleanup_stale_entities(object(), "entry123", make_map())
-    )
+    result = asyncio.run(async_cleanup_stale_entities(object(), "entry123", make_map()))
 
     assert registry.removed == [
         "sensor.living_room_confidence",
@@ -192,7 +190,7 @@ def test_async_cleanup_stale_entities_removes_only_obsolete_rows(
                 "unique_id": "entry123_entry_probability",
                 "name": "Entry Prediction Probability",
                 "original_name": "Entry Prediction Probability",
-            }
+            },
         ],
         "stale_count": 2,
         "stale_entities": [
@@ -207,7 +205,7 @@ def test_async_cleanup_stale_entities_removes_only_obsolete_rows(
                 "unique_id": "entry123_entry_probability",
                 "name": "Entry Prediction Probability",
                 "original_name": "Entry Prediction Probability",
-            }
+            },
         ],
         "expected_count": len(expected_entity_unique_ids("entry123", make_map())),
         "dry_run": False,

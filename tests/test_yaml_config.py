@@ -34,4 +34,3 @@ def test_dump_yaml_document_preserves_key_order() -> None:
 
     assert dumped.startswith("nodes:\n")
     assert "adjacent:\n    - hall" in dumped
-

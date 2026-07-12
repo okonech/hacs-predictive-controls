@@ -73,8 +73,9 @@ def _validate_options(data: dict[str, Any]) -> None:
     threshold = float(data[CONF_PREDICTION_THRESHOLD])
     if not 0 <= threshold <= 1:
         raise ValueError("Prediction threshold must be between 0 and 1")
-    if int(data[CONF_EXPECTED_OCCUPANTS]) < 0:
-        raise ValueError("Expected occupants must be zero or positive")
+    expected_occupants = int(data[CONF_EXPECTED_OCCUPANTS])
+    if not 0 <= expected_occupants <= 2:
+        raise ValueError("Expected occupants must be between zero and two")
     expected_entity = str(data.get(CONF_EXPECTED_OCCUPANTS_ENTITY, "")).strip()
     if expected_entity and "." not in expected_entity:
         raise ValueError("Expected occupants entity must be an entity id")

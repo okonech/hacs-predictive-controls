@@ -30,6 +30,7 @@ class FakeRuntime:
     probabilities: dict[str, float]
     transition_counts: dict[str, dict[str, float]]
     confidence: object
+    latency_metrics: object | None = None
 
 
 @dataclass(frozen=True)
@@ -174,6 +175,7 @@ def test_runtime_status_payload_serializes_prediction_and_without_prediction() -
         probabilities={"dining_room": 0.72},
         transition_counts={"living_left": {"dining_room": 4.0}},
         confidence=FakeConfidence(make_diagnostics()),
+        latency_metrics={"p95_ms": 1.5},
     )
 
     payload = runtime_status_payload(runtime)
@@ -187,6 +189,7 @@ def test_runtime_status_payload_serializes_prediction_and_without_prediction() -
     }
     assert payload["probabilities"] == {"dining_room": 0.72}
     assert payload["transition_counts"] == {"living_left": {"dining_room": 4.0}}
+    assert payload["latency"] == {"p95_ms": 1.5}
     assert payload["expected_occupants"] == 0
     assert payload["occupancy_diagnostics"] == {
         "expected_occupants": 2,
@@ -231,9 +234,7 @@ def test_runtime_status_payload_serializes_prediction_and_without_prediction() -
             }
         ],
         "prediction_hints": {"kitchen": 0.72},
-        "dwell_seconds": {
-            "living_room": {"samples": 2, "average_seconds": 1800.0}
-        },
+        "dwell_seconds": {"living_room": {"samples": 2, "average_seconds": 1800.0}},
         "tracks": [
             {
                 "track_id": "track_1",

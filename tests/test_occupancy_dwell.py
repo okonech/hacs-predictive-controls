@@ -29,7 +29,7 @@ def test_dwell_model_uses_default_until_enough_samples() -> None:
     assert model.stats == {"office": DwellStats(samples=1, average_seconds=3600)}
     assert model.average_seconds("office") is None
     assert model.average_seconds("missing") is None
-    assert model.passive_half_life_seconds("office", "sustained") == 900
+    assert model.passive_half_life_seconds("office", "sustained") == 300
 
 
 def test_dwell_model_extends_passive_half_life_for_long_stays() -> None:
@@ -40,6 +40,4 @@ def test_dwell_model_extends_passive_half_life_for_long_stays() -> None:
 
     assert model.average_seconds("office") == 5400
     assert model.passive_half_life_seconds("office", "sustained") == 2700
-    assert model.payload() == {
-        "office": {"samples": 2, "average_seconds": 5400.0}
-    }
+    assert model.payload() == {"office": {"samples": 2, "average_seconds": 5400.0}}

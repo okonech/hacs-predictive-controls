@@ -133,13 +133,16 @@ def test_evaluate_actions_respects_probability_source_and_cooldown() -> None:
 
     assert evaluate_actions((action,), {"kitchen": 0.69}, "hall", {}, now) == ()
     assert evaluate_actions((action,), {"kitchen": 0.8}, "entry", {}, now) == ()
-    assert evaluate_actions(
-        (action,),
-        {"kitchen": 0.8},
-        "hall",
-        {"prelight": now - timedelta(seconds=9)},
-        now,
-    ) == ()
+    assert (
+        evaluate_actions(
+            (action,),
+            {"kitchen": 0.8},
+            "hall",
+            {"prelight": now - timedelta(seconds=9)},
+            now,
+        )
+        == ()
+    )
 
     decisions = evaluate_actions(
         (action,),
