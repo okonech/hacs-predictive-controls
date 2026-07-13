@@ -342,9 +342,9 @@ def test_policy_accepts_supported_adjacent_arrival_and_audits_context() -> None:
     graph = ZoneGraph.from_map(make_map())
     policy = AutomationPolicy(graph)
     update = make_update(
-        previous={"hall": 0.95, "office": 0.05},
-        current={"hall": 0.3638, "office": 0.6362},
-        movement={"hall": ("office", 0.4348)},
+        previous={"hall": 0.9493315610505566, "office": 0.0002950603962558},
+        current={"hall": 0.1722022184984167, "office": 0.8277977815015833},
+        movement={"hall": ("office", 0.2922710370286617)},
         event_id="office-entrance-motion",
         zone="office",
         entity_id="binary_sensor.office_entrance_motion",
@@ -361,12 +361,16 @@ def test_policy_accepts_supported_adjacent_arrival_and_audits_context() -> None:
         if entry.decision.zone == "office" and entry.decision.action == "activate"
     )
     assert activation.decision.reason_code == "graph_supported_arrival"
-    assert activation.decision.gate_values["movement_threshold"] == 0.4
     assert activation.context is not None
     context = policy_audit_context_payload(activation.context)
     assert context is not None
     assert context["previous_occupied_marginals"] == pytest.approx(
-        {"garage": 0.0, "hall": 0.95, "kitchen": 0.0, "office": 0.05}
+        {
+            "garage": 0.0,
+            "hall": 0.9493315610505566,
+            "kitchen": 0.0,
+            "office": 0.0002950603962558,
+        }
     )
     assert context["occupied_marginals"] == update.occupied_marginals
     count_marginals = cast(dict[str, object], context["count_marginals"])

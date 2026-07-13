@@ -26,7 +26,6 @@ from .policy_audit import (
 
 ACTIVATION_OCCUPIED_THRESHOLD = 0.60
 ACTIVATION_DELTA_THRESHOLD = 0.20
-ACTIVATION_MOVEMENT_THRESHOLD = 0.40
 ACTIVATION_SOURCE_OCCUPIED_THRESHOLD = 0.10
 GRAPH_RELEASE_OCCUPIED_THRESHOLD = 0.20
 GRAPH_RELEASE_MOVEMENT_THRESHOLD = 0.85
@@ -519,7 +518,7 @@ class AutomationPolicy:
             else previous_marginals.get(strongest_arrival.source_zone, 0.0)
         )
         graph_arrival_supported = (
-            movement_in >= ACTIVATION_MOVEMENT_THRESHOLD
+            strongest_arrival is not None
             and source_prior >= ACTIVATION_SOURCE_OCCUPIED_THRESHOLD
         )
         prior_unlocated = _unlocated_probability(update.previous)
@@ -565,7 +564,6 @@ class AutomationPolicy:
             "increase": increase,
             "increase_threshold": ACTIVATION_DELTA_THRESHOLD,
             "movement_in": movement_in,
-            "movement_threshold": ACTIVATION_MOVEMENT_THRESHOLD,
             "source_prior": source_prior,
             "source_threshold": ACTIVATION_SOURCE_OCCUPIED_THRESHOLD,
             "graph_arrival_supported": graph_arrival_supported,

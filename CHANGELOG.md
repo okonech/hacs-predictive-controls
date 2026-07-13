@@ -13,10 +13,10 @@
 
 ### Fixed
 
-- Lowered the named coherent adjacent-movement activation gate from `0.50` to
-	`0.40`. This admits supported room arrivals that already pass the `0.60`
-	occupied-marginal and `0.20` increase gates, without changing conservative
-	release thresholds.
+- Stopped treating normalized coherent movement mass as an absolute activation
+	gate. Fresh graph-valid arrivals now activate when the source prior and the
+	existing `0.60` occupied-marginal and `0.20` increase gates pass, avoiding
+	missed arrivals when valid joint alternatives dilute one path below `0.40`.
 - Retained complete observation context with each policy audit event using
 	lossless compressed JSON. Audit history is now FIFO-bounded to 12 hours, 8,192
 	decisions, and 12 MiB of compressed context, with actual usage and coverage in
