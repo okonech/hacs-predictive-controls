@@ -152,8 +152,9 @@ activation plausible.
 The three automation signals are independent:
 
 - `activation_plausible` is a short pulse authorizing a fresh local turn-on;
-- `keep_on` is a conservative latch released only by sufficiently strong
-  departure/relocation evidence or an authoritative reset/count of zero;
+- `keep_on` is a conservative latch released by sufficiently strong
+  departure/relocation evidence, an authoritative reset/count of zero, or a
+  provisional low-confidence fallback;
 - `prelight_plausible` is a time-bounded prediction lease and is never occupancy
   evidence.
 
@@ -178,6 +179,17 @@ Room automations should normally turn on from zone `activation_plausible`, turn
 off when zone `keep_on` clears, and optionally soft pre-light from zone
 `prelight_plausible`. Raw entities remain inputs and diagnostics, not the
 recommended automation contract.
+
+Graph-confirmed movement remains the primary `keep_on` release path. A latch is
+released provisionally only when all of the following remain true during live
+evaluation: the zone occupied marginal is at most `0.10`, at least 15 minutes
+have elapsed since trusted local occupancy, and no fresh or sustained positive
+local evidence is active. The 15-minute grace matches the observation
+correlation horizon, while `0.10` matches the existing relocation-origin
+threshold. Provisional releases are recovery eligible, so trusted local evidence
+can immediately emit a new activation pulse if the release was wrong. Snapshot
+bootstrap never emits this release; normal observations and the five-second
+policy evaluation do.
 
 ## Entities
 
@@ -414,6 +426,13 @@ oldest/newest retained decision timestamps so diagnostics state their actual
 coverage.
 
 ## Development
+
+For every diagnosed live incident, add a permanent regression containing the
+observed event order, timing, posterior/gate values, and expected public
+automation output. Establish that the test fails for the original behavior,
+then make the smallest generic predictor change that passes it. Prefer
+assertions on `activation_plausible`, `keep_on`, or `prelight_plausible` over
+room-specific automation logic.
 
 ```bash
 python -m venv .venv

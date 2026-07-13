@@ -339,7 +339,15 @@ class OccupancyTracker:
         return ()
 
     def expire_transient_state(self, now: datetime) -> bool:
-        policy_changed = self._joint_policy.expire(now)
+        policy_changed = self._joint_policy.expire(
+            now,
+            None
+            if self._joint_filter is None
+            else self._joint_filter.occupied_marginals,
+            None
+            if self._joint_filter is None
+            else self._joint_filter.active_positive_evidence(now),
+        )
         prediction_changed = self._joint_predictions.expire(now)
         return policy_changed or prediction_changed
 
@@ -438,7 +446,11 @@ class OccupancyTracker:
         assert self._joint_filter is not None
         updates = self._joint_filter.bootstrap(events, cold_start=cold_start)
         for update in updates:
-            self._joint_policy.apply(update, emit_activation=False)
+            self._joint_policy.apply(
+                update,
+                emit_activation=False,
+                allow_provisional_release=False,
+            )
 
     def occupancy_store_data(
         self,

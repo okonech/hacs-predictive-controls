@@ -25,6 +25,7 @@ from custom_components.predictive_controls.model import PredictiveMap
 from custom_components.predictive_controls.occupancy_persistence import (
     restore_occupancy_state,
 )
+from custom_components.predictive_controls.occupancy_state import ZonePolicyState
 from custom_components.predictive_controls.status import tracker_diagnostics_payload
 
 NOW = datetime(2026, 7, 12, 12, tzinfo=UTC)
@@ -313,3 +314,32 @@ def test_s28_entity_contract_is_stable_for_joint_policy_projection() -> None:
         and isinstance(zone.prelight_plausible, bool)
         for zone in summary.zones.values()
     )
+
+
+def test_s29_provisional_release_clears_public_keep_on_edge() -> None:
+    predictive_map = make_map()
+    tracker = ZoneConfidenceEngine(predictive_map, expected_occupants=1)
+    hall_motion = event("hall", 0)
+    tracker.observe(hall_motion)
+    assert tracker.diagnostics.joint_occupied_marginals["office"] <= 0.10
+    tracker._joint_policy.restore_states(  # noqa: SLF001
+        {
+            zone: ZonePolicyState(
+                keep_on=zone == "office",
+                last_trusted_at=NOW - timedelta(minutes=50)
+                if zone == "office"
+                else None,
+            )
+            for zone in predictive_map.zones()
+        }
+    )
+    before = public_snapshot(tracker, predictive_map, hall_motion)
+
+    assert tracker.expire_transient_state(NOW)
+
+    after = public_snapshot(tracker, predictive_map, hall_motion)
+    assert before.zones["office"].keep_on
+    assert not after.zones["office"].keep_on
+    state = tracker.diagnostics.joint_policy_states["office"]
+    assert state.last_release_cause == "provisional_false_off"
+    assert state.recovery_eligible

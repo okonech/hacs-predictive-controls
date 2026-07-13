@@ -371,6 +371,13 @@ configured coherent path probability. The path evidence carries its own
 origin, so same-room partial departures and shared corridors cannot release the
 wrong latch. Count reduction and reset remain direct authoritative releases.
 
+When coherent departure evidence is missing, policy MAY release a latch as
+`PROVISIONAL_FALSE_OFF` only after the occupied marginal remains at or below the
+relocation-origin threshold for the full observation-correlation horizon and no
+fresh or sustained positive local evidence is active. This check runs during
+live observations and periodic policy evaluation, never during bootstrap
+replay. The resulting state is recovery eligible as defined above.
+
 Every policy evaluation returns a structured decision, including rejected
 decisions:
 

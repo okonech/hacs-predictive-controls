@@ -19,6 +19,7 @@ from custom_components.predictive_controls.occupancy_state import (
     MovementEvidence,
     ObservationProvenance,
     PositionState,
+    PositiveEvidence,
     Posterior,
     ZonePolicyState,
     canonical_hypothesis,
@@ -83,6 +84,128 @@ def test_policy_scenario_sensor_flap_keeps_latch_and_activation_expires() -> Non
     assert policy.expire(NOW + timedelta(seconds=7))
     assert not policy.activation_plausible("office", NOW + timedelta(seconds=7))
     assert policy.states["office"].keep_on
+
+
+def test_policy_provisionally_releases_stale_low_confidence_latch() -> None:
+    graph = ZoneGraph.from_map(make_map())
+    policy = AutomationPolicy(graph)
+    policy.restore_states(
+        {
+            zone: ZonePolicyState(
+                keep_on=zone == "office",
+                last_trusted_at=NOW if zone == "office" else None,
+                reason="graph-supported local arrival"
+                if zone == "office"
+                else "no trusted occupancy",
+            )
+            for zone in graph.zones()
+        }
+    )
+
+    assert not policy.expire(
+        NOW + timedelta(minutes=14),
+        {"office": 0.0862},
+    )
+    assert policy.states["office"].keep_on
+    assert policy.expire(
+        NOW + timedelta(minutes=50),
+        {"office": 0.0862},
+    )
+
+    state = policy.states["office"]
+    assert not state.keep_on
+    assert state.last_release_cause == "provisional_false_off"
+    assert state.recovery_eligible
+    assert state.reason == "sustained low occupancy without active local evidence"
+    decision = policy.policy_audit[-1]
+    assert decision.source == "policy_expiry"
+    assert decision.decision.reason_code == "provisional_false_off"
+    assert decision.decision.gate_values == {
+        "occupied_marginal": 0.0862,
+        "occupied_threshold": 0.1,
+        "seconds_since_trusted": 3000.0,
+        "grace_seconds": 900.0,
+        "active_positive_episode_count": 0.0,
+    }
+
+
+def test_policy_provisional_release_requires_low_confidence_and_no_local_evidence() -> (
+    None
+):
+    predictive_map = make_map()
+    graph = ZoneGraph.from_map(predictive_map)
+    high_confidence = AutomationPolicy(graph)
+    high_confidence.restore_states(
+        {
+            zone: ZonePolicyState(
+                keep_on=zone == "office",
+                last_trusted_at=NOW if zone == "office" else None,
+            )
+            for zone in graph.zones()
+        }
+    )
+
+    assert not high_confidence.expire(
+        NOW + timedelta(minutes=50),
+        {"office": 0.1001},
+    )
+    assert high_confidence.states["office"].keep_on
+
+    occupancy_filter = JointOccupancyFilter(predictive_map, 1, NOW)
+    active_evidence = AutomationPolicy(graph)
+    active_evidence.apply(
+        occupancy_filter.observe(event("office", NOW + timedelta(seconds=1)))
+    )
+
+    assert active_evidence.expire(
+        NOW + timedelta(minutes=50),
+        {"office": 0.01},
+        {
+            "office": (
+                PositiveEvidence(
+                    "binary_sensor.office_presence",
+                    "office-presence-episode",
+                    NOW + timedelta(minutes=49),
+                    "presence",
+                ),
+            )
+        },
+    )
+    assert active_evidence.states["office"].keep_on
+
+
+def test_policy_observation_releases_other_stale_low_confidence_zone() -> None:
+    graph = ZoneGraph.from_map(make_map())
+    policy = AutomationPolicy(graph)
+    policy.restore_states(
+        {
+            zone: ZonePolicyState(
+                keep_on=zone == "office",
+                last_trusted_at=NOW - timedelta(minutes=20)
+                if zone == "office"
+                else None,
+            )
+            for zone in graph.zones()
+        }
+    )
+
+    policy.apply(
+        make_update(
+            previous={"office": 0.08, "hall": 0.92},
+            current={"office": 0.05, "hall": 0.95},
+            movement={},
+            event_id="hall-motion",
+            zone="hall",
+        )
+    )
+
+    assert not policy.states["office"].keep_on
+    office_decision = next(
+        decision
+        for decision in policy.last_decisions
+        if decision.zone == "office"
+    )
+    assert office_decision.reason_code == "provisional_false_off"
 
 
 def test_policy_scenario_graph_departure_uses_coherent_multihop_evidence() -> None:
@@ -210,6 +333,7 @@ def test_policy_accepts_supported_adjacent_arrival_and_audits_context() -> None:
     policy.apply(update)
 
     assert policy.states["office"].keep_on
+    assert policy.activation_plausible("office", update.current.updated_at)
     activation = next(
         entry
         for entry in policy.policy_audit

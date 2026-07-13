@@ -30,6 +30,7 @@ from custom_components.predictive_controls.occupancy_scoring import (
     passive_decay_half_life_seconds,
     reason_for_occupant_handoff,
 )
+from custom_components.predictive_controls.occupancy_state import ZonePolicyState
 from custom_components.predictive_controls.occupancy_tracker import (
     OccupancyTracker,
     TrackerConfig,
@@ -346,6 +347,38 @@ def test_joint_facade_refresh_expiry_count_and_unknown_zone() -> None:
     engine.reconcile_expected_occupants(0, NOW + timedelta(minutes=12))
     assert engine.config.expected_occupants == 0
     assert engine.diagnostics.joint_posterior[0].key.positions == ()
+
+
+def test_joint_facade_periodically_releases_stale_low_confidence_latch() -> None:
+    engine = ZoneConfidenceEngine(make_map(), expected_occupants=1)
+    engine.observe(
+        make_event(
+            zone="hall",
+            role="transition_gate",
+            reliability=0.9,
+        )
+    )
+    assert engine.diagnostics.joint_occupied_marginals["office"] <= 0.10
+    engine._joint_policy.restore_states(  # noqa: SLF001
+        {
+            zone: ZonePolicyState(
+                keep_on=zone == "office",
+                last_trusted_at=NOW - timedelta(minutes=20)
+                if zone == "office"
+                else None,
+            )
+            for zone in make_map().zones()
+        }
+    )
+
+    assert engine.refresh_active(NOW + timedelta(minutes=20)) == ()
+    assert engine.diagnostics.joint_policy_states["office"].keep_on
+    assert engine.expire_transient_state(NOW + timedelta(minutes=20))
+
+    state = engine.diagnostics.joint_policy_states["office"]
+    assert not state.keep_on
+    assert state.recovery_eligible
+    assert state.last_release_cause == "provisional_false_off"
 
 
 def test_joint_facade_validates_count_guards_before_filter_creation() -> None:

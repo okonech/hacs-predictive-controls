@@ -103,6 +103,14 @@ class JointOccupancyFilter:
             return dict(self.last_update.count_marginals)
         return zone_marginals(self.posterior, self.map.zones())[1]
 
+    def active_positive_evidence(
+        self,
+        now: datetime,
+    ) -> dict[str, tuple[PositiveEvidence, ...]]:
+        """Return currently asserted evidence after signal freshness filtering."""
+
+        return self._current_positive_evidence(now)
+
     @property
     def directional_contexts(
         self,

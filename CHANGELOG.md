@@ -16,6 +16,10 @@
 - Canonicalized persisted audit probabilities to prevent floating-point
 	roundoff such as `1.0000000000000002` from invalidating restart state produced
 	by the integration itself.
+- Added a generic provisional `keep_on` release when zone occupancy remains at
+	or below `0.10` for 15 minutes after trusted occupancy and no fresh or
+	sustained local evidence remains. Confirmed graph release remains primary;
+	provisional release is recovery eligible and disabled during bootstrap replay.
 
 ## 0.1.19 release candidate
 

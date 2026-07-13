@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
@@ -12,6 +13,7 @@ from .occupancy_state import (
     PolicyAuditContext,
     PolicyAuditEntry,
     PolicyDecision,
+    PositiveEvidence,
     ReleaseCause,
     ZonePolicyState,
     zone_marginals,
@@ -25,6 +27,8 @@ GRAPH_RELEASE_MOVEMENT_THRESHOLD = 0.85
 RELOCATION_ORIGIN_THRESHOLD = 0.10
 RELOCATION_DESTINATION_THRESHOLD = 0.80
 RELOCATION_ODDS_THRESHOLD = 10.0
+PROVISIONAL_RELEASE_OCCUPIED_THRESHOLD = 0.10
+PROVISIONAL_RELEASE_GRACE = timedelta(minutes=15)
 POLICY_AUDIT_RETENTION = timedelta(days=2)
 
 
@@ -79,6 +83,7 @@ class AutomationPolicy:
         update: FilterUpdate,
         *,
         emit_activation: bool = True,
+        allow_provisional_release: bool = True,
     ) -> dict[str, ZonePolicyState]:
         """Apply one immutable filter update without feeding policy back into it."""
 
@@ -121,6 +126,14 @@ class AutomationPolicy:
             else zone_marginals(update.previous, self.graph.zones())[0]
         )
         decisions = self._release_supported_origins(update, previous_marginals)
+        if allow_provisional_release:
+            decisions.extend(
+                self._release_stale_low_confidence_latches(
+                    now,
+                    update.occupied_marginals,
+                    provenance.event_id,
+                )
+            )
 
         if provenance.state == "on":
             decisions.append(
@@ -151,9 +164,24 @@ class AutomationPolicy:
         )
         return self.states
 
-    def expire(self, now: datetime) -> bool:
-        """Expire activation pulses independently from keep-on latches."""
+    def expire(
+        self,
+        now: datetime,
+        occupied_marginals: Mapping[str, float] | None = None,
+        active_positive_evidence: Mapping[str, tuple[PositiveEvidence, ...]]
+        | None = None,
+    ) -> bool:
+        """Expire activation pulses and confirmed stale low-confidence latches."""
 
+        previous_states = self.states
+        if active_positive_evidence is not None:
+            self._latest_positive_episodes = {
+                zone: tuple(
+                    evidence.evidence_episode_id
+                    for evidence in active_positive_evidence.get(zone, ())
+                )
+                for zone in self._states
+            }
         changed = False
         for zone, state in tuple(self._states.items()):
             if (
@@ -162,6 +190,24 @@ class AutomationPolicy:
             ):
                 self._states[zone] = replace(state, activation_expires_at=None)
                 changed = True
+        decisions = (
+            self._release_stale_low_confidence_latches(
+                now,
+                occupied_marginals,
+                f"policy-expiry@{now.isoformat()}",
+            )
+            if occupied_marginals is not None
+            else []
+        )
+        if decisions:
+            self._record_decisions(
+                tuple(decisions),
+                decision_at=now,
+                source="policy_expiry",
+                previous_states=previous_states,
+                trigger_event_id=f"policy-expiry@{now.isoformat()}",
+            )
+            changed = True
         audit_size = len(self._policy_audit)
         self._prune_policy_audit(now)
         return changed or len(self._policy_audit) != audit_size
@@ -711,6 +757,55 @@ class AutomationPolicy:
                     reason_code,
                     gate_values,
                     pending.evidence_ids,
+                )
+            )
+        return decisions
+
+    def _release_stale_low_confidence_latches(
+        self,
+        now: datetime,
+        occupied_marginals: Mapping[str, float],
+        evidence_id: str,
+    ) -> list[PolicyDecision]:
+        decisions: list[PolicyDecision] = []
+        for zone, state in tuple(self._states.items()):
+            if not state.keep_on or state.last_trusted_at is None:
+                continue
+            occupied = occupied_marginals.get(zone, 0.0)
+            seconds_since_trusted = (now - state.last_trusted_at).total_seconds()
+            active_episode_count = len(self._latest_positive_episodes.get(zone, ()))
+            if (
+                occupied > PROVISIONAL_RELEASE_OCCUPIED_THRESHOLD
+                or seconds_since_trusted < PROVISIONAL_RELEASE_GRACE.total_seconds()
+                or active_episode_count
+            ):
+                continue
+            gate_values: dict[str, float | bool | str] = {
+                "occupied_marginal": occupied,
+                "occupied_threshold": PROVISIONAL_RELEASE_OCCUPIED_THRESHOLD,
+                "seconds_since_trusted": seconds_since_trusted,
+                "grace_seconds": PROVISIONAL_RELEASE_GRACE.total_seconds(),
+                "active_positive_episode_count": float(active_episode_count),
+            }
+            self._states[zone] = ZonePolicyState(
+                keep_on=False,
+                activation_expires_at=None,
+                last_trusted_at=state.last_trusted_at,
+                last_release_cause=ReleaseCause.PROVISIONAL_FALSE_OFF,
+                recovery_eligible=True,
+                reason="sustained low occupancy without active local evidence",
+                evidence_ids=_append_evidence(state.evidence_ids, evidence_id),
+                blocked_episode_ids=self._latest_positive_episodes.get(zone, ()),
+            )
+            self._pending_departures.pop(zone, None)
+            decisions.append(
+                PolicyDecision(
+                    zone,
+                    "release",
+                    True,
+                    "provisional_false_off",
+                    gate_values,
+                    (evidence_id,),
                 )
             )
         return decisions
