@@ -44,6 +44,7 @@ SUSTAINED_DURATION_TAU = timedelta(minutes=5)
 SUSTAINED_DURATION_MAX_LOG_ODDS = math.log(4.0)
 SUSTAINED_DURATION_BUCKET = timedelta(minutes=1)
 SUSTAINED_DEPARTURE_THRESHOLD = 0.85
+SUSTAINED_DEPARTURE_REMAINING_OCCUPANCY_THRESHOLD = 0.20
 
 
 class JointOccupancyFilter:
@@ -715,6 +716,19 @@ class JointOccupancyFilter:
                         * count
                         / max(1, len(self.graph.neighbors(source)))
                     )
+                    competing_explanation = (
+                        source_counts.get(event.zone, 0) > 0
+                        or source_counts.get(None, 0) > 0
+                        or any(
+                            candidate_source is not None
+                            and candidate_source not in {source, event.zone}
+                            and candidate_source not in asserted_sustained_zones
+                            and event.zone in self.graph.neighbors(candidate_source)
+                            for candidate_source in source_counts
+                        )
+                    )
+                    if source in asserted_sustained_zones and competing_explanation:
+                        weight *= self._asserted_empty_to_occupied_ratio(source)
                     movements = ((source, event.zone),)
                 else:
                     weight = MISSED_MOVEMENT_WEIGHT * count
@@ -736,6 +750,17 @@ class JointOccupancyFilter:
                 for candidate, weight, movements in candidates
             )
         return tuple(paths)
+
+    def _asserted_empty_to_occupied_ratio(self, zone: str) -> float:
+        return math.exp(
+            sum(
+                likelihood[0] - likelihood[1]
+                for node_id, likelihood in (
+                    self.observations.asserted_node_likelihoods.items()
+                )
+                if self.map.nodes[node_id].occupancy_zone == zone
+            )
+        )
 
     def _asserted_sustained_zones(self) -> set[str]:
         zones: set[str] = set()
@@ -762,6 +787,7 @@ class JointOccupancyFilter:
         movement_evidence: tuple[MovementEvidence, ...],
         now: datetime,
     ) -> bool:
+        occupied_marginals = zone_marginals(self.posterior, self.map.zones())[0]
         probability_by_origin: dict[str, float] = defaultdict(float)
         for evidence in movement_evidence:
             if (
@@ -774,7 +800,11 @@ class JointOccupancyFilter:
                 )
         deltas_by_zone: dict[str, list[float]] = {}
         for origin, probability in probability_by_origin.items():
-            if probability < SUSTAINED_DEPARTURE_THRESHOLD:
+            if (
+                probability < SUSTAINED_DEPARTURE_THRESHOLD
+                or occupied_marginals.get(origin, 0.0)
+                > SUSTAINED_DEPARTURE_REMAINING_OCCUPANCY_THRESHOLD
+            ):
                 continue
             zone_delta = [0.0] * (self.expected_occupants + 1)
             for entity_id in sorted(self._active_positive_entities.get(origin, ())):

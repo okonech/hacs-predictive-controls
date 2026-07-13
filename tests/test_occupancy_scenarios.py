@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import random
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -356,6 +357,115 @@ def test_s10_same_room_split_leaves_one_occupant_in_origin() -> None:
     assert moved.occupied_marginals["kitchen"] > 0.5
     assert moved.occupied_marginals["hall"] > 0.5
     assert all(len(item.key.positions) == 2 for item in moved.current.hypotheses)
+
+
+def test_s10_one_departure_preserves_sustained_evidence_for_remaining_occupant() -> (
+    None
+):
+    predictive_map = make_map()
+    tracker = ZoneConfidenceEngine(predictive_map, expected_occupants=2)
+    office = event("office", 1)
+    tracker.observe(office)
+    assert tracker._joint_filter is not None  # noqa: SLF001
+    tracker._joint_filter.restore_posterior(  # noqa: SLF001
+        normalize_hypotheses(
+            {
+                canonical_hypothesis(
+                    (PositionState("office"), PositionState("office"))
+                ): 0.0
+            },
+            office.event_at,
+        )
+    )
+
+    latest_event = office
+    for second, zone in enumerate(("hall", "kitchen", "hall", "living"), 2):
+        latest_event = event(zone, second)
+        tracker.observe(latest_event)
+    snapshot = public_snapshot(tracker, predictive_map, latest_event)
+
+    assert snapshot.zones["office"].keep_on
+    assert tracker.diagnostics.joint_count_marginals["office"][1] > 0.9
+    assert tracker.states["office"].confidence > 0.9
+    assert tuple(
+        evidence.entity_id
+        for evidence in tracker._joint_filter.asserted_positive_evidence(  # noqa: SLF001
+            latest_event.event_at
+        )["office"]
+    ) == ("binary_sensor.office",)
+
+
+def test_s10_long_asserted_origin_stays_confident_during_other_occupant_route() -> (
+    None
+):
+    predictive_map = make_map()
+    tracker = ZoneConfidenceEngine(predictive_map, expected_occupants=2)
+
+    def incident_event(
+        zone: str,
+        timestamp: str,
+        *,
+        state: str = "on",
+    ) -> OccupancyEvent:
+        return replace(
+            event(zone, 0, state=state),
+            event_at=datetime.fromisoformat(timestamp),
+        )
+
+    office = incident_event("office", "2026-07-13T16:43:54-04:00")
+    tracker.observe(office)
+    tracker.observe(incident_event("kitchen", "2026-07-13T16:43:55-04:00"))
+    tracker.observe(
+        incident_event("kitchen", "2026-07-13T16:43:56-04:00", state="off")
+    )
+    tracker.expire_transient_state(
+        datetime.fromisoformat("2026-07-13T17:03:54-04:00")
+    )
+
+    for asserted_at, cleared_at in (
+        ("2026-07-13T17:05:00-04:00", "2026-07-13T17:05:01-04:00"),
+        ("2026-07-13T17:15:00-04:00", "2026-07-13T17:15:01-04:00"),
+        ("2026-07-13T17:16:00-04:00", "2026-07-13T17:16:01-04:00"),
+    ):
+        tracker.observe(incident_event("hall", asserted_at))
+        tracker.observe(incident_event("hall", cleared_at, state="off"))
+    tracker.observe(incident_event("hall", "2026-07-13T17:35:38-04:00"))
+    latest_event = incident_event("living", "2026-07-13T17:35:50-04:00")
+    tracker.observe(latest_event)
+    tracker.expire_transient_state(
+        datetime.fromisoformat("2026-07-13T17:35:51-04:00")
+    )
+    snapshot = public_snapshot(tracker, predictive_map, latest_event)
+    occupancy_filter = tracker._joint_filter  # noqa: SLF001
+    assert occupancy_filter is not None
+    office_state = occupancy_filter.observations.entity_states[
+        "binary_sensor.office"
+    ]
+    office_departure_probability = sum(
+        evidence.coherent_probability
+        for evidence in tracker.diagnostics.joint_movement_evidence
+        if evidence.origin_zone == "office"
+    )
+
+    assert snapshot.zones["office"].keep_on
+    assert latest_event.event_at - office_state.changed_at == timedelta(
+        minutes=51,
+        seconds=56,
+    )
+    assert tracker.states["office"].confidence > 0.6
+    assert tracker.states["office"].confidence == max(
+        tracker.diagnostics.joint_occupied_marginals.values()
+    )
+    assert office_departure_probability < 0.85
+    assert not office_state.departure_observed
+    assert tuple(
+        evidence.entity_id
+        for evidence in occupancy_filter.asserted_positive_evidence(
+            latest_event.event_at
+        )["office"]
+    ) == ("binary_sensor.office",)
+    assert_count_conserved(tracker, 2)
+    assert_normalized(tracker)
 
 
 def test_s11_crossing_permutations_canonicalize_to_one_configuration() -> None:

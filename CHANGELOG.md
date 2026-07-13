@@ -13,6 +13,13 @@
 
 ### Fixed
 
+- Preserved sustained origin evidence when graph-valid movement carries one of
+	two occupants away but the exact posterior still supports another occupant in
+	the origin. Interleaved activity can no longer erase a continuously asserted
+	room episode unless final-occupant departure is also supported. When another
+	occupant can explain an adjacent arrival, movement out of the asserted origin
+	now pays the alias-safe calibrated observation likelihood instead of treating
+	both source assignments as equally plausible.
 - Collapsed correlated aliases from one physical map node into one effective
 	observation and duration factor. Additional asserted aliases no longer
 	multiply same-room occupancy or manufacture movement, and schema 3 posterior

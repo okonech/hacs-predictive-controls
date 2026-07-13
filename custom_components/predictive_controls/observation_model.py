@@ -65,6 +65,19 @@ class ObservationModel:
     def entity_states(self) -> dict[str, EntityEvidence]:
         return self._evidence.copy()
 
+    @property
+    def asserted_node_likelihoods(self) -> dict[str, tuple[float, ...]]:
+        return {
+            node_id: self._effective_node_likelihood(node_id)
+            for node_id in set(self._entity_nodes.values())
+            if any(
+                self._entity_nodes.get(entity_id) == node_id
+                and state.state == "on"
+                and not state.departure_observed
+                for entity_id, state in self._evidence.items()
+            )
+        }
+
     def set_expected_occupants(self, expected_occupants: int) -> None:
         """Resize future likelihood vectors and clear incompatible evidence."""
 
