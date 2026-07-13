@@ -133,6 +133,19 @@ def test_duration_and_departure_ignore_missing_inactive_or_invalidated_episodes(
     assert model.apply_duration_log_odds("missing", 1.0) == 0.0
     assert model.invalidate_asserted_episode("missing") == (0.0, 0.0)
 
+    model.restore_entity_states(
+        {
+            "binary_sensor.orphan": EntityEvidence(
+                "on",
+                (math.log(0.02), math.log(0.97)),
+                NOW,
+                NOW,
+            )
+        }
+    )
+    assert model.apply_duration_log_odds("binary_sensor.orphan", 1.0) == 0.0
+    assert model.invalidate_asserted_episode("binary_sensor.orphan") == (0.0, 0.0)
+
     off = make_event(state="off")
     model.prepare_delta(off)
     assert model.apply_duration_log_odds(off.entity_id, 1.0) == 0.0
@@ -154,3 +167,36 @@ def test_snapshot_removes_previous_factor_for_unsupported_state() -> None:
     assert removed.disposition == "replacement"
     assert removed.log_likelihood_by_count[0] > 0
     assert model.entity_states == {}
+
+    zero_count = ObservationModel(0)
+    zero_count.prepare_delta(make_event())
+    assert zero_count.entity_states
+
+
+def test_correlated_alias_clear_preserves_one_asserted_node_factor() -> None:
+    model = ObservationModel(2)
+    first = make_event(
+        entity_id="binary_sensor.office_target",
+        occupancy_behavior="ambiguous",
+    )
+    alias = make_event(
+        entity_id="binary_sensor.office_still",
+        occupancy_behavior="ambiguous",
+        signal_type="still_target",
+    )
+
+    model.prepare_delta(first)
+    correlated = model.prepare_delta(alias)
+    cleared = model.prepare_delta(
+        replace(first, state="off", event_at=NOW + timedelta(seconds=1))
+    )
+
+    assert correlated.disposition == "correlated_alias"
+    assert correlated.log_likelihood_by_count != (0.0, 0.0, 0.0)
+    assert cleared.log_likelihood_by_count == (0.0, 0.0, 0.0)
+    assert model.entity_states[alias.entity_id].state == "on"
+
+    removed_alias = model.prepare_snapshot_delta(
+        replace(alias, state="unavailable", event_at=NOW + timedelta(seconds=2))
+    )
+    assert removed_alias.log_likelihood_by_count[0] > 0

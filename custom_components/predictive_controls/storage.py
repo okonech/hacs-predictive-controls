@@ -15,6 +15,6 @@ class PredictiveControlsStore(Store):
         old_data: dict[str, Any],
     ) -> dict[str, Any]:
         del old_minor_version
-        if old_major_version not in {1, 2}:
+        if old_major_version not in {1, 2, 3}:
             raise NotImplementedError
         return old_data

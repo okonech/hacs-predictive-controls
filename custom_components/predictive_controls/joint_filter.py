@@ -65,7 +65,10 @@ class JointOccupancyFilter:
         self.exact_limit = exact_limit
         self.hard_limit = hard_limit
         self.graph = ZoneGraph.from_map(predictive_map)
-        self.observations = ObservationModel(expected_occupants)
+        self.observations = ObservationModel(
+            expected_occupants,
+            predictive_map=predictive_map,
+        )
         self._configuration_keys: tuple[HypothesisKey, ...] = ()
         self._configuration_index: dict[HypothesisKey, int] = {}
         self._move_indexes: dict[tuple[int, str | None, str], int] = {}
@@ -301,6 +304,15 @@ class JointOccupancyFilter:
             return update
 
         self._update_active_positive_entities(event)
+        if provenance.disposition == "correlated_alias":
+            current = self._apply_stationary_likelihood(
+                previous,
+                event,
+                provenance,
+            )
+            update = self._update_for(previous, current, provenance, {})
+            self.last_update = update
+            return update
 
         paths = self._paths_for_event(previous, event)
         self._last_operation_count = len(paths)
@@ -439,6 +451,49 @@ class JointOccupancyFilter:
         )
         self.last_update = update
         return update
+
+    def _apply_stationary_likelihood(
+        self,
+        previous: Posterior,
+        event: OccupancyEvent,
+        provenance: ObservationProvenance,
+    ) -> Posterior:
+        weights = {
+            hypothesis.key: (
+                hypothesis.log_probability
+                + provenance.log_likelihood_by_count[
+                    _zone_count(hypothesis.key, event.zone)
+                ]
+            )
+            for hypothesis in previous.hypotheses
+        }
+        total = log_sum_exp(weights.values())
+        current = _normalize_dense_weights(
+            weights,
+            self._configuration_keys,
+            event.event_at,
+        )
+        self.posterior = current
+        self._directional_contexts = {
+            hypothesis.key: tuple(
+                replace(
+                    context,
+                    log_probability=(
+                        context.log_probability
+                        + provenance.log_likelihood_by_count[
+                            _zone_count(hypothesis.key, event.zone)
+                        ]
+                        - total
+                    ),
+                )
+                for context in self._directional_contexts.get(
+                    hypothesis.key,
+                    (_contextless(hypothesis.log_probability),),
+                )
+            )
+            for hypothesis in previous.hypotheses
+        }
+        return current
 
     def bootstrap(
         self,

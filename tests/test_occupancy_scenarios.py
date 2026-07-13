@@ -254,6 +254,47 @@ def test_s06_correlated_remote_aliases_cannot_release_sustained_ownership() -> N
     assert tracker.states["office"].last_node_id == "office"
 
 
+def test_s06_remote_aliases_support_other_occupant_without_moving_origin() -> None:
+    predictive_map = make_map()
+    tracker = ZoneConfidenceEngine(predictive_map, expected_occupants=2)
+    office = event("office", 1)
+    tracker.observe(office)
+    tracker.observe(
+        event(
+            "garage",
+            2,
+            entity_id="binary_sensor.garage",
+        )
+    )
+    office_before_aliases = tracker.diagnostics.joint_occupied_marginals["office"]
+
+    for seconds, entity_id in enumerate(
+        (
+            "binary_sensor.garage_moving_target",
+            "binary_sensor.garage_still_target",
+            "binary_sensor.garage_zone_occupancy",
+        ),
+        start=3,
+    ):
+        tracker.observe(
+            event(
+                "garage",
+                seconds,
+                entity_id=entity_id,
+            )
+        )
+    snapshot = public_snapshot(tracker, predictive_map, office)
+
+    assert snapshot.zones["office"].keep_on
+    assert tracker.diagnostics.joint_policy_states["office"].last_release_cause is None
+    assert tracker.diagnostics.joint_occupied_marginals["office"] == pytest.approx(
+        office_before_aliases
+    )
+    assert tracker.diagnostics.joint_movement_evidence == ()
+    assert_count_conserved(tracker, 2)
+    assert_normalized(tracker)
+
+
 def test_s08_two_interleaved_paths_conserve_both_occupants() -> None:
     predictive_map = make_map()
     tracker = ZoneConfidenceEngine(predictive_map, expected_occupants=2)

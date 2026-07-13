@@ -109,7 +109,7 @@ def test_runtime_s19_s20_restore_bootstrap_and_reject_corrupt_state(
     assert not summary.zones["office"].activation_plausible
     assert not summary.prelight_plausible_zones
     assert store.delayed
-    assert runtime.transition_store_data()["schema_version"] == 3
+    assert runtime.transition_store_data()["schema_version"] == 4
 
     store.delayed = False
     runtime.observe_entity(

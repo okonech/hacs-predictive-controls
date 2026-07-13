@@ -286,7 +286,7 @@ def restore_occupancy_state(
     """Validate and atomically reconstruct restart-safe inference state."""
 
     schema_version = payload.get("schema_version")
-    if schema_version not in {2, OCCUPANCY_STORAGE_VERSION}:
+    if schema_version not in {2, 3, OCCUPANCY_STORAGE_VERSION}:
         raise ValueError("unsupported occupancy storage schema")
     valid_zones = set(predictive_map.zones())
     policy_states = _restore_policy(
@@ -300,9 +300,12 @@ def restore_occupancy_state(
         predictive_map,
     )
     route_counts = _restore_route_counts(payload.get("route_counts"), predictive_map)
-    map_compatible = schema_version >= 3 and payload.get(
+    map_fingerprint_matches = schema_version >= 3 and payload.get(
         "map_fingerprint"
     ) == map_fingerprint(predictive_map)
+    map_compatible = (
+        schema_version == OCCUPANCY_STORAGE_VERSION and map_fingerprint_matches
+    )
     if not map_compatible:
         posterior = cold_start_posterior(
             predictive_map.zones(),
@@ -336,7 +339,11 @@ def restore_occupancy_state(
             update_sequence=0,
             map_compatible=False,
             restore_status=(
-                "migrated_policy_only" if schema_version == 2 else "map_changed_rebuilt"
+                "migrated_policy_only"
+                if schema_version == 2
+                else "migrated_node_factors"
+                if schema_version == 3 and map_fingerprint_matches
+                else "map_changed_rebuilt"
             ),
         )
 

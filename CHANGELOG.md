@@ -13,6 +13,10 @@
 
 ### Fixed
 
+- Collapsed correlated aliases from one physical map node into one effective
+	observation and duration factor. Additional asserted aliases no longer
+	multiply same-room occupancy or manufacture movement, and schema 3 posterior
+	state rebuilds once from the current Home Assistant snapshot under schema 4.
 - Stopped treating normalized coherent movement mass as an absolute activation
 	gate. Fresh graph-valid arrivals now activate when the source prior and the
 	existing `0.60` occupied-marginal and `0.20` increase gates pass, avoiding

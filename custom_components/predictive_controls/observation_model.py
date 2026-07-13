@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
 from .events import OccupancyEvent
+from .model import PredictiveMap
 from .occupancy_state import ObservationProvenance
 
 
@@ -42,12 +43,23 @@ class ObservationModel:
         self,
         expected_occupants: int,
         correlation_window: timedelta = timedelta(minutes=15),
+        predictive_map: PredictiveMap | None = None,
     ) -> None:
         if expected_occupants < 0:
             raise ValueError("expected_occupants must be non-negative")
         self.expected_occupants = expected_occupants
         self.correlation_window = correlation_window
         self._evidence: dict[str, EntityEvidence] = {}
+        self._entity_nodes = (
+            {}
+            if predictive_map is None
+            else {
+                entity_id: binding.node_id
+                for entity_id in predictive_map.entity_ids()
+                if (binding := predictive_map.entity_binding_for_entity(entity_id))
+                is not None
+            }
+        )
 
     @property
     def entity_states(self) -> dict[str, EntityEvidence]:
@@ -71,6 +83,7 @@ class ObservationModel:
                 event, event_id, event_id, "ignored", self._neutral()
             )
 
+        self._entity_nodes[event.entity_id] = event.node_id
         previous = self._evidence.get(event.entity_id)
         if previous is not None and previous.state == event.state:
             episode_id = _episode_id(event.entity_id, previous.episode_started_at)
@@ -82,10 +95,17 @@ class ObservationModel:
                 self._neutral(),
             )
 
+        node_already_asserted = any(
+            entity_id != event.entity_id
+            and self._entity_nodes.get(entity_id) == event.node_id
+            and state.state == "on"
+            and not state.departure_observed
+            for entity_id, state in self._evidence.items()
+        )
+        previous_node_likelihood = self._effective_node_likelihood(event.node_id)
         current_likelihood = self._likelihood(event)
         if previous is None:
             episode_started_at = event.event_at
-            delta = current_likelihood
             disposition = "accepted"
         else:
             quiet_time = event.event_at - previous.changed_at
@@ -93,18 +113,6 @@ class ObservationModel:
                 event.event_at
                 if quiet_time > self.correlation_window
                 else previous.episode_started_at
-            )
-            delta = tuple(
-                current
-                - old
-                - (previous.duration_log_odds if count > 0 else 0.0)
-                for count, (current, old) in enumerate(
-                    zip(
-                        current_likelihood,
-                        previous.log_likelihood_by_count,
-                        strict=True,
-                    )
-                )
             )
             disposition = "replacement"
 
@@ -114,6 +122,17 @@ class ObservationModel:
             changed_at=event.event_at,
             episode_started_at=episode_started_at,
         )
+        current_node_likelihood = self._effective_node_likelihood(event.node_id)
+        delta = tuple(
+            current - previous
+            for current, previous in zip(
+                current_node_likelihood,
+                previous_node_likelihood,
+                strict=True,
+            )
+        )
+        if event.state == "on" and node_already_asserted:
+            disposition = "correlated_alias"
         return self._provenance(
             event,
             event_id,
@@ -127,6 +146,8 @@ class ObservationModel:
 
         if event.state in {"on", "off"}:
             return self.prepare_delta(event)
+        self._entity_nodes[event.entity_id] = event.node_id
+        previous_node_likelihood = self._effective_node_likelihood(event.node_id)
         previous = self._evidence.pop(event.entity_id, None)
         if previous is None:
             return self._provenance(
@@ -136,12 +157,20 @@ class ObservationModel:
                 "ignored",
                 self._neutral(),
             )
+        current_node_likelihood = self._effective_node_likelihood(event.node_id)
         return self._provenance(
             event,
             _event_id(event),
             _episode_id(event.entity_id, previous.episode_started_at),
             "replacement",
-            tuple(-value for value in previous.log_likelihood_by_count),
+            tuple(
+                current - old
+                for current, old in zip(
+                    current_node_likelihood,
+                    previous_node_likelihood,
+                    strict=True,
+                )
+            ),
         )
 
     def restore_entity_states(self, states: dict[str, EntityEvidence]) -> None:
@@ -161,13 +190,16 @@ class ObservationModel:
         state = self._evidence.get(entity_id)
         if state is None or state.state != "on" or state.departure_observed:
             return 0.0
-        increment = max(0.0, target - state.duration_log_odds)
-        if increment > 0.0:
-            self._evidence[entity_id] = replace(
-                state,
-                duration_log_odds=target,
-            )
-        return increment
+        node_id = self._entity_nodes.get(entity_id)
+        if node_id is None:
+            return 0.0
+        previous = self._effective_node_likelihood(node_id)
+        self._evidence[entity_id] = replace(
+            state,
+            duration_log_odds=max(state.duration_log_odds, target),
+        )
+        current = self._effective_node_likelihood(node_id)
+        return 0.0 if self.expected_occupants == 0 else current[1] - previous[1]
 
     def invalidate_asserted_episode(self, entity_id: str) -> tuple[float, ...]:
         """Remove one asserted episode after confirmed path-specific departure."""
@@ -175,17 +207,58 @@ class ObservationModel:
         state = self._evidence.get(entity_id)
         if state is None or state.state != "on" or state.departure_observed:
             return self._neutral()
-        applied = tuple(
-            value + (state.duration_log_odds if count > 0 else 0.0)
-            for count, value in enumerate(state.log_likelihood_by_count)
-        )
+        node_id = self._entity_nodes.get(entity_id)
+        if node_id is None:
+            return self._neutral()
+        previous = self._effective_node_likelihood(node_id)
         self._evidence[entity_id] = replace(
             state,
             log_likelihood_by_count=self._neutral(),
             duration_log_odds=0.0,
             departure_observed=True,
         )
-        return tuple(-value for value in applied)
+        current = self._effective_node_likelihood(node_id)
+        return tuple(
+            new - old for new, old in zip(current, previous, strict=True)
+        )
+
+    def _effective_node_likelihood(self, node_id: str) -> tuple[float, ...]:
+        candidates = tuple(
+            (entity_id, state)
+            for entity_id, state in self._evidence.items()
+            if self._entity_nodes.get(entity_id) == node_id
+            and not state.departure_observed
+        )
+        asserted = tuple(item for item in candidates if item[1].state == "on")
+        if asserted:
+            _, selected = max(
+                asserted,
+                key=lambda item: (
+                    _occupied_log_odds(item[1]),
+                    item[0],
+                ),
+            )
+        elif candidates:
+            _, selected = max(
+                candidates,
+                key=lambda item: (
+                    -_occupied_log_odds(item[1]),
+                    item[0],
+                ),
+            )
+        else:
+            return self._neutral()
+        duration_log_odds = max(
+            (
+                state.duration_log_odds
+                for _, state in asserted
+            ),
+            default=0.0,
+        )
+        return tuple(
+            value + (duration_log_odds if count > 0 else 0.0)
+            for count, value in enumerate(selected.log_likelihood_by_count)
+        )
 
     def _neutral(self) -> tuple[float, ...]:
         return (0.0,) * (self.expected_occupants + 1)
@@ -234,6 +307,12 @@ def _profile_for_event(event: OccupancyEvent) -> ObservationProfile:
     }:
         return SUSTAINED_PROFILE
     return ORDINARY_PROFILE
+
+
+def _occupied_log_odds(state: EntityEvidence) -> float:
+    if len(state.log_likelihood_by_count) < 2:
+        return 0.0
+    return state.log_likelihood_by_count[1] - state.log_likelihood_by_count[0]
 
 
 def _calibrated(base: float, reliability: float) -> float:

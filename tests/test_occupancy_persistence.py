@@ -740,6 +740,34 @@ def test_schema_two_migrates_policy_and_valid_counts_only() -> None:
     assert restored.posterior.hypotheses[0].key.positions[0].zone is None
 
 
+@pytest.mark.scenario
+def test_schema_three_rebuilds_entity_multiplied_posterior() -> None:
+    predictive_map = make_map()
+    occupancy_filter = JointOccupancyFilter(predictive_map, 1, NOW)
+    policy = AutomationPolicy(ZoneGraph.from_map(predictive_map))
+    update = occupancy_filter.observe(event("office", NOW + timedelta(seconds=1)))
+    policy.apply(update)
+    payload = serialize_occupancy_state(
+        predictive_map,
+        occupancy_filter.posterior,
+        policy.states,
+        (),
+        occupancy_filter.observations.entity_states,
+        {"office": {"hall": 2.5}},
+    )
+    payload["schema_version"] = 3
+
+    restored = restore_occupancy_state(payload, predictive_map, 1, NOW)
+
+    assert restored.restore_status == "migrated_node_factors"
+    assert restored.policy_states["office"].keep_on
+    assert restored.transition_counts == {"office": {"hall": 2.5}}
+    assert restored.entity_states == {}
+    assert restored.directional_contexts
+    assert restored.pending_departures == {}
+    assert restored.posterior.hypotheses[0].key.positions[0].zone is None
+
+
 @pytest.mark.parametrize(
     "mutate",
     (

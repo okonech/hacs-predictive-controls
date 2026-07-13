@@ -72,6 +72,10 @@ $$
 - **EVID-002:** Repeated episodes from one entity MUST NOT count as independent
   corroboration.
 - **EVID-003:** Aliases for one physical entity contribute at most one factor.
+  Raw alias states remain independently replaceable for clear and restart
+  handling, but the physical node contributes one effective likelihood and one
+  bounded duration factor. An alias edge while that node is already asserted
+  cannot independently create movement.
 - **EVID-004:** Independent factors MAY compose only when their physical binding
   signatures and evidence episodes are independent.
 - **EVID-005:** `unknown` and `unavailable` are neutral unless an explicit fault
