@@ -164,6 +164,42 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
                     (),
                 )
             ],
+            "policy_audit": [
+                {
+                    "decision_at": entry.decision_at.isoformat(),
+                    "source": entry.source,
+                    "trigger": {
+                        "event_id": entry.trigger_event_id,
+                        "entity_id": entry.trigger_entity_id,
+                        "zone": entry.trigger_zone,
+                        "state": entry.trigger_state,
+                        "disposition": entry.trigger_disposition,
+                    },
+                    "decision": {
+                        "zone": entry.decision.zone,
+                        "action": entry.decision.action,
+                        "accepted": entry.decision.accepted,
+                        "reason_code": entry.decision.reason_code,
+                        "gate_values": dict(entry.decision.gate_values),
+                        "evidence_ids": list(entry.decision.evidence_ids),
+                    },
+                    "previous": {
+                        "keep_on": entry.previous_keep_on,
+                        "reason": entry.previous_reason,
+                        "release_cause": None
+                        if entry.previous_release_cause is None
+                        else entry.previous_release_cause.value,
+                    },
+                    "current": {
+                        "keep_on": entry.current_keep_on,
+                        "reason": entry.current_reason,
+                        "release_cause": None
+                        if entry.current_release_cause is None
+                        else entry.current_release_cause.value,
+                    },
+                }
+                for entry in getattr(diagnostics, "joint_policy_audit", ())
+            ],
             "movement_evidence": [
                 {
                     "path_key": list(evidence.path_key),

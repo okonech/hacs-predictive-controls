@@ -22,6 +22,7 @@ from .occupancy_state import (
     HypothesisKey,
     MovementEvidence,
     ObservationProvenance,
+    PolicyAuditEntry,
     PolicyDecision,
     PredictionLease,
     WeightedHypothesis,
@@ -155,6 +156,7 @@ class TrackerDiagnostics:
     joint_count_marginals: dict[str, tuple[float, ...]] = field(default_factory=dict)
     joint_policy_states: dict[str, ZonePolicyState] = field(default_factory=dict)
     joint_policy_decisions: tuple[PolicyDecision, ...] = ()
+    joint_policy_audit: tuple[PolicyAuditEntry, ...] = ()
     joint_prediction_leases: tuple[PredictionLease, ...] = ()
     joint_prediction_hints: dict[str, float] = field(default_factory=dict)
     joint_last_provenance: ObservationProvenance | None = None
@@ -276,6 +278,7 @@ class OccupancyTracker:
             else joint_filter.count_marginals,
             joint_policy_states=self._joint_policy.states,
             joint_policy_decisions=self._joint_policy.last_decisions,
+            joint_policy_audit=self._joint_policy.policy_audit,
             joint_prediction_leases=self._joint_predictions.leases,
             joint_prediction_hints=self._joint_predictions.probabilities,
             joint_last_provenance=None
@@ -348,6 +351,7 @@ class OccupancyTracker:
         return self._joint_policy.suppress_activation(
             self._joint_filter.last_update.provenance.zone,
             reason_code,
+            self._joint_filter.last_update.current.updated_at,
         )
 
     def reconcile_expected_occupants(
@@ -405,7 +409,11 @@ class OccupancyTracker:
         self.config = replace(self.config, expected_occupants=0)
         if self._joint_filter is not None:
             self._joint_filter.set_expected_occupants(0, now)
-        self._joint_policy.enter_unsupported_count(expected_occupants, evidence_id)
+        self._joint_policy.enter_unsupported_count(
+            expected_occupants,
+            evidence_id,
+            now,
+        )
         self._joint_predictions.reconcile_count(previous, 0)
 
     def ensure_joint_state(self, now: datetime) -> None:
@@ -449,6 +457,7 @@ class OccupancyTracker:
             directional_contexts=self._joint_filter.directional_contexts,
             pending_departures=self._joint_policy.pending_departures,
             update_sequence=self._joint_filter.update_sequence,
+            policy_audit=self._joint_policy.policy_audit,
         )
 
     def restore_joint_state(self, restored: RestoredOccupancyState) -> None:
@@ -464,6 +473,7 @@ class OccupancyTracker:
         )
         self._joint_filter.observations.restore_entity_states(restored.entity_states)
         self._joint_policy.restore_states(restored.policy_states)
+        self._joint_policy.restore_policy_audit(restored.policy_audit)
         self._joint_policy.restore_pending_departures(restored.pending_departures)
         self._joint_predictions.restore_leases(
             restored.prediction_leases,

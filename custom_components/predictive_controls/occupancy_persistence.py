@@ -6,7 +6,7 @@ import math
 from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from .automation_policy import PendingDeparture
@@ -16,6 +16,8 @@ from .observation_model import EntityEvidence
 from .occupancy_state import (
     DirectionalContext,
     HypothesisKey,
+    PolicyAuditEntry,
+    PolicyDecision,
     PositionState,
     Posterior,
     PredictionLease,
@@ -37,6 +39,7 @@ class RestoredOccupancyState:
     posterior: Posterior
     directional_contexts: dict[HypothesisKey, tuple[DirectionalContext, ...]]
     policy_states: dict[str, ZonePolicyState]
+    policy_audit: tuple[PolicyAuditEntry, ...]
     pending_departures: dict[str, PendingDeparture]
     prediction_leases: tuple[PredictionLease, ...]
     entity_states: dict[str, EntityEvidence]
@@ -79,6 +82,7 @@ def serialize_occupancy_state(
     | None = None,
     pending_departures: Mapping[str, PendingDeparture] | None = None,
     update_sequence: int = 0,
+    policy_audit: tuple[PolicyAuditEntry, ...] = (),
 ) -> dict[str, object]:
     """Serialize the complete restart-safe inference state."""
 
@@ -160,6 +164,9 @@ def serialize_occupancy_state(
             }
             for zone, state in sorted(policy_states.items())
         },
+        "policy_audit": [
+            _policy_audit_payload(entry) for entry in policy_audit
+        ],
         "pending_departures": {
             origin: {
                 "current": departure.current,
@@ -200,6 +207,42 @@ def serialize_occupancy_state(
     }
 
 
+def _policy_audit_payload(entry: PolicyAuditEntry) -> dict[str, object]:
+    """Serialize one retained policy decision for restart-safe diagnostics."""
+
+    return {
+        "decision_at": entry.decision_at.isoformat(),
+        "source": entry.source,
+        "trigger_event_id": entry.trigger_event_id,
+        "trigger_entity_id": entry.trigger_entity_id,
+        "trigger_zone": entry.trigger_zone,
+        "trigger_state": entry.trigger_state,
+        "trigger_disposition": entry.trigger_disposition,
+        "decision": {
+            "zone": entry.decision.zone,
+            "action": entry.decision.action,
+            "accepted": entry.decision.accepted,
+            "reason_code": entry.decision.reason_code,
+            "gate_values": dict(entry.decision.gate_values),
+            "evidence_ids": list(entry.decision.evidence_ids),
+        },
+        "previous": {
+            "keep_on": entry.previous_keep_on,
+            "reason": entry.previous_reason,
+            "release_cause": None
+            if entry.previous_release_cause is None
+            else entry.previous_release_cause.value,
+        },
+        "current": {
+            "keep_on": entry.current_keep_on,
+            "reason": entry.current_reason,
+            "release_cause": None
+            if entry.current_release_cause is None
+            else entry.current_release_cause.value,
+        },
+    }
+
+
 def restore_occupancy_state(
     payload: Mapping[str, Any],
     predictive_map: PredictiveMap,
@@ -222,7 +265,7 @@ def restore_occupancy_state(
         _restore_transition_counts(payload.get("transition_counts")),
         predictive_map,
     )
-    map_compatible = schema_version == OCCUPANCY_STORAGE_VERSION and payload.get(
+    map_compatible = schema_version >= 3 and payload.get(
         "map_fingerprint"
     ) == map_fingerprint(predictive_map)
     if not map_compatible:
@@ -248,6 +291,7 @@ def restore_occupancy_state(
                 for hypothesis in posterior.hypotheses
             },
             policy_states=policy_states,
+            policy_audit=(),
             pending_departures={},
             prediction_leases=(),
             entity_states={},
@@ -354,10 +398,16 @@ def restore_occupancy_state(
         expected_occupants,
         predictive_map,
     )
+    policy_audit = (
+        ()
+        if schema_version < 3
+        else _restore_policy_audit(payload.get("policy_audit", []), valid_zones, now)
+    )
     return RestoredOccupancyState(
         posterior=posterior,
         directional_contexts=directional_contexts,
         policy_states=policy_states,
+        policy_audit=policy_audit,
         pending_departures=pending_departures,
         prediction_leases=prediction_leases,
         entity_states=entity_states,
@@ -438,6 +488,137 @@ def _restore_policy(
             blocked_episode_ids=tuple(blocked_episode_ids),
         )
     return states
+
+
+def _restore_policy_audit(
+    raw_audit: object,
+    valid_zones: set[str],
+    now: datetime,
+) -> tuple[PolicyAuditEntry, ...]:
+    if not isinstance(raw_audit, list):
+        raise ValueError("stored policy audit must be a list")
+    retained: list[PolicyAuditEntry] = []
+    cutoff = now - timedelta(days=2)
+    for raw_entry in raw_audit:
+        if not isinstance(raw_entry, Mapping):
+            raise ValueError("stored policy audit entry must be a mapping")
+        decision_at = _parse_datetime(raw_entry.get("decision_at"), "audit time")
+        source = raw_entry.get("source")
+        trigger_event_id = raw_entry.get("trigger_event_id")
+        trigger_entity_id = raw_entry.get("trigger_entity_id")
+        trigger_zone = raw_entry.get("trigger_zone")
+        trigger_state = raw_entry.get("trigger_state")
+        trigger_disposition = raw_entry.get("trigger_disposition")
+        if (
+            not isinstance(source, str)
+            or not source
+            or not isinstance(trigger_event_id, str)
+            or not all(
+                value is None or isinstance(value, str)
+                for value in (
+                    trigger_entity_id,
+                    trigger_zone,
+                    trigger_state,
+                    trigger_disposition,
+                )
+            )
+            or (trigger_zone is not None and trigger_zone not in valid_zones)
+        ):
+            raise ValueError("stored policy audit trigger is invalid")
+        raw_decision = raw_entry.get("decision")
+        if not isinstance(raw_decision, Mapping):
+            raise ValueError("stored policy audit decision must be a mapping")
+        zone = raw_decision.get("zone")
+        action = raw_decision.get("action")
+        accepted = raw_decision.get("accepted")
+        reason_code = raw_decision.get("reason_code")
+        evidence_ids = raw_decision.get("evidence_ids")
+        if (
+            not isinstance(zone, str)
+            or zone not in valid_zones
+            or not isinstance(action, str)
+            or not isinstance(accepted, bool)
+            or not isinstance(reason_code, str)
+            or not isinstance(evidence_ids, list)
+            or not all(isinstance(item, str) for item in evidence_ids)
+        ):
+            raise ValueError("stored policy audit decision is invalid")
+        raw_gate_values = raw_decision.get("gate_values")
+        if not isinstance(raw_gate_values, Mapping):
+            raise ValueError("stored policy audit gates must be a mapping")
+        gate_values: dict[str, float | bool | str] = {}
+        for key, value in raw_gate_values.items():
+            if not isinstance(key, str):
+                raise ValueError("stored policy audit gate key is invalid")
+            if isinstance(value, bool) or isinstance(value, str):
+                gate_values[key] = value
+            elif isinstance(value, int | float) and math.isfinite(value):
+                gate_values[key] = float(value)
+            else:
+                raise ValueError("stored policy audit gate value is invalid")
+        raw_previous = raw_entry.get("previous")
+        raw_current = raw_entry.get("current")
+        if not isinstance(raw_previous, Mapping) or not isinstance(
+            raw_current,
+            Mapping,
+        ):
+            raise ValueError("stored policy audit state must be a mapping")
+        previous_keep_on = raw_previous.get("keep_on")
+        current_keep_on = raw_current.get("keep_on")
+        previous_reason = raw_previous.get("reason")
+        current_reason = raw_current.get("reason")
+        if (
+            not isinstance(previous_keep_on, bool)
+            or not isinstance(current_keep_on, bool)
+            or not isinstance(previous_reason, str)
+            or not isinstance(current_reason, str)
+        ):
+            raise ValueError("stored policy audit state is invalid")
+        previous_release_cause = _restore_audit_release_cause(
+            raw_previous.get("release_cause")
+        )
+        current_release_cause = _restore_audit_release_cause(
+            raw_current.get("release_cause")
+        )
+        if decision_at < cutoff:
+            continue
+        retained.append(
+            PolicyAuditEntry(
+                decision_at=decision_at,
+                source=source,
+                trigger_event_id=trigger_event_id,
+                trigger_entity_id=trigger_entity_id,
+                trigger_zone=trigger_zone,
+                trigger_state=trigger_state,
+                trigger_disposition=trigger_disposition,
+                decision=PolicyDecision(
+                    zone=zone,
+                    action=action,
+                    accepted=accepted,
+                    reason_code=reason_code,
+                    gate_values=gate_values,
+                    evidence_ids=tuple(evidence_ids),
+                ),
+                previous_keep_on=previous_keep_on,
+                current_keep_on=current_keep_on,
+                previous_reason=previous_reason,
+                current_reason=current_reason,
+                previous_release_cause=previous_release_cause,
+                current_release_cause=current_release_cause,
+            )
+        )
+    return tuple(retained)
+
+
+def _restore_audit_release_cause(value: object) -> ReleaseCause | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("stored policy audit release cause is invalid")
+    try:
+        return ReleaseCause(value)
+    except ValueError as exc:
+        raise ValueError("stored policy audit release cause is invalid") from exc
 
 
 def _restore_leases(

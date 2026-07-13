@@ -153,6 +153,26 @@ class PolicyDecision:
     evidence_ids: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class PolicyAuditEntry:
+    """One timestamped policy decision retained for post-incident diagnosis."""
+
+    decision_at: datetime
+    source: str
+    trigger_event_id: str
+    trigger_entity_id: str | None
+    trigger_zone: str | None
+    trigger_state: str | None
+    trigger_disposition: str | None
+    decision: PolicyDecision
+    previous_keep_on: bool
+    current_keep_on: bool
+    previous_reason: str
+    current_reason: str
+    previous_release_cause: ReleaseCause | None
+    current_release_cause: ReleaseCause | None
+
+
 class ReleaseCause(StrEnum):
     """Machine-readable cause for a keep-on release."""
 

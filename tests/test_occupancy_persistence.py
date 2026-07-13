@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import math
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import cast
@@ -18,11 +19,14 @@ from custom_components.predictive_controls.model import PredictiveMap
 from custom_components.predictive_controls.observation_model import EntityEvidence
 from custom_components.predictive_controls.occupancy_graph import ZoneGraph
 from custom_components.predictive_controls.occupancy_persistence import (
+    _restore_policy_audit,
     map_fingerprint,
     restore_occupancy_state,
     serialize_occupancy_state,
 )
 from custom_components.predictive_controls.occupancy_state import (
+    PolicyAuditEntry,
+    PolicyDecision,
     PredictionLease,
     ReleaseCause,
 )
@@ -66,6 +70,32 @@ def event(zone: str, at: datetime) -> OccupancyEvent:
         state="on",
         event_at=at,
         reliability=0.9,
+    )
+
+
+def policy_audit_entry(decision_at: datetime) -> PolicyAuditEntry:
+    return PolicyAuditEntry(
+        decision_at=decision_at,
+        source="observation",
+        trigger_event_id="office-motion",
+        trigger_entity_id="binary_sensor.office",
+        trigger_zone="office",
+        trigger_state="on",
+        trigger_disposition="accepted",
+        decision=PolicyDecision(
+            zone="office",
+            action="release",
+            accepted=True,
+            reason_code="graph_departure",
+            gate_values={"origin_marginal": 0.05},
+            evidence_ids=("office-hall",),
+        ),
+        previous_keep_on=True,
+        current_keep_on=False,
+        previous_reason="trusted local occupancy established",
+        current_reason="graph-valid final occupant departure",
+        previous_release_cause=None,
+        current_release_cause=ReleaseCause.GRAPH_DEPARTURE,
     )
 
 
@@ -148,6 +178,115 @@ def test_restart_scenario_round_trips_complete_inference_state() -> None:
     assert restored.restore_status == "restored"
     assert restored.update_sequence == 2
     assert payload["map_fingerprint"] == map_fingerprint(predictive_map)
+
+
+def test_restart_retains_only_last_two_days_of_policy_audit() -> None:
+    predictive_map = make_map()
+    occupancy_filter = JointOccupancyFilter(predictive_map, 1, NOW)
+    policy = AutomationPolicy(ZoneGraph.from_map(predictive_map))
+    payload = serialize_occupancy_state(
+        predictive_map,
+        occupancy_filter.posterior,
+        policy.states,
+        (),
+        occupancy_filter.observations.entity_states,
+        {},
+        policy_audit=(
+            policy_audit_entry(NOW - timedelta(days=2, seconds=1)),
+            policy_audit_entry(NOW - timedelta(days=2)),
+            policy_audit_entry(NOW - timedelta(minutes=1)),
+        ),
+    )
+
+    restored = restore_occupancy_state(payload, predictive_map, 1, NOW)
+
+    assert [entry.decision_at for entry in restored.policy_audit] == [
+        NOW - timedelta(days=2),
+        NOW - timedelta(minutes=1),
+    ]
+    assert restored.policy_audit[-1].decision.evidence_ids == ("office-hall",)
+
+
+def test_policy_audit_restore_rejects_non_list_and_non_mapping_entries() -> None:
+    valid_zones = set(make_map().zones())
+
+    with pytest.raises(ValueError, match="must be a list"):
+        _restore_policy_audit({}, valid_zones, NOW)
+    with pytest.raises(ValueError, match="must be a mapping"):
+        _restore_policy_audit(["bad"], valid_zones, NOW)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    (
+        (lambda entry: entry.update(source=""), "trigger"),
+        (lambda entry: entry.update(decision=[]), "decision must be a mapping"),
+        (
+            lambda entry: cast(dict[str, object], entry["decision"]).update(
+                zone="attic"
+            ),
+            "decision is invalid",
+        ),
+        (
+            lambda entry: cast(dict[str, object], entry["decision"]).update(
+                gate_values=[]
+            ),
+            "gates must be a mapping",
+        ),
+        (
+            lambda entry: cast(dict[str, object], entry["decision"]).update(
+                gate_values={3: 0.5}
+            ),
+            "gate key is invalid",
+        ),
+        (
+            lambda entry: cast(dict[str, object], entry["decision"]).update(
+                gate_values={"bad": math.nan}
+            ),
+            "gate value is invalid",
+        ),
+        (lambda entry: entry.update(previous=[]), "state must be a mapping"),
+        (
+            lambda entry: cast(dict[str, object], entry["previous"]).update(
+                keep_on="yes"
+            ),
+            "state is invalid",
+        ),
+        (
+            lambda entry: cast(dict[str, object], entry["current"]).update(
+                release_cause=3
+            ),
+            "release cause is invalid",
+        ),
+        (
+            lambda entry: cast(dict[str, object], entry["current"]).update(
+                release_cause="not-a-cause"
+            ),
+            "release cause is invalid",
+        ),
+    ),
+)
+def test_policy_audit_restore_rejects_corrupt_entry(
+    mutate: Callable[[dict[str, object]], None],
+    message: str,
+) -> None:
+    predictive_map = make_map()
+    occupancy_filter = JointOccupancyFilter(predictive_map, 1, NOW)
+    policy = AutomationPolicy(ZoneGraph.from_map(predictive_map))
+    payload = serialize_occupancy_state(
+        predictive_map,
+        occupancy_filter.posterior,
+        policy.states,
+        (),
+        occupancy_filter.observations.entity_states,
+        {},
+        policy_audit=(policy_audit_entry(NOW),),
+    )
+    raw_entry = cast(list[dict[str, object]], payload["policy_audit"])[0]
+    mutate(raw_entry)
+
+    with pytest.raises(ValueError, match=message):
+        _restore_policy_audit([raw_entry], set(predictive_map.zones()), NOW)
 
 
 @pytest.mark.scenario

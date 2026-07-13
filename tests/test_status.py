@@ -1,11 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 from custom_components.predictive_controls.confidence import ZoneState
 from custom_components.predictive_controls.events import OccupancyEvent
 from custom_components.predictive_controls.markov import Prediction
+from custom_components.predictive_controls.occupancy_state import (
+    ObservationProvenance,
+    PolicyAuditEntry,
+    PolicyDecision,
+    ReleaseCause,
+)
 from custom_components.predictive_controls.occupancy_tracker import (
     ActivationPlausibility,
     AnonymousTrack,
@@ -258,3 +264,91 @@ def test_runtime_status_payload_serializes_prediction_and_without_prediction() -
     )
 
     assert runtime_status_payload(without_prediction)["last_prediction"] is None
+
+
+def test_runtime_status_payload_serializes_retained_policy_audit() -> None:
+    diagnostics = replace(
+        make_diagnostics(),
+        joint_last_provenance=ObservationProvenance(
+            event_id="office-motion",
+            evidence_episode_id="office-motion:1",
+            entity_id="binary_sensor.office",
+            node_id="office_motion",
+            zone="office",
+            state="on",
+            signal_type="motion",
+            reliability=0.9,
+            log_likelihood_by_count=(0.0,),
+            disposition="accepted",
+        ),
+        joint_policy_audit=(
+            PolicyAuditEntry(
+                decision_at=datetime(2026, 6, 7, 12, tzinfo=UTC),
+                source="observation",
+                trigger_event_id="office-motion",
+                trigger_entity_id="binary_sensor.office",
+                trigger_zone="office",
+                trigger_state="on",
+                trigger_disposition="accepted",
+                decision=PolicyDecision(
+                    zone="office",
+                    action="release",
+                    accepted=True,
+                    reason_code="graph_departure",
+                    gate_values={"origin_marginal": 0.05},
+                    evidence_ids=("office-hall",),
+                ),
+                previous_keep_on=True,
+                current_keep_on=False,
+                previous_reason="trusted local occupancy established",
+                current_reason="graph-valid final occupant departure",
+                previous_release_cause=None,
+                current_release_cause=ReleaseCause.GRAPH_DEPARTURE,
+            ),
+        ),
+    )
+    runtime = FakeRuntime(
+        zone_states={},
+        recent_occupancy_events=(),
+        last_source_node=None,
+        last_prediction=None,
+        probabilities={},
+        transition_counts={},
+        confidence=FakeConfidence(diagnostics),
+    )
+
+    audit = runtime_status_payload(runtime)["occupancy_diagnostics"]["joint"][
+        "policy_audit"
+    ]
+
+    assert audit == [
+        {
+            "decision_at": "2026-06-07T12:00:00+00:00",
+            "source": "observation",
+            "trigger": {
+                "event_id": "office-motion",
+                "entity_id": "binary_sensor.office",
+                "zone": "office",
+                "state": "on",
+                "disposition": "accepted",
+            },
+            "decision": {
+                "zone": "office",
+                "action": "release",
+                "accepted": True,
+                "reason_code": "graph_departure",
+                "gate_values": {"origin_marginal": 0.05},
+                "evidence_ids": ["office-hall"],
+            },
+            "previous": {
+                "keep_on": True,
+                "reason": "trusted local occupancy established",
+                "release_cause": None,
+            },
+            "current": {
+                "keep_on": False,
+                "reason": "graph-valid final occupant departure",
+                "release_cause": "graph_departure",
+            },
+        }
+    ]

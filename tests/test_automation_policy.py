@@ -123,6 +123,43 @@ def test_policy_scenario_graph_departure_uses_coherent_multihop_evidence() -> No
     assert policy.pending_departures == {}
 
 
+def test_policy_audit_records_count_release_with_before_and_after_state() -> None:
+    graph = ZoneGraph.from_map(make_map())
+    policy = AutomationPolicy(graph)
+    policy.restore_states(
+        {
+            zone: ZonePolicyState(
+                keep_on=zone == "office",
+                last_trusted_at=NOW if zone == "office" else None,
+            )
+            for zone in graph.zones()
+        }
+    )
+
+    policy.reconcile_count(0, NOW, "everyone_away")
+
+    office_entry = next(
+        entry for entry in policy.policy_audit if entry.decision.zone == "office"
+    )
+    assert office_entry.decision_at == NOW
+    assert office_entry.source == "occupant_count"
+    assert office_entry.trigger_event_id == "everyone_away"
+    assert office_entry.trigger_entity_id is None
+    assert office_entry.decision.reason_code == "authoritative_away"
+    assert office_entry.previous_keep_on
+    assert not office_entry.current_keep_on
+    assert office_entry.current_release_cause == "authoritative_away"
+
+
+def test_policy_expiry_prunes_audit_entries_older_than_two_days() -> None:
+    policy = AutomationPolicy(ZoneGraph.from_map(make_map()))
+
+    policy.reconcile_count(0, NOW - timedelta(days=2, seconds=1), "old-away")
+
+    assert policy.expire(NOW)
+    assert policy.policy_audit == ()
+
+
 def test_policy_scenario_false_positive_requires_independent_corroboration() -> None:
     graph = ZoneGraph.from_map(make_map())
     policy = AutomationPolicy(graph)

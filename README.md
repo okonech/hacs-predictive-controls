@@ -399,7 +399,8 @@ logger:
     custom_components.predictive_controls: debug
 ```
 
-Diagnostics are available from the integration entry and include loaded nodes, entity bindings, current probabilities, and transition counts.
+Diagnostics are available from the integration entry and include loaded nodes, entity bindings, current probabilities, and transition counts. The
+`occupancy_diagnostics.joint.policy_audit` field retains 48 hours of policy decisions across restarts, including the triggering evidence, gate values, and each affected latch's before/after state.
 
 ## Development
 

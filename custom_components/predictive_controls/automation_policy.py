@@ -7,6 +7,8 @@ from datetime import datetime, timedelta
 from .occupancy_graph import ZoneGraph
 from .occupancy_state import (
     FilterUpdate,
+    ObservationProvenance,
+    PolicyAuditEntry,
     PolicyDecision,
     ReleaseCause,
     ZonePolicyState,
@@ -20,6 +22,7 @@ GRAPH_RELEASE_MOVEMENT_THRESHOLD = 0.85
 RELOCATION_ORIGIN_THRESHOLD = 0.10
 RELOCATION_DESTINATION_THRESHOLD = 0.80
 RELOCATION_ODDS_THRESHOLD = 10.0
+POLICY_AUDIT_RETENTION = timedelta(days=2)
 
 
 @dataclass(frozen=True)
@@ -47,6 +50,7 @@ class AutomationPolicy:
         self._states = {zone: ZonePolicyState() for zone in graph.zones()}
         self._pending_departures: dict[str, PendingDeparture] = {}
         self._last_decisions: tuple[PolicyDecision, ...] = ()
+        self._policy_audit: list[PolicyAuditEntry] = []
         self._latest_positive_episodes = {
             zone: tuple[str, ...]() for zone in graph.zones()
         }
@@ -63,6 +67,10 @@ class AutomationPolicy:
     def last_decisions(self) -> tuple[PolicyDecision, ...]:
         return self._last_decisions
 
+    @property
+    def policy_audit(self) -> tuple[PolicyAuditEntry, ...]:
+        return tuple(self._policy_audit)
+
     def apply(
         self,
         update: FilterUpdate,
@@ -72,6 +80,7 @@ class AutomationPolicy:
         """Apply one immutable filter update without feeding policy back into it."""
 
         now = update.current.updated_at
+        previous_states = self.states
         self.expire(now)
         provenance = update.provenance
         self._latest_positive_episodes = {
@@ -82,7 +91,8 @@ class AutomationPolicy:
             for zone in self._states
         }
         if provenance.disposition not in {"accepted", "replacement"}:
-            self._last_decisions = (
+            self._record_decisions(
+                (
                 PolicyDecision(
                     provenance.zone,
                     "observe",
@@ -91,6 +101,11 @@ class AutomationPolicy:
                     {"disposition": provenance.disposition},
                     (provenance.event_id,),
                 ),
+                ),
+                decision_at=now,
+                source="observation",
+                previous_states=previous_states,
+                provenance=provenance,
             )
             return self.states
 
@@ -121,7 +136,13 @@ class AutomationPolicy:
                     (provenance.event_id,),
                 )
             )
-        self._last_decisions = tuple(decisions)
+        self._record_decisions(
+            tuple(decisions),
+            decision_at=now,
+            source="observation",
+            previous_states=previous_states,
+            provenance=provenance,
+        )
         return self.states
 
     def expire(self, now: datetime) -> bool:
@@ -135,7 +156,9 @@ class AutomationPolicy:
             ):
                 self._states[zone] = replace(state, activation_expires_at=None)
                 changed = True
-        return changed
+        audit_size = len(self._policy_audit)
+        self._prune_policy_audit(now)
+        return changed or len(self._policy_audit) != audit_size
 
     def activation_plausible(self, zone: str, now: datetime) -> bool:
         state = self._states.get(zone)
@@ -145,24 +168,38 @@ class AutomationPolicy:
             and state.activation_expires_at > now
         )
 
-    def suppress_activation(self, zone: str, reason_code: str) -> bool:
+    def suppress_activation(
+        self,
+        zone: str,
+        reason_code: str,
+        decision_at: datetime | None = None,
+    ) -> bool:
         """Remove one unpublished activation pulse after a runtime safety breach."""
 
         state = self._states.get(zone)
         if state is None or state.activation_expires_at is None:
             return False
+        previous_states = self.states
         self._states[zone] = replace(state, activation_expires_at=None)
-        self._last_decisions = (
-            *self._last_decisions,
-            PolicyDecision(
-                zone,
-                "activate",
-                False,
-                reason_code,
-                {"performance_budget_exceeded": True},
-                state.evidence_ids,
-            ),
+        previous_decisions = self._last_decisions
+        suppression = PolicyDecision(
+            zone,
+            "activate",
+            False,
+            reason_code,
+            {"performance_budget_exceeded": True},
+            state.evidence_ids,
         )
+        self._record_decisions(
+            (
+                suppression,
+            ),
+            decision_at=decision_at or datetime.now().astimezone(),
+            source="performance_suppression",
+            previous_states=previous_states,
+            trigger_event_id=state.evidence_ids[-1] if state.evidence_ids else "",
+        )
+        self._last_decisions = (*previous_decisions, suppression)
         return True
 
     def reconcile_count(
@@ -176,6 +213,7 @@ class AutomationPolicy:
 
         if expected_occupants < 0:
             raise ValueError("expected_occupants must be non-negative")
+        previous_states = self.states
         if expected_occupants == 0:
             self._clear_all(
                 now,
@@ -183,7 +221,8 @@ class AutomationPolicy:
                 evidence_id,
                 ReleaseCause.AUTHORITATIVE_AWAY,
             )
-            self._last_decisions = tuple(
+            self._record_decisions(
+                tuple(
                 PolicyDecision(
                     zone,
                     "release",
@@ -193,10 +232,21 @@ class AutomationPolicy:
                     (evidence_id,),
                 )
                 for zone in sorted(self._states)
+                ),
+                decision_at=now,
+                source="occupant_count",
+                previous_states=previous_states,
+                trigger_event_id=evidence_id,
             )
             return
         if occupied_marginals is None:
-            self._last_decisions = ()
+            self._record_decisions(
+                (),
+                decision_at=now,
+                source="occupant_count",
+                previous_states=previous_states,
+                trigger_event_id=evidence_id,
+            )
             return
         retained = {
             zone
@@ -233,18 +283,26 @@ class AutomationPolicy:
                     (evidence_id,),
                 )
             )
-        self._last_decisions = tuple(decisions)
+        self._record_decisions(
+            tuple(decisions),
+            decision_at=now,
+            source="occupant_count",
+            previous_states=previous_states,
+            trigger_event_id=evidence_id,
+        )
 
     def reset(self, now: datetime, evidence_id: str = "explicit_reset") -> None:
         """Release all policy state through an explicit diagnosable reset."""
 
+        previous_states = self.states
         self._clear_all(
             now,
             "explicit reset",
             evidence_id,
             ReleaseCause.EXPLICIT_RESET,
         )
-        self._last_decisions = tuple(
+        self._record_decisions(
+            tuple(
             PolicyDecision(
                 zone,
                 "release",
@@ -254,21 +312,29 @@ class AutomationPolicy:
                 (evidence_id,),
             )
             for zone in sorted(self._states)
+            ),
+            decision_at=now,
+            source="reset",
+            previous_states=previous_states,
+            trigger_event_id=evidence_id,
         )
 
     def enter_unsupported_count(
         self,
         requested_count: int,
         evidence_id: str,
+        decision_at: datetime,
     ) -> None:
         """Suspend transient policy state without causing a false-off."""
 
+        previous_states = self.states
         self._states = {
             zone: replace(state, activation_expires_at=None)
             for zone, state in self._states.items()
         }
         self._pending_departures.clear()
-        self._last_decisions = tuple(
+        self._record_decisions(
+            tuple(
             PolicyDecision(
                 zone,
                 "suspend",
@@ -278,6 +344,11 @@ class AutomationPolicy:
                 (evidence_id,),
             )
             for zone in sorted(self._states)
+            ),
+            decision_at=decision_at,
+            source="unsupported_occupant_count",
+            previous_states=previous_states,
+            trigger_event_id=evidence_id,
         )
 
     def restore_states(self, states: dict[str, ZonePolicyState]) -> None:
@@ -287,9 +358,63 @@ class AutomationPolicy:
             raise ValueError("restored policy zones do not match the map")
         self._states = states.copy()
         self._last_decisions = ()
+        self._policy_audit = []
         self._latest_positive_episodes = {
             zone: tuple[str, ...]() for zone in self._states
         }
+
+    def restore_policy_audit(self, audit: tuple[PolicyAuditEntry, ...]) -> None:
+        """Restore already-validated retained policy decisions."""
+
+        self._policy_audit = list(audit)
+
+    def _record_decisions(
+        self,
+        decisions: tuple[PolicyDecision, ...],
+        *,
+        decision_at: datetime,
+        source: str,
+        previous_states: dict[str, ZonePolicyState],
+        provenance: ObservationProvenance | None = None,
+        trigger_event_id: str = "",
+    ) -> None:
+        self._last_decisions = decisions
+        for decision in decisions:
+            previous = previous_states.get(decision.zone, ZonePolicyState())
+            current = self._states.get(decision.zone, ZonePolicyState())
+            self._policy_audit.append(
+                PolicyAuditEntry(
+                    decision_at=decision_at,
+                    source=source,
+                    trigger_event_id=(
+                        provenance.event_id
+                        if provenance is not None
+                        else trigger_event_id
+                    ),
+                    trigger_entity_id=(
+                        None if provenance is None else provenance.entity_id
+                    ),
+                    trigger_zone=None if provenance is None else provenance.zone,
+                    trigger_state=None if provenance is None else provenance.state,
+                    trigger_disposition=(
+                        None if provenance is None else provenance.disposition
+                    ),
+                    decision=decision,
+                    previous_keep_on=previous.keep_on,
+                    current_keep_on=current.keep_on,
+                    previous_reason=previous.reason,
+                    current_reason=current.reason,
+                    previous_release_cause=previous.last_release_cause,
+                    current_release_cause=current.last_release_cause,
+                )
+            )
+        self._prune_policy_audit(decision_at)
+
+    def _prune_policy_audit(self, now: datetime) -> None:
+        cutoff = now - POLICY_AUDIT_RETENTION
+        self._policy_audit = [
+            entry for entry in self._policy_audit if entry.decision_at >= cutoff
+        ]
 
     def restore_pending_departures(
         self,
