@@ -311,8 +311,6 @@ class PredictiveControlsRuntime:
         elapsed_ms = (perf_counter_ns() - started_ns) / 1_000_000
         if elapsed_ms > RUNTIME_HARD_CEILING_MS:
             self._performance_budget_exceeded_count += 1
-            self.confidence.suppress_last_activation("performance_budget_exceeded")
-            action_decisions = ()
             _LOGGER.warning(
                 "Predictive Controls runtime update exceeded %.1f ms: %.3f ms",
                 RUNTIME_HARD_CEILING_MS,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
@@ -18,19 +19,24 @@ from .occupancy_state import (
     ZonePolicyState,
     zone_marginals,
 )
+from .policy_audit import (
+    pack_policy_audit_context,
+    packed_policy_audit_context_size,
+)
 
 ACTIVATION_OCCUPIED_THRESHOLD = 0.60
 ACTIVATION_DELTA_THRESHOLD = 0.20
 ACTIVATION_MOVEMENT_THRESHOLD = 0.40
+ACTIVATION_SOURCE_OCCUPIED_THRESHOLD = 0.10
 GRAPH_RELEASE_OCCUPIED_THRESHOLD = 0.20
 GRAPH_RELEASE_MOVEMENT_THRESHOLD = 0.85
 RELOCATION_ORIGIN_THRESHOLD = 0.10
 RELOCATION_DESTINATION_THRESHOLD = 0.80
 RELOCATION_ODDS_THRESHOLD = 10.0
-PROVISIONAL_RELEASE_OCCUPIED_THRESHOLD = 0.10
-PROVISIONAL_RELEASE_GRACE = timedelta(minutes=15)
 PROVISIONAL_RECOVERY_OCCUPIED_THRESHOLD = 0.40
-POLICY_AUDIT_RETENTION = timedelta(days=2)
+POLICY_AUDIT_RETENTION = timedelta(hours=12)
+POLICY_AUDIT_MAX_ENTRIES = 8192
+POLICY_AUDIT_MAX_CONTEXT_BYTES = 12 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -58,7 +64,8 @@ class AutomationPolicy:
         self._states = {zone: ZonePolicyState() for zone in graph.zones()}
         self._pending_departures: dict[str, PendingDeparture] = {}
         self._last_decisions: tuple[PolicyDecision, ...] = ()
-        self._policy_audit: list[PolicyAuditEntry] = []
+        self._policy_audit: deque[PolicyAuditEntry] = deque()
+        self._policy_audit_context_bytes = 0
         self._latest_positive_episodes = {
             zone: tuple[str, ...]() for zone in graph.zones()
         }
@@ -84,7 +91,6 @@ class AutomationPolicy:
         update: FilterUpdate,
         *,
         emit_activation: bool = True,
-        allow_provisional_release: bool = True,
     ) -> dict[str, ZonePolicyState]:
         """Apply one immutable filter update without feeding policy back into it."""
 
@@ -127,14 +133,6 @@ class AutomationPolicy:
             else zone_marginals(update.previous, self.graph.zones())[0]
         )
         decisions = self._release_supported_origins(update, previous_marginals)
-        if allow_provisional_release:
-            decisions.extend(
-                self._release_stale_low_confidence_latches(
-                    now,
-                    update.occupied_marginals,
-                    provenance.event_id,
-                )
-            )
 
         if provenance.state == "on":
             decisions.append(
@@ -172,9 +170,8 @@ class AutomationPolicy:
         active_positive_evidence: Mapping[str, tuple[PositiveEvidence, ...]]
         | None = None,
     ) -> bool:
-        """Expire activation pulses and confirmed stale low-confidence latches."""
+        """Expire activation pulses while preserving keep-on ownership."""
 
-        previous_states = self.states
         if active_positive_evidence is not None:
             self._latest_positive_episodes = {
                 zone: tuple(
@@ -191,24 +188,6 @@ class AutomationPolicy:
             ):
                 self._states[zone] = replace(state, activation_expires_at=None)
                 changed = True
-        decisions = (
-            self._release_stale_low_confidence_latches(
-                now,
-                occupied_marginals,
-                f"policy-expiry@{now.isoformat()}",
-            )
-            if occupied_marginals is not None
-            else []
-        )
-        if decisions:
-            self._record_decisions(
-                tuple(decisions),
-                decision_at=now,
-                source="policy_expiry",
-                previous_states=previous_states,
-                trigger_event_id=f"policy-expiry@{now.isoformat()}",
-            )
-            changed = True
         audit_size = len(self._policy_audit)
         self._prune_policy_audit(now)
         return changed or len(self._policy_audit) != audit_size
@@ -220,40 +199,6 @@ class AutomationPolicy:
             and state.activation_expires_at is not None
             and state.activation_expires_at > now
         )
-
-    def suppress_activation(
-        self,
-        zone: str,
-        reason_code: str,
-        decision_at: datetime | None = None,
-    ) -> bool:
-        """Remove one unpublished activation pulse after a runtime safety breach."""
-
-        state = self._states.get(zone)
-        if state is None or state.activation_expires_at is None:
-            return False
-        previous_states = self.states
-        self._states[zone] = replace(state, activation_expires_at=None)
-        previous_decisions = self._last_decisions
-        suppression = PolicyDecision(
-            zone,
-            "activate",
-            False,
-            reason_code,
-            {"performance_budget_exceeded": True},
-            state.evidence_ids,
-        )
-        self._record_decisions(
-            (
-                suppression,
-            ),
-            decision_at=decision_at or datetime.now().astimezone(),
-            source="performance_suppression",
-            previous_states=previous_states,
-            trigger_event_id=state.evidence_ids[-1] if state.evidence_ids else "",
-        )
-        self._last_decisions = (*previous_decisions, suppression)
-        return True
 
     def reconcile_count(
         self,
@@ -411,7 +356,8 @@ class AutomationPolicy:
             raise ValueError("restored policy zones do not match the map")
         self._states = states.copy()
         self._last_decisions = ()
-        self._policy_audit = []
+        self._policy_audit.clear()
+        self._policy_audit_context_bytes = 0
         self._latest_positive_episodes = {
             zone: tuple[str, ...]() for zone in self._states
         }
@@ -419,7 +365,11 @@ class AutomationPolicy:
     def restore_policy_audit(self, audit: tuple[PolicyAuditEntry, ...]) -> None:
         """Restore already-validated retained policy decisions."""
 
-        self._policy_audit = list(audit)
+        self._policy_audit = deque(audit)
+        self._policy_audit_context_bytes = sum(
+            packed_policy_audit_context_size(entry.context) for entry in audit
+        )
+        self._bound_policy_audit()
 
     def _record_decisions(
         self,
@@ -433,35 +383,40 @@ class AutomationPolicy:
         context: PolicyAuditContext | None = None,
     ) -> None:
         self._last_decisions = decisions
+        packed_context = (
+            None if context is None else pack_policy_audit_context(context)
+        )
         for index, decision in enumerate(decisions):
             previous = previous_states.get(decision.zone, ZonePolicyState())
             current = self._states.get(decision.zone, ZonePolicyState())
-            self._policy_audit.append(
-                PolicyAuditEntry(
-                    decision_at=decision_at,
-                    source=source,
-                    trigger_event_id=(
-                        provenance.event_id
-                        if provenance is not None
-                        else trigger_event_id
-                    ),
-                    trigger_entity_id=(
-                        None if provenance is None else provenance.entity_id
-                    ),
-                    trigger_zone=None if provenance is None else provenance.zone,
-                    trigger_state=None if provenance is None else provenance.state,
-                    trigger_disposition=(
-                        None if provenance is None else provenance.disposition
-                    ),
-                    decision=decision,
-                    previous_keep_on=previous.keep_on,
-                    current_keep_on=current.keep_on,
-                    previous_reason=previous.reason,
-                    current_reason=current.reason,
-                    previous_release_cause=previous.last_release_cause,
-                    current_release_cause=current.last_release_cause,
-                    context=context if index == len(decisions) - 1 else None,
-                )
+            entry = PolicyAuditEntry(
+                decision_at=decision_at,
+                source=source,
+                trigger_event_id=(
+                    provenance.event_id
+                    if provenance is not None
+                    else trigger_event_id
+                ),
+                trigger_entity_id=(
+                    None if provenance is None else provenance.entity_id
+                ),
+                trigger_zone=None if provenance is None else provenance.zone,
+                trigger_state=None if provenance is None else provenance.state,
+                trigger_disposition=(
+                    None if provenance is None else provenance.disposition
+                ),
+                decision=decision,
+                previous_keep_on=previous.keep_on,
+                current_keep_on=current.keep_on,
+                previous_reason=previous.reason,
+                current_reason=current.reason,
+                previous_release_cause=previous.last_release_cause,
+                current_release_cause=current.last_release_cause,
+                context=(packed_context if index == len(decisions) - 1 else None),
+            )
+            self._policy_audit.append(entry)
+            self._policy_audit_context_bytes += packed_policy_audit_context_size(
+                entry.context
             )
         self._prune_policy_audit(decision_at)
 
@@ -496,9 +451,23 @@ class AutomationPolicy:
 
     def _prune_policy_audit(self, now: datetime) -> None:
         cutoff = now - POLICY_AUDIT_RETENTION
-        self._policy_audit = [
-            entry for entry in self._policy_audit if entry.decision_at >= cutoff
-        ]
+        while self._policy_audit and self._policy_audit[0].decision_at < cutoff:
+            self._discard_oldest_policy_audit_entry()
+        self._bound_policy_audit()
+
+    def _bound_policy_audit(self) -> None:
+        while self._policy_audit and (
+            len(self._policy_audit) > POLICY_AUDIT_MAX_ENTRIES
+            or self._policy_audit_context_bytes
+            > POLICY_AUDIT_MAX_CONTEXT_BYTES
+        ):
+            self._discard_oldest_policy_audit_entry()
+
+    def _discard_oldest_policy_audit_entry(self) -> None:
+        entry = self._policy_audit.popleft()
+        self._policy_audit_context_bytes -= packed_policy_audit_context_size(
+            entry.context
+        )
 
     def restore_pending_departures(
         self,
@@ -529,10 +498,29 @@ class AutomationPolicy:
         occupied = update.occupied_marginals.get(zone, 0.0)
         increase = occupied - previous_marginals.get(zone, 0.0)
         state = self._states[zone]
-        movement_in = sum(
-            evidence.coherent_probability
+        graph_arrivals = tuple(
+            evidence
             for evidence in update.movement_evidence
             if evidence.target_zone == zone and evidence.disposition == "graph_valid"
+        )
+        strongest_arrival = max(
+            graph_arrivals,
+            key=lambda evidence: (evidence.coherent_probability, evidence.path_key),
+            default=None,
+        )
+        movement_in = (
+            0.0
+            if strongest_arrival is None
+            else strongest_arrival.coherent_probability
+        )
+        source_prior = (
+            0.0
+            if strongest_arrival is None
+            else previous_marginals.get(strongest_arrival.source_zone, 0.0)
+        )
+        graph_arrival_supported = (
+            movement_in >= ACTIVATION_MOVEMENT_THRESHOLD
+            and source_prior >= ACTIVATION_SOURCE_OCCUPIED_THRESHOLD
         )
         prior_unlocated = _unlocated_probability(update.previous)
         structured_evidence = update.active_positive_evidence.get(zone, ())
@@ -557,7 +545,7 @@ class AutomationPolicy:
             else ACTIVATION_OCCUPIED_THRESHOLD
         )
         supported = (
-            movement_in >= ACTIVATION_MOVEMENT_THRESHOLD
+            graph_arrival_supported
             or prior_unlocated >= 0.50
             or independently_corroborated
             or recovering
@@ -569,6 +557,9 @@ class AutomationPolicy:
             "increase_threshold": ACTIVATION_DELTA_THRESHOLD,
             "movement_in": movement_in,
             "movement_threshold": ACTIVATION_MOVEMENT_THRESHOLD,
+            "source_prior": source_prior,
+            "source_threshold": ACTIVATION_SOURCE_OCCUPIED_THRESHOLD,
+            "graph_arrival_supported": graph_arrival_supported,
             "prior_unlocated": prior_unlocated,
             "independently_corroborated": independently_corroborated,
             "corroborating_entity_count": float(len(eligible_entities)),
@@ -607,7 +598,7 @@ class AutomationPolicy:
         reason = "trusted local occupancy established"
         if recovering:
             reason = "trusted occupancy reacquired after release"
-        elif movement_in >= ACTIVATION_MOVEMENT_THRESHOLD:
+        elif graph_arrival_supported:
             reason = "graph-supported local arrival"
         elif independently_corroborated:
             reason = "independent local sensors corroborated occupancy"
@@ -635,7 +626,7 @@ class AutomationPolicy:
         reason_code = "trusted_local_occupancy"
         if recovering:
             reason_code = "provisional_false_off_recovery"
-        elif movement_in >= ACTIVATION_MOVEMENT_THRESHOLD:
+        elif graph_arrival_supported:
             reason_code = "graph_supported_arrival"
         elif independently_corroborated:
             reason_code = "independent_corroboration"
@@ -763,55 +754,6 @@ class AutomationPolicy:
                     reason_code,
                     gate_values,
                     pending.evidence_ids,
-                )
-            )
-        return decisions
-
-    def _release_stale_low_confidence_latches(
-        self,
-        now: datetime,
-        occupied_marginals: Mapping[str, float],
-        evidence_id: str,
-    ) -> list[PolicyDecision]:
-        decisions: list[PolicyDecision] = []
-        for zone, state in tuple(self._states.items()):
-            if not state.keep_on or state.last_trusted_at is None:
-                continue
-            occupied = occupied_marginals.get(zone, 0.0)
-            seconds_since_trusted = (now - state.last_trusted_at).total_seconds()
-            active_episode_count = len(self._latest_positive_episodes.get(zone, ()))
-            if (
-                occupied > PROVISIONAL_RELEASE_OCCUPIED_THRESHOLD
-                or seconds_since_trusted < PROVISIONAL_RELEASE_GRACE.total_seconds()
-                or active_episode_count
-            ):
-                continue
-            gate_values: dict[str, float | bool | str] = {
-                "occupied_marginal": occupied,
-                "occupied_threshold": PROVISIONAL_RELEASE_OCCUPIED_THRESHOLD,
-                "seconds_since_trusted": seconds_since_trusted,
-                "grace_seconds": PROVISIONAL_RELEASE_GRACE.total_seconds(),
-                "active_positive_episode_count": float(active_episode_count),
-            }
-            self._states[zone] = ZonePolicyState(
-                keep_on=False,
-                activation_expires_at=None,
-                last_trusted_at=state.last_trusted_at,
-                last_release_cause=ReleaseCause.PROVISIONAL_FALSE_OFF,
-                recovery_eligible=True,
-                reason="sustained low occupancy without active local evidence",
-                evidence_ids=_append_evidence(state.evidence_ids, evidence_id),
-                blocked_episode_ids=self._latest_positive_episodes.get(zone, ()),
-            )
-            self._pending_departures.pop(zone, None)
-            decisions.append(
-                PolicyDecision(
-                    zone,
-                    "release",
-                    True,
-                    "provisional_false_off",
-                    gate_values,
-                    (evidence_id,),
                 )
             )
         return decisions

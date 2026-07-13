@@ -310,8 +310,89 @@ def test_filter_discards_stale_motion_from_positive_corroboration() -> None:
     occupancy_filter = JointOccupancyFilter(make_map(), 1, NOW)
     occupancy_filter.observe(event("office", NOW + timedelta(seconds=1)))
 
-    evidence = occupancy_filter._current_positive_evidence(  # noqa: SLF001
+    fresh_evidence = occupancy_filter.active_positive_evidence(
+        NOW + timedelta(minutes=3)
+    )
+    asserted_evidence = occupancy_filter.asserted_positive_evidence(
         NOW + timedelta(minutes=3)
     )
 
-    assert evidence["office"] == ()
+    assert fresh_evidence["office"] == ()
+    assert tuple(item.entity_id for item in asserted_evidence["office"]) == (
+        "binary_sensor.office",
+    )
+
+
+def test_filter_sustained_duration_saturates_and_stops_after_departure() -> None:
+    occupancy_filter = JointOccupancyFilter(make_map(), 1, NOW)
+    occupancy_filter.observe(event("office", NOW + timedelta(seconds=1)))
+    arrival = occupancy_filter.occupied_marginals["office"]
+    office_context = next(
+        context
+        for contexts in occupancy_filter.directional_contexts.values()
+        for context in contexts
+        if context.current_node_id == "office"
+    )
+
+    assert occupancy_filter.reinforce_asserted_evidence(
+        NOW + timedelta(minutes=22)
+    )
+    reinforced = occupancy_filter.occupied_marginals["office"]
+    assert reinforced > arrival
+    assert not occupancy_filter.reinforce_asserted_evidence(
+        NOW + timedelta(minutes=22)
+    )
+    reinforced_context = next(
+        context
+        for contexts in occupancy_filter.directional_contexts.values()
+        for context in contexts
+        if context.current_node_id == "office"
+    )
+    assert reinforced_context.last_event_at == office_context.last_event_at
+    assert reinforced_context.assertion_valid_until == NOW + timedelta(minutes=22)
+
+    occupancy_filter.observe(event("hall", NOW + timedelta(minutes=22, seconds=1)))
+    office_state = occupancy_filter.observations.entity_states[
+        "binary_sensor.office"
+    ]
+    assert office_state.departure_observed
+    assert office_state.duration_log_odds == 0.0
+    assert office_state.log_likelihood_by_count == (0.0, 0.0)
+    assert not occupancy_filter.reinforce_asserted_evidence(
+        NOW + timedelta(minutes=30)
+    )
+
+
+def test_filter_out_of_order_event_cannot_advance_sustained_evidence() -> None:
+    occupancy_filter = JointOccupancyFilter(make_map(), 1, NOW)
+    occupancy_filter.observe(event("office", NOW + timedelta(minutes=10)))
+    before_posterior = occupancy_filter.posterior
+    before_states = occupancy_filter.observations.entity_states
+    before_contexts = occupancy_filter.directional_contexts
+    before_sequence = occupancy_filter.update_sequence
+
+    update = occupancy_filter.observe(event("garage", NOW + timedelta(minutes=5)))
+
+    assert update.provenance.disposition == "out_of_order"
+    assert occupancy_filter.posterior == before_posterior
+    assert occupancy_filter.observations.entity_states == before_states
+    assert occupancy_filter.directional_contexts == before_contexts
+    assert occupancy_filter.update_sequence == before_sequence
+
+
+def test_filter_asserted_source_retains_missed_relocation_hypothesis() -> None:
+    occupancy_filter = JointOccupancyFilter(make_map(), 1, NOW)
+    occupancy_filter.observe(event("office", NOW + timedelta(seconds=1)))
+    occupancy_filter.reinforce_asserted_evidence(NOW + timedelta(minutes=10))
+
+    update = occupancy_filter.observe(
+        event("garage", NOW + timedelta(minutes=10, seconds=1))
+    )
+
+    assert any(
+        evidence.source_zone == "office"
+        and evidence.target_zone == "garage"
+        and evidence.disposition == "missed_movement"
+        and evidence.coherent_probability > 0.0
+        for evidence in update.movement_evidence
+    )

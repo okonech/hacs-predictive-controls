@@ -81,7 +81,7 @@ class TrackerConfig:
 
 @dataclass(frozen=True)
 class AnonymousTrack:
-    """Compatibility shape for historical diagnostic payloads."""
+    """One current anonymous location projected from the exact posterior."""
 
     track_id: str
     zone: str
@@ -159,6 +159,10 @@ class TrackerDiagnostics:
     joint_policy_audit: tuple[PolicyAuditEntry, ...] = ()
     joint_prediction_leases: tuple[PredictionLease, ...] = ()
     joint_prediction_hints: dict[str, float] = field(default_factory=dict)
+    joint_route_diagnostics: dict[str, object] = field(default_factory=dict)
+    joint_route_statistics: dict[tuple[str, ...], dict[str, float]] = field(
+        default_factory=dict
+    )
     joint_last_provenance: ObservationProvenance | None = None
     joint_movement_evidence: tuple[MovementEvidence, ...] = ()
     joint_directional_contexts: dict[
@@ -252,7 +256,40 @@ class OccupancyTracker:
 
     @property
     def tracks(self) -> tuple[AnonymousTrack, ...]:
-        return ()
+        joint_filter = self._joint_filter
+        if joint_filter is None or not joint_filter.posterior.hypotheses:
+            return ()
+
+        positions = joint_filter.posterior.hypotheses[0].key.positions
+        count_marginals = joint_filter.count_marginals
+        asserted_evidence = joint_filter.asserted_positive_evidence(
+            joint_filter.posterior.updated_at
+        )
+        occurrences: dict[str, int] = {}
+        tracks: list[AnonymousTrack] = []
+        for position in positions:
+            zone = position.zone
+            if zone is None:
+                continue
+            occurrence = occurrences.get(zone, 0) + 1
+            occurrences[zone] = occurrence
+            probabilities = count_marginals.get(zone, ())
+            confidence = math.fsum(probabilities[occurrence:])
+            evidence = asserted_evidence.get(zone, ())
+            tracks.append(
+                AnonymousTrack(
+                    track_id=f"track_{len(tracks) + 1}",
+                    zone=zone,
+                    confidence=confidence,
+                    active=bool(evidence),
+                    last_evidence_at=max(
+                        (item.changed_at for item in evidence),
+                        default=position.entered_at,
+                    ),
+                    source_entities=tuple(item.entity_id for item in evidence),
+                )
+            )
+        return tuple(tracks)
 
     @property
     def diagnostics(self) -> TrackerDiagnostics:
@@ -260,7 +297,7 @@ class OccupancyTracker:
         last_update = None if joint_filter is None else joint_filter.last_update
         return TrackerDiagnostics(
             expected_occupants=self.config.expected_occupants,
-            tracks=(),
+            tracks=self.tracks,
             protected_tracks=(),
             protected_corridor=(),
             inferred_join_slots=(),
@@ -281,6 +318,8 @@ class OccupancyTracker:
             joint_policy_audit=self._joint_policy.policy_audit,
             joint_prediction_leases=self._joint_predictions.leases,
             joint_prediction_hints=self._joint_predictions.probabilities,
+            joint_route_diagnostics=self._joint_predictions.route_diagnostics,
+            joint_route_statistics=self._joint_predictions.route_counts,
             joint_last_provenance=None
             if last_update is None
             else last_update.provenance,
@@ -339,6 +378,14 @@ class OccupancyTracker:
         return ()
 
     def expire_transient_state(self, now: datetime) -> bool:
+        evidence_changed = (
+            False
+            if self._joint_filter is None
+            else self._joint_filter.reinforce_asserted_evidence(
+                now,
+                advance_context_validity=False,
+            )
+        )
         policy_changed = self._joint_policy.expire(
             now,
             None
@@ -346,21 +393,10 @@ class OccupancyTracker:
             else self._joint_filter.occupied_marginals,
             None
             if self._joint_filter is None
-            else self._joint_filter.active_positive_evidence(now),
+            else self._joint_filter.asserted_positive_evidence(now),
         )
         prediction_changed = self._joint_predictions.expire(now)
-        return policy_changed or prediction_changed
-
-    def suppress_last_activation(self, reason_code: str) -> bool:
-        """Suppress the last event's activation before runtime publication."""
-
-        if self._joint_filter is None or self._joint_filter.last_update is None:
-            return False
-        return self._joint_policy.suppress_activation(
-            self._joint_filter.last_update.provenance.zone,
-            reason_code,
-            self._joint_filter.last_update.current.updated_at,
-        )
+        return evidence_changed or policy_changed or prediction_changed
 
     def reconcile_expected_occupants(
         self,
@@ -449,7 +485,6 @@ class OccupancyTracker:
             self._joint_policy.apply(
                 update,
                 emit_activation=False,
-                allow_provisional_release=False,
             )
 
     def occupancy_store_data(
@@ -470,6 +505,8 @@ class OccupancyTracker:
             pending_departures=self._joint_policy.pending_departures,
             update_sequence=self._joint_filter.update_sequence,
             policy_audit=self._joint_policy.policy_audit,
+            route_counts=self._joint_predictions.route_counts,
+            route_contexts=self._joint_predictions.route_contexts,
         )
 
     def restore_joint_state(self, restored: RestoredOccupancyState) -> None:
@@ -491,6 +528,10 @@ class OccupancyTracker:
             restored.prediction_leases,
             restored.posterior.updated_at,
         )
+        self._joint_predictions.restore_route_state(
+            restored.route_counts,
+            restored.route_contexts,
+        )
         self._joint_restore_status = restored.restore_status
         self._joint_restore_reason = None
 
@@ -507,7 +548,10 @@ class OccupancyTracker:
         self.ensure_joint_state(event.event_at)
         assert self._joint_filter is not None
         update = self._joint_filter.observe(event)
-        self._joint_policy.apply(update, emit_activation=emit_activation)
+        self._joint_policy.apply(
+            update,
+            emit_activation=emit_activation,
+        )
         if emit_activation:
             self._joint_predictions.apply(update)
             self._joint_predictions.learn(update)

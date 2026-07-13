@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -96,6 +97,30 @@ def test_prediction_scenario_learning_requires_consistent_high_mass_node_edge() 
     assert manager.chain.counts["office"]["hall"] == pytest.approx(0.9)
 
 
+def test_prediction_uses_promoted_route_prefix_as_bounded_branch_boost() -> None:
+    manager = PredictionManager(make_map())
+    route = (
+        ("office", "hall"),
+        ("hall", "kitchen"),
+        ("kitchen", "hall"),
+        ("hall", "office"),
+    )
+    for _ in range(4):
+        for movement in route:
+            assert manager.learn(make_update(movement, 0.9, movement[1]))
+
+    leases = manager.apply(make_update(("office", "hall"), 1.0, "hall"))
+    probabilities = {lease.target_zone: lease.probability for lease in leases}
+
+    assert probabilities["kitchen"] > probabilities["living"]
+    assert probabilities["living"] > 0.0
+    assert manager.route_diagnostics["matched_prefix"]
+    support = manager.route_diagnostics["support"]
+    assert isinstance(support, float)
+    assert support >= 2.0
+    assert all(lease.target_zone != "office" for lease in leases)
+
+
 def test_prediction_rejects_ambiguous_source_node_learning() -> None:
     predictive_map = PredictiveMap.from_mapping(
         {
@@ -137,6 +162,21 @@ def test_prediction_ignores_aggregate_movement_without_path_evidence() -> None:
 
     assert manager.apply(aggregate_only) == ()
     assert manager.learn(aggregate_only) == ()
+
+
+def test_prediction_quarantines_ambiguous_anonymous_route_context() -> None:
+    manager = PredictionManager(make_map())
+    manager._route_contexts = (  # noqa: SLF001
+        ("office", "hall"),
+        ("kitchen", "hall"),
+    )
+
+    assert manager._route_history_for_edge(  # noqa: SLF001
+        SimpleNamespace(source_node_id="hall", target_node_id="living")
+    ) == ()
+    assert manager._route_history_for_edge(  # noqa: SLF001
+        SimpleNamespace(source_node_id=None, target_node_id="living")
+    ) == ()
 
 
 def test_prediction_scenario_expiry_count_reset_and_restore_are_isolated() -> None:

@@ -53,11 +53,18 @@ def _install_home_assistant_stubs() -> None:
 
 _install_home_assistant_stubs()
 
+from custom_components.predictive_controls.automation_policy import (  # noqa: E402
+    POLICY_AUDIT_MAX_CONTEXT_BYTES,
+    POLICY_AUDIT_MAX_ENTRIES,
+)
 from custom_components.predictive_controls.confidence import (  # noqa: E402
     ZoneConfidenceEngine,
 )
 from custom_components.predictive_controls.events import OccupancyEvent  # noqa: E402
 from custom_components.predictive_controls.model import PredictiveMap  # noqa: E402
+from custom_components.predictive_controls.policy_audit import (  # noqa: E402
+    packed_policy_audit_context_size,
+)
 from custom_components.predictive_controls.runtime import (  # noqa: E402
     RUNTIME_HARD_CEILING_MS,
     PredictiveControlsRuntime,
@@ -174,6 +181,7 @@ def _measure_core(
         )
         max_contexts = max(max_contexts, int(performance["context_count"]))
         total_compactions += int(performance["last_context_compactions"])
+    policy_audit = tracker.diagnostics.joint_policy_audit
     return (
         {
             **_latencies(samples),
@@ -182,6 +190,11 @@ def _measure_core(
             "context_count_max": max_contexts,
             "context_compactions": total_compactions,
             "pruned_probability": tracker.diagnostics.joint_pruned_probability,
+            "policy_audit_entry_count": len(policy_audit),
+            "policy_audit_context_compressed_bytes": sum(
+                packed_policy_audit_context_size(entry.context)
+                for entry in policy_audit
+            ),
         },
         tracker,
     )
@@ -342,6 +355,11 @@ def run_benchmark(map_path: Path, event_count: int) -> dict[str, object]:
         "PERF-005": core["context_count_max"] <= 612,
         "PERF-006": core["candidate_expansions_max"] <= candidate_ceiling,
         "PERF-007": core["pruned_probability"] == 0.0,
+        "PERF-008": bool(
+            core["policy_audit_entry_count"] <= POLICY_AUDIT_MAX_ENTRIES
+            and core["policy_audit_context_compressed_bytes"]
+            <= POLICY_AUDIT_MAX_CONTEXT_BYTES
+        ),
     }
     return {
         "generated_at": datetime.now().astimezone().isoformat(),

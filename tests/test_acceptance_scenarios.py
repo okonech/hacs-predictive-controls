@@ -25,7 +25,12 @@ from custom_components.predictive_controls.model import PredictiveMap
 from custom_components.predictive_controls.occupancy_persistence import (
     restore_occupancy_state,
 )
-from custom_components.predictive_controls.occupancy_state import ZonePolicyState
+from custom_components.predictive_controls.occupancy_state import (
+    PositionState,
+    ZonePolicyState,
+    canonical_hypothesis,
+    normalize_hypotheses,
+)
 from custom_components.predictive_controls.status import tracker_diagnostics_payload
 
 NOW = datetime(2026, 7, 12, 12, tzinfo=UTC)
@@ -316,7 +321,7 @@ def test_s28_entity_contract_is_stable_for_joint_policy_projection() -> None:
     )
 
 
-def test_s29_provisional_release_clears_public_keep_on_edge() -> None:
+def test_s29_elapsed_time_and_low_confidence_preserve_public_keep_on() -> None:
     predictive_map = make_map()
     tracker = ZoneConfidenceEngine(predictive_map, expected_occupants=1)
     hall_motion = event("hall", 0)
@@ -335,11 +340,66 @@ def test_s29_provisional_release_clears_public_keep_on_edge() -> None:
     )
     before = public_snapshot(tracker, predictive_map, hall_motion)
 
-    assert tracker.expire_transient_state(NOW)
+    tracker.expire_transient_state(NOW)
 
     after = public_snapshot(tracker, predictive_map, hall_motion)
     assert before.zones["office"].keep_on
-    assert not after.zones["office"].keep_on
+    assert after.zones["office"].keep_on
     state = tracker.diagnostics.joint_policy_states["office"]
-    assert state.last_release_cause == "provisional_false_off"
-    assert state.recovery_eligible
+    assert state.last_release_cause is None
+    assert not state.recovery_eligible
+
+
+def test_s30_asserted_local_motion_preserves_keep_on_through_expiry() -> None:
+    predictive_map = make_map()
+    tracker = ZoneConfidenceEngine(predictive_map, expected_occupants=1)
+    office_motion = event("office", 0)
+    tracker.observe(office_motion)
+    assert tracker._joint_filter is not None  # noqa: SLF001
+    tracker._joint_filter.restore_posterior(  # noqa: SLF001
+        normalize_hypotheses(
+            {canonical_hypothesis((PositionState("hall"),)): 0.0},
+            NOW,
+        )
+    )
+    tracker._joint_policy.restore_states(  # noqa: SLF001
+        {
+            zone: ZonePolicyState(
+                keep_on=zone == "office",
+                last_trusted_at=NOW if zone == "office" else None,
+            )
+            for zone in predictive_map.zones()
+        }
+    )
+
+    tracker.observe(event("kitchen", 15 * 60 + 1))
+    after_observation = public_snapshot(tracker, predictive_map, office_motion)
+    assert after_observation.zones["office"].keep_on
+
+    tracker.expire_transient_state(NOW + timedelta(minutes=15, seconds=5))
+    after_expiry = public_snapshot(tracker, predictive_map, office_motion)
+    assert after_expiry.zones["office"].keep_on
+
+
+def test_s31_sustained_room_confidence_survives_untracked_flaps() -> None:
+    predictive_map = make_map()
+    tracker = ZoneConfidenceEngine(predictive_map, expected_occupants=2)
+    tracker.observe(event("hall", 0))
+    office_motion = event("office", 14)
+    tracker.observe(office_motion)
+    arrival_confidence = tracker.diagnostics.joint_occupied_marginals["office"]
+    assert arrival_confidence >= 0.60
+
+    tracker.expire_transient_state(NOW + timedelta(minutes=22))
+    sustained_confidence = tracker.diagnostics.joint_occupied_marginals["office"]
+    assert sustained_confidence > arrival_confidence
+
+    for offset in range(22 * 60 + 1, 22 * 60 + 61, 10):
+        tracker.observe(event("garage", offset))
+        tracker.observe(event("garage", offset + 1, state="off"))
+
+    snapshot = public_snapshot(tracker, predictive_map, office_motion)
+    assert snapshot.zones["office"].keep_on
+    assert tracker.diagnostics.joint_occupied_marginals["office"] >= (
+        sustained_confidence
+    )

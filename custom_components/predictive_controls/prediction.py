@@ -6,6 +6,7 @@ from .markov import MarkovChain
 from .model import PredictiveMap
 from .occupancy_graph import ZoneGraph
 from .occupancy_state import FilterUpdate, PredictionLease
+from .route_model import RouteMatch, RouteModel
 
 
 class PredictionManager:
@@ -15,6 +16,7 @@ class PredictionManager:
         self,
         predictive_map: PredictiveMap,
         chain: MarkovChain | None = None,
+        route_model: RouteModel | None = None,
         *,
         movement_threshold: float = 0.50,
         learning_threshold: float = 0.80,
@@ -23,10 +25,14 @@ class PredictionManager:
         self.map = predictive_map
         self.graph = ZoneGraph.from_map(predictive_map)
         self.chain = chain or MarkovChain(predictive_map)
+        self.route_model = route_model or RouteModel(predictive_map)
         self.movement_threshold = movement_threshold
         self.learning_threshold = learning_threshold
         self.lease_duration = lease_duration
         self._leases: dict[tuple[str, str | None, str], PredictionLease] = {}
+        self._route_contexts: tuple[tuple[str, ...], ...] = ()
+        self._last_route_match: RouteMatch | None = None
+        self._last_route_probabilities: dict[str, float] = {}
 
     @property
     def leases(self) -> tuple[PredictionLease, ...]:
@@ -41,6 +47,25 @@ class PredictionManager:
                 lease.probability,
             )
         return dict(sorted(probabilities.items()))
+
+    @property
+    def route_counts(self) -> dict[tuple[str, ...], dict[str, float]]:
+        return self.route_model.counts
+
+    @property
+    def route_contexts(self) -> tuple[tuple[str, ...], ...]:
+        return self._route_contexts
+
+    @property
+    def route_diagnostics(self) -> dict[str, object]:
+        match = self._last_route_match
+        return {
+            "matched_prefix": [] if match is None else list(match.matched_prefix),
+            "support": 0.0 if match is None else match.support,
+            "backoff_level": 0 if match is None else match.backoff_level,
+            "minimum_support": self.route_model.minimum_support,
+            "resulting_probabilities": dict(self._last_route_probabilities),
+        }
 
     def apply(self, update: FilterUpdate) -> tuple[PredictionLease, ...]:
         """Update leases from posterior movement while leaving occupancy untouched."""
@@ -71,8 +96,14 @@ class PredictionManager:
                     update.provenance.node_id,
                     current,
                     candidates,
+                    self._route_history_for_edge(evidence),
                 )
-                reason = "learned forward branch probability"
+                reason = (
+                    "learned route-prefix branch probability"
+                    if self._last_route_match is not None
+                    and self._last_route_match.matched_prefix
+                    else "learned forward branch probability"
+                )
             for target, branch_probability in probabilities.items():
                 path_key = (current, source, target)
                 self._leases[path_key] = PredictionLease(
@@ -98,12 +129,9 @@ class PredictionManager:
             and evidence.target_node_id == update.provenance.node_id
             and evidence.target_zone == update.provenance.zone
         ]
-        if not qualifying:
+        if len(qualifying) != 1:
             return ()
-        evidence = max(
-            qualifying,
-            key=lambda item: (item.coherent_probability, item.path_key),
-        )
+        evidence = qualifying[0]
         source_node = self.map.nodes.get(evidence.source_node_id or "")
         target_node = self.map.nodes.get(evidence.target_node_id)
         if (
@@ -118,6 +146,18 @@ class PredictionManager:
             weight=evidence.coherent_probability,
         ):
             return ()
+        compatible = self._compatible_route_contexts(source_node.node_id)
+        if len(compatible) == 1:
+            self.route_model.observe(
+                compatible[0],
+                target_node.node_id,
+                weight=evidence.coherent_probability,
+            )
+        self._advance_route_contexts(
+            source_node.node_id,
+            target_node.node_id,
+            compatible,
+        )
         return ((source_node.node_id, target_node.node_id),)
 
     def expire(self, now: datetime) -> bool:
@@ -131,9 +171,11 @@ class PredictionManager:
     def reconcile_count(self, previous: int, current: int) -> None:
         if current < previous:
             self._leases.clear()
+            self._route_contexts = ()
 
     def reset(self) -> None:
         self._leases.clear()
+        self._route_contexts = ()
 
     def restore_leases(
         self,
@@ -149,6 +191,27 @@ class PredictionManager:
             and all(zone is None or zone in valid_zones for zone in lease.path_key)
         }
 
+    def restore_route_state(
+        self,
+        counts: dict[tuple[str, ...], dict[str, float]],
+        contexts: tuple[tuple[str, ...], ...],
+    ) -> None:
+        self.route_model.restore_counts(counts)
+        self._route_contexts = tuple(
+            sorted(
+                {
+                    history
+                    for history in contexts
+                    if 2 <= len(history) <= self.route_model.max_order
+                    and all(node_id in self.map.nodes for node_id in history)
+                    and all(
+                        target in self.map.nodes[source].adjacent
+                        for source, target in zip(history, history[1:], strict=False)
+                    )
+                }
+            )[:4]
+        )
+
     def _cancel_from(self, source: str) -> None:
         for key in tuple(self._leases):
             if key[0] == source:
@@ -159,6 +222,7 @@ class PredictionManager:
         node_id: str,
         current_zone: str,
         candidates: tuple[str, ...],
+        route_history: tuple[str, ...] = (),
     ) -> dict[str, float]:
         node = self.map.nodes.get(node_id)
         source_nodes = (
@@ -181,5 +245,78 @@ class PredictionManager:
         total = sum(totals.values())
         if total == 0.0:
             equal = 1.0 / len(candidates)
-            return dict.fromkeys(candidates, equal)
-        return {zone: probability / total for zone, probability in totals.items()}
+            base = dict.fromkeys(candidates, equal)
+        else:
+            base = {zone: probability / total for zone, probability in totals.items()}
+
+        current_node = self.map.nodes.get(node_id)
+        target_nodes = (
+            tuple(
+                sorted(
+                    target
+                    for target in current_node.adjacent
+                    if self.map.nodes[target].occupancy_zone in candidates
+                )
+            )
+            if current_node is not None
+            and current_node.occupancy_zone == current_zone
+            else ()
+        )
+        match = self.route_model.match(route_history, target_nodes)
+        self._last_route_match = match
+        if not match.matched_prefix:
+            self._last_route_probabilities = dict(base)
+            return base
+        route_by_zone = dict.fromkeys(candidates, 0.0)
+        for target, probability in match.probabilities.items():
+            route_by_zone[self.map.nodes[target].occupancy_zone] += probability
+        influence = self.route_model.maximum_boost * min(
+            1.0,
+            match.support / (2.0 * self.route_model.minimum_support),
+        )
+        blended = {
+            zone: (1.0 - influence) * base[zone]
+            + influence * route_by_zone[zone]
+            for zone in candidates
+        }
+        self._last_route_probabilities = dict(blended)
+        return blended
+
+    def _compatible_route_contexts(
+        self,
+        source_node_id: str,
+    ) -> tuple[tuple[str, ...], ...]:
+        return tuple(
+            history
+            for history in self._route_contexts
+            if history[-1] == source_node_id
+        )
+
+    def _route_history_for_edge(
+        self,
+        evidence: object,
+    ) -> tuple[str, ...]:
+        source = getattr(evidence, "source_node_id", None)
+        target = getattr(evidence, "target_node_id", None)
+        if not isinstance(source, str) or not isinstance(target, str):
+            return ()
+        compatible = self._compatible_route_contexts(source)
+        if len(compatible) > 1:
+            return ()
+        history = compatible[0] if compatible else (source,)
+        return (*history, target)[-self.route_model.max_order :]
+
+    def _advance_route_contexts(
+        self,
+        source: str,
+        target: str,
+        compatible: tuple[tuple[str, ...], ...],
+    ) -> None:
+        retained = {
+            history for history in self._route_contexts if history[-1] != source
+        }
+        history = compatible[0] if len(compatible) == 1 else (source,)
+        retained.add((*history, target)[-self.route_model.max_order :])
+        self._route_contexts = tuple(
+            sorted(retained, key=lambda item: (-len(item), item))[:4]
+        )

@@ -99,8 +99,10 @@ test("panel defaults to occupancy first and renders requested tab order", async 
   assert.match(panel.innerHTML, /<main class="occupancy-layout">/);
   assert.match(
     panel.innerHTML,
-    /data-tab="occupancy">Occupancy<\/button>\s*<button[^>]+data-tab="map">Map<\/button>\s*<button[^>]+data-tab="yaml">YAML<\/button>\s*<button[^>]+data-tab="actions">Actions<\/button>\s*<button[^>]+data-tab="settings">Settings<\/button>/,
+    /data-tab="occupancy">Occupancy<\/button>\s*<button[^>]+data-tab="reliability">Reliability<\/button>\s*<button[^>]+data-tab="map">Map<\/button>\s*<button[^>]+data-tab="yaml">YAML<\/button>\s*<button[^>]+data-tab="actions">Actions<\/button>\s*<button[^>]+data-tab="settings">Settings<\/button>/,
   );
+  assert.match(panel.innerHTML, /Anonymous Tracks/);
+  assert.match(panel.innerHTML, /No occupants are currently localized/);
 });
 
 test("panel renders live occupancy zones from configured map data", async () => {
@@ -200,6 +202,9 @@ test("panel renders live occupancy zones from configured map data", async () => 
   assert.match(panel.innerHTML, /living_left/);
   assert.match(panel.innerHTML, /Learned Transitions/);
   assert.match(panel.innerHTML, /Expected 2/);
+  assert.match(panel.innerHTML, /Anonymous Tracks/);
+  assert.match(panel.innerHTML, /Current Posterior/);
+  assert.match(panel.innerHTML, /class="track-row"/);
   assert.match(panel.innerHTML, /track_1/);
   assert.match(panel.innerHTML, /binary_sensor\.living_still/);
   assert.match(panel.innerHTML, /Joined/);
@@ -207,6 +212,68 @@ test("panel renders live occupancy zones from configured map data", async () => 
   assert.match(panel.innerHTML, /Office/);
   assert.match(panel.innerHTML, /Kitchen/);
   assert.match(panel.innerHTML, /7/);
+});
+
+test("panel renders repeated reliability issues for proactive review", async () => {
+  const Panel = await panelConstructor();
+  const panel = new Panel();
+  panel._hass = {};
+  panel._config = {
+    map: {
+      zones: {
+        office: { label: "Office", floor: "second_floor" },
+      },
+      nodes: {},
+    },
+  };
+  panel._statusUpdated = new Date("2026-07-13T12:01:00Z");
+  panel._status = {
+    occupancy_diagnostics: {
+      tracks: [],
+      reliability: {
+        criteria: { repeat_minimum: 2, flap_window_seconds: 30 },
+        coverage: {
+          observed_event_count: 4,
+          oldest_event_at: "2026-07-13T12:00:00Z",
+          newest_event_at: "2026-07-13T12:00:14Z",
+        },
+        rejected_motion_captures: [
+          {
+            entity_id: "binary_sensor.office_motion",
+            zone: "office",
+            capture_count: 2,
+            last_capture_at: "2026-07-13T12:00:10Z",
+            reason_counts: { occupied_gate_failed: 2 },
+            max_occupied_marginal: 0.3,
+          },
+        ],
+        low_confidence_flaps: [
+          {
+            entity_id: "binary_sensor.office_motion",
+            zone: "office",
+            pulse_count: 2,
+            last_flap_at: "2026-07-13T12:00:14Z",
+            shortest_pulse_seconds: 4,
+            max_occupied_marginal: 0.3,
+          },
+        ],
+      },
+    },
+  };
+  panel._tab = "reliability";
+
+  panel.render();
+
+  assert.match(panel.innerHTML, /<main class="reliability-layout">/);
+  assert.match(panel.innerHTML, /Repeated Rejected Motion/);
+  assert.match(panel.innerHTML, /Low-Confidence Flaps/);
+  assert.match(panel.innerHTML, /binary_sensor\.office_motion/);
+  assert.match(panel.innerHTML, /Office/);
+  assert.match(panel.innerHTML, /2 rejected/);
+  assert.match(panel.innerHTML, /2 pulses/);
+  assert.match(panel.innerHTML, /Occupied Gate Failed/);
+  assert.match(panel.innerHTML, /Peak occupied 30%/);
+  assert.match(panel.innerHTML, /4 observed events/);
 });
 
 test("panel renders cross-floor zone adjacency as a graph edge", async () => {
@@ -483,7 +550,7 @@ test("panel reports when no stale entities are found", async () => {
 });
 
 test("panel script parses when Home Assistant loads it as a classic script", async () => {
-  const source = await readFile(panelAssetUrl("panel-v0.1.19.js"), "utf8");
+  const source = await readFile(panelAssetUrl("panel-v0.1.20.js"), "utf8");
 
   assert.doesNotThrow(() => new vm.Script(source));
 });
@@ -491,7 +558,7 @@ test("panel script parses when Home Assistant loads it as a classic script", asy
 test("versioned panel asset matches the development panel asset", async () => {
   const [developmentSource, versionedSource] = await Promise.all([
     readFile(panelAssetUrl("panel.js"), "utf8"),
-    readFile(panelAssetUrl("panel-v0.1.19.js"), "utf8"),
+    readFile(panelAssetUrl("panel-v0.1.20.js"), "utf8"),
   ]);
 
   assert.equal(versionedSource, developmentSource);

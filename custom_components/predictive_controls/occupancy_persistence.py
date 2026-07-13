@@ -3,13 +3,18 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from collections import defaultdict
+from collections import defaultdict, deque
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, cast
 
-from .automation_policy import PendingDeparture
+from .automation_policy import (
+    POLICY_AUDIT_MAX_CONTEXT_BYTES,
+    POLICY_AUDIT_MAX_ENTRIES,
+    POLICY_AUDIT_RETENTION,
+    PendingDeparture,
+)
 from .const import STORAGE_VERSION
 from .model import PredictiveMap
 from .observation_model import EntityEvidence
@@ -18,6 +23,7 @@ from .occupancy_state import (
     HypothesisKey,
     MovementEvidence,
     ObservationProvenance,
+    PackedPolicyAuditContext,
     PendingDepartureAudit,
     PolicyAuditContext,
     PolicyAuditEntry,
@@ -35,6 +41,13 @@ from .occupancy_state import (
     log_sum_exp,
     normalize_hypotheses,
 )
+from .policy_audit import (
+    pack_policy_audit_context,
+    packed_policy_audit_context_from_storage,
+    packed_policy_audit_context_size,
+    policy_audit_context_payload,
+    stored_policy_audit_context_payload,
+)
 
 OCCUPANCY_STORAGE_VERSION = STORAGE_VERSION
 
@@ -49,6 +62,8 @@ class RestoredOccupancyState:
     prediction_leases: tuple[PredictionLease, ...]
     entity_states: dict[str, EntityEvidence]
     transition_counts: dict[str, dict[str, float]]
+    route_counts: dict[tuple[str, ...], dict[str, float]]
+    route_contexts: tuple[tuple[str, ...], ...]
     update_sequence: int
     map_compatible: bool
     restore_status: str
@@ -88,6 +103,8 @@ def serialize_occupancy_state(
     pending_departures: Mapping[str, PendingDeparture] | None = None,
     update_sequence: int = 0,
     policy_audit: tuple[PolicyAuditEntry, ...] = (),
+    route_counts: Mapping[tuple[str, ...], Mapping[str, float]] | None = None,
+    route_contexts: tuple[tuple[str, ...], ...] = (),
 ) -> dict[str, object]:
     """Serialize the complete restart-safe inference state."""
 
@@ -130,6 +147,9 @@ def serialize_occupancy_state(
                         "current_node_id": context.current_node_id,
                         "started_at": _datetime_payload(context.started_at),
                         "last_event_at": _datetime_payload(context.last_event_at),
+                        "assertion_valid_until": _datetime_payload(
+                            context.assertion_valid_until
+                        ),
                         "evidence_ids": list(context.evidence_ids),
                         "probability": math.exp(context.log_probability),
                         "disposition": context.disposition,
@@ -198,6 +218,8 @@ def serialize_occupancy_state(
                 "log_likelihood_by_count": list(state.log_likelihood_by_count),
                 "changed_at": state.changed_at.isoformat(),
                 "episode_started_at": state.episode_started_at.isoformat(),
+                "duration_log_odds": state.duration_log_odds,
+                "departure_observed": state.departure_observed,
                 "binding_signature": _binding_signature(
                     predictive_map,
                     entity_id,
@@ -209,6 +231,14 @@ def serialize_occupancy_state(
             source: dict(sorted(targets.items()))
             for source, targets in sorted(transition_counts.items())
         },
+        "route_counts": [
+            {
+                "prefix": list(prefix),
+                "targets": dict(sorted(targets.items())),
+            }
+            for prefix, targets in sorted((route_counts or {}).items())
+        ],
+        "route_contexts": [list(history) for history in sorted(route_contexts)],
     }
 
 
@@ -245,91 +275,8 @@ def _policy_audit_payload(entry: PolicyAuditEntry) -> dict[str, object]:
             if entry.current_release_cause is None
             else entry.current_release_cause.value,
         },
-        "context": policy_audit_context_payload(entry.context),
+        "context": stored_policy_audit_context_payload(entry.context),
     }
-
-
-def policy_audit_context_payload(
-    context: PolicyAuditContext | None,
-) -> dict[str, object] | None:
-    if context is None:
-        return None
-    return {
-        "observation": {
-            "event_id": context.provenance.event_id,
-            "evidence_episode_id": context.provenance.evidence_episode_id,
-            "entity_id": context.provenance.entity_id,
-            "node_id": context.provenance.node_id,
-            "zone": context.provenance.zone,
-            "state": context.provenance.state,
-            "signal_type": context.provenance.signal_type,
-            "reliability": _stored_probability(context.provenance.reliability),
-            "log_likelihood_by_count": list(
-                context.provenance.log_likelihood_by_count
-            ),
-            "disposition": context.provenance.disposition,
-        },
-        "previous_occupied_marginals": {
-            zone: _stored_probability(probability)
-            for zone, probability in sorted(
-                context.previous_occupied_marginals.items()
-            )
-        },
-        "occupied_marginals": {
-            zone: _stored_probability(probability)
-            for zone, probability in sorted(context.occupied_marginals.items())
-        },
-        "count_marginals": {
-            zone: [_stored_probability(probability) for probability in probabilities]
-            for zone, probabilities in sorted(context.count_marginals.items())
-        },
-        "active_positive_evidence": {
-            zone: [
-                {
-                    "entity_id": evidence.entity_id,
-                    "evidence_episode_id": evidence.evidence_episode_id,
-                    "changed_at": evidence.changed_at.isoformat(),
-                    "signal_type": evidence.signal_type,
-                }
-                for evidence in evidence_items
-            ]
-            for zone, evidence_items in sorted(
-                context.active_positive_evidence.items()
-            )
-        },
-        "movement_evidence": [
-            {
-                "path_key": list(evidence.path_key),
-                "origin_zone": evidence.origin_zone,
-                "source_zone": evidence.source_zone,
-                "target_zone": evidence.target_zone,
-                "coherent_probability": _stored_probability(
-                    evidence.coherent_probability
-                ),
-                "source_node_id": evidence.source_node_id,
-                "target_node_id": evidence.target_node_id,
-                "evidence_ids": list(evidence.evidence_ids),
-                "disposition": evidence.disposition,
-            }
-            for evidence in context.movement_evidence
-        ],
-        "pending_departures": {
-            departure.origin: {
-                "current": departure.current,
-                "probability": _stored_probability(departure.probability),
-                "nonadjacent": departure.nonadjacent,
-                "evidence_ids": list(departure.evidence_ids),
-                "disposition": departure.disposition,
-            }
-            for departure in context.pending_departures
-        },
-    }
-
-
-def _stored_probability(value: float) -> float:
-    return min(1.0, max(0.0, value))
-
-
 def restore_occupancy_state(
     payload: Mapping[str, Any],
     predictive_map: PredictiveMap,
@@ -352,6 +299,7 @@ def restore_occupancy_state(
         _restore_transition_counts(payload.get("transition_counts")),
         predictive_map,
     )
+    route_counts = _restore_route_counts(payload.get("route_counts"), predictive_map)
     map_compatible = schema_version >= 3 and payload.get(
         "map_fingerprint"
     ) == map_fingerprint(predictive_map)
@@ -383,6 +331,8 @@ def restore_occupancy_state(
             prediction_leases=(),
             entity_states={},
             transition_counts=transition_counts,
+            route_counts=route_counts,
+            route_contexts=(),
             update_sequence=0,
             map_compatible=False,
             restore_status=(
@@ -485,6 +435,10 @@ def restore_occupancy_state(
         expected_occupants,
         predictive_map,
     )
+    route_contexts = _restore_route_contexts(
+        payload.get("route_contexts"),
+        predictive_map,
+    )
     policy_audit = (
         ()
         if schema_version < 3
@@ -499,6 +453,8 @@ def restore_occupancy_state(
         prediction_leases=prediction_leases,
         entity_states=entity_states,
         transition_counts=transition_counts,
+        route_counts=route_counts,
+        route_contexts=route_contexts,
         update_sequence=update_sequence,
         map_compatible=map_compatible,
         restore_status="restored",
@@ -584,8 +540,9 @@ def _restore_policy_audit(
 ) -> tuple[PolicyAuditEntry, ...]:
     if not isinstance(raw_audit, list):
         raise ValueError("stored policy audit must be a list")
-    retained: list[PolicyAuditEntry] = []
-    cutoff = now - timedelta(days=2)
+    retained: deque[PolicyAuditEntry] = deque()
+    retained_context_bytes = 0
+    cutoff = now - POLICY_AUDIT_RETENTION
     for raw_entry in raw_audit:
         if not isinstance(raw_entry, Mapping):
             raise ValueError("stored policy audit entry must be a mapping")
@@ -673,8 +630,7 @@ def _restore_policy_audit(
         )
         if decision_at < cutoff:
             continue
-        retained.append(
-            PolicyAuditEntry(
+        entry = PolicyAuditEntry(
                 decision_at=decision_at,
                 source=source,
                 trigger_event_id=trigger_event_id,
@@ -698,18 +654,31 @@ def _restore_policy_audit(
                 current_release_cause=current_release_cause,
                 context=context,
             )
-        )
+        retained.append(entry)
+        retained_context_bytes += packed_policy_audit_context_size(entry.context)
+        while retained and (
+            len(retained) > POLICY_AUDIT_MAX_ENTRIES
+            or retained_context_bytes > POLICY_AUDIT_MAX_CONTEXT_BYTES
+        ):
+            removed = retained.popleft()
+            retained_context_bytes -= packed_policy_audit_context_size(
+                removed.context
+            )
     return tuple(retained)
 
 
 def _restore_policy_audit_context(
     raw_context: object,
     valid_zones: set[str],
-) -> PolicyAuditContext | None:
+) -> PackedPolicyAuditContext | None:
     if raw_context is None:
         return None
     if not isinstance(raw_context, Mapping):
         raise ValueError("stored policy audit context must be a mapping")
+    if "encoding" in raw_context or "data" in raw_context:
+        packed = packed_policy_audit_context_from_storage(raw_context)
+        raw_context = policy_audit_context_payload(packed)
+        assert raw_context is not None
     provenance = _restore_audit_provenance(
         raw_context.get("observation"),
         valid_zones,
@@ -750,14 +719,16 @@ def _restore_policy_audit_context(
             ).items()
         )
     )
-    return PolicyAuditContext(
-        provenance=provenance,
-        previous_occupied_marginals=previous_marginals,
-        occupied_marginals=occupied_marginals,
-        count_marginals=count_marginals,
-        active_positive_evidence=active_positive_evidence,
-        movement_evidence=movement_evidence,
-        pending_departures=pending_departures,
+    return pack_policy_audit_context(
+        PolicyAuditContext(
+            provenance=provenance,
+            previous_occupied_marginals=previous_marginals,
+            occupied_marginals=occupied_marginals,
+            count_marginals=count_marginals,
+            active_positive_evidence=active_positive_evidence,
+            movement_evidence=movement_evidence,
+            pending_departures=pending_departures,
+        )
     )
 
 
@@ -1029,6 +1000,15 @@ def _restore_entity_states(
             isinstance(value, int | float) and math.isfinite(value) for value in values
         ):
             raise ValueError("stored likelihood vector is invalid")
+        duration_log_odds = raw_state.get("duration_log_odds", 0.0)
+        departure_observed = raw_state.get("departure_observed", False)
+        if (
+            not isinstance(duration_log_odds, int | float)
+            or not math.isfinite(duration_log_odds)
+            or not 0.0 <= duration_log_odds <= math.log(4.0)
+            or not isinstance(departure_observed, bool)
+        ):
+            raise ValueError("stored duration evidence is invalid")
         states[entity_id] = EntityEvidence(
             state=state,
             log_likelihood_by_count=tuple(float(value) for value in values),
@@ -1037,6 +1017,8 @@ def _restore_entity_states(
                 raw_state.get("episode_started_at"),
                 "episode_started_at",
             ),
+            duration_log_odds=float(duration_log_odds),
+            departure_observed=departure_observed,
         )
     return states
 
@@ -1095,6 +1077,9 @@ def _restore_directional_contexts(
                     started_at=_parse_optional_datetime(raw_context.get("started_at")),
                     last_event_at=_parse_optional_datetime(
                         raw_context.get("last_event_at")
+                    ),
+                    assertion_valid_until=_parse_optional_datetime(
+                        raw_context.get("assertion_valid_until")
                     ),
                     evidence_ids=tuple(evidence_ids),
                     log_probability=(
@@ -1207,6 +1192,75 @@ def _filter_transition_counts(
         if source in predictive_map.nodes
         and any(target in predictive_map.nodes[source].adjacent for target in targets)
     }
+
+
+def _restore_route_counts(
+    raw_counts: object,
+    predictive_map: PredictiveMap,
+) -> dict[tuple[str, ...], dict[str, float]]:
+    if raw_counts is None:
+        return {}
+    if not isinstance(raw_counts, list):
+        raise ValueError("stored route counts must be a list")
+    counts: dict[tuple[str, ...], dict[str, float]] = {}
+    for raw_entry in raw_counts:
+        if not isinstance(raw_entry, Mapping):
+            raise ValueError("stored route count entry must be a mapping")
+        raw_prefix = raw_entry.get("prefix")
+        raw_targets = raw_entry.get("targets")
+        if (
+            not isinstance(raw_prefix, list)
+            or not 2 <= len(raw_prefix) <= 4
+            or not all(isinstance(node_id, str) for node_id in raw_prefix)
+            or not isinstance(raw_targets, Mapping)
+        ):
+            raise ValueError("stored route count entry is invalid")
+        prefix = tuple(raw_prefix)
+        if not _is_graph_path(prefix, predictive_map):
+            continue
+        targets: dict[str, float] = {}
+        for target, value in raw_targets.items():
+            if (
+                not isinstance(target, str)
+                or not isinstance(value, int | float)
+                or not math.isfinite(value)
+                or value <= 0.0
+            ):
+                raise ValueError("stored route count is invalid")
+            if target in predictive_map.nodes[prefix[-1]].adjacent:
+                targets[target] = float(value)
+        if targets:
+            counts[prefix] = targets
+    return counts
+
+
+def _restore_route_contexts(
+    raw_contexts: object,
+    predictive_map: PredictiveMap,
+) -> tuple[tuple[str, ...], ...]:
+    if raw_contexts is None:
+        return ()
+    if not isinstance(raw_contexts, list) or len(raw_contexts) > 4:
+        raise ValueError("stored route contexts are invalid")
+    contexts: list[tuple[str, ...]] = []
+    for raw_history in raw_contexts:
+        if (
+            not isinstance(raw_history, list)
+            or not 2 <= len(raw_history) <= 4
+            or not all(isinstance(node_id, str) for node_id in raw_history)
+        ):
+            raise ValueError("stored route context is invalid")
+        history = tuple(raw_history)
+        if _is_graph_path(history, predictive_map):
+            contexts.append(history)
+    return tuple(sorted(set(contexts)))
+
+
+def _is_graph_path(path: tuple[str, ...], predictive_map: PredictiveMap) -> bool:
+    return all(node_id in predictive_map.nodes for node_id in path) and all(
+        target in predictive_map.nodes[source].adjacent
+        for source, target in zip(path, path[1:], strict=False)
+    )
 
 
 def _binding_signature(

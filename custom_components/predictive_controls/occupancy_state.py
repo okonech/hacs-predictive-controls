@@ -86,6 +86,7 @@ class DirectionalContext:
     evidence_ids: tuple[str, ...]
     log_probability: float
     disposition: str = "contextless"
+    assertion_valid_until: datetime | None = None
 
     @property
     def is_contextless(self) -> bool:
@@ -179,6 +180,13 @@ class PolicyAuditContext:
 
 
 @dataclass(frozen=True)
+class PackedPolicyAuditContext:
+    """Losslessly compressed complete context retained outside the event path."""
+
+    compressed_json: bytes
+
+
+@dataclass(frozen=True)
 class PolicyAuditEntry:
     """One timestamped policy decision retained for post-incident diagnosis."""
 
@@ -196,7 +204,7 @@ class PolicyAuditEntry:
     current_reason: str
     previous_release_cause: ReleaseCause | None
     current_release_cause: ReleaseCause | None
-    context: PolicyAuditContext | None = None
+    context: PolicyAuditContext | PackedPolicyAuditContext | None = None
 
 
 class ReleaseCause(StrEnum):

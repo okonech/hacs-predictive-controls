@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.1.20 release candidate
+
+### Added
+
+- Added a Reliability panel tab that ranks repeated policy-rejected motion
+	captures and repeated short low-confidence pulses from the retained audit,
+	including exact coverage, policy reasons, and peak occupied confidence.
+- Restored Occupancy-tab tracks as deterministic anonymous projections of the
+	exact posterior, including same-zone multiplicity and asserted source entities
+	without claiming persistent person identity.
 
 ### Fixed
 
@@ -8,18 +17,34 @@
 	`0.40`. This admits supported room arrivals that already pass the `0.60`
 	occupied-marginal and `0.20` increase gates, without changing conservative
 	release thresholds.
-- Retained complete observation context with each policy audit event and exposed
-	explicit 48-hour coverage metadata in integration diagnostics.
+- Retained complete observation context with each policy audit event using
+	lossless compressed JSON. Audit history is now FIFO-bounded to 12 hours, 8,192
+	decisions, and 12 MiB of compressed context, with actual usage and coverage in
+	integration diagnostics.
 - Scheduled coalesced Store persistence for every processed observation,
 	including duplicate, stale, and rejected events needed to explain no-action
 	decisions.
 - Canonicalized persisted audit probabilities to prevent floating-point
 	roundoff such as `1.0000000000000002` from invalidating restart state produced
 	by the integration itself.
-- Added a generic provisional `keep_on` release when zone occupancy remains at
-	or below `0.10` for 15 minutes after trusted occupancy and no fresh or
-	sustained local evidence remains. Confirmed graph release remains primary;
-	provisional release is recovery eligible and disabled during bootstrap replay.
+- Added bounded, restart-safe sustained-duration evidence and explicit assertion
+	validity intervals without rewriting movement timestamps. Sustained local
+	evidence now survives unrelated activity while low-prior missed relocation
+	remains possible.
+- Removed timer and low-confidence release ownership. `keep_on` now releases
+	only for supported departure or relocation, authoritative count or away state,
+	or explicit reset. Recovery from legacy persisted provisional releases remains
+	supported.
+- Added bounded variable-order anonymous route learning with deterministic
+	backoff, aging, persistence, and diagnostics. Route history only influences
+	graph-valid prediction leases.
+- Made callback latency degradation diagnostic-only; exceeding the hard budget
+	no longer suppresses an otherwise valid activation.
+
+### Rollout status
+
+This candidate replaces 0.1.19. The seven-day Home Assistant shadow/soak gate
+remains uncollected and must restart on the exact 0.1.20 code revision.
 
 ## 0.1.19 release candidate
 

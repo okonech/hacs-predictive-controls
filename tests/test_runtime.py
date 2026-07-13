@@ -434,6 +434,9 @@ def test_runtime_lifecycle_callbacks_persistence_and_actions(
     ceiling_runtime.observe_entity("binary_sensor.office", "on", NOW)
     assert ceiling_runtime.latency_metrics["performance_degraded"]
     assert ceiling_runtime.latency_metrics["performance_budget_exceeded_count"] == 1
+    assert runtime_automation_summary(ceiling_runtime).zones[
+        "office"
+    ].activation_plausible
     assert runtime_module._latency_summary((4.0, 1.0, 3.0, 2.0)) == {  # noqa: SLF001
         "sample_count": 4,
         "last_ms": 2.0,

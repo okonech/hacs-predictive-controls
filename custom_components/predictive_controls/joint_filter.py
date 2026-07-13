@@ -3,6 +3,7 @@ from __future__ import annotations
 import itertools
 import math
 from collections import defaultdict, deque
+from dataclasses import replace
 from datetime import datetime, timedelta
 from time import perf_counter_ns
 
@@ -35,9 +36,14 @@ STAY_WEIGHT = 0.39
 ADJACENT_MOVEMENT_WEIGHT = 0.60
 MISSED_MOVEMENT_WEIGHT = 0.01
 MISSED_TIMING_WEIGHT = 0.01
+ASSERTED_NONADJACENT_MOVEMENT_FACTOR = 0.01
 DEFAULT_TRANSITION_SECONDS = 30.0
 MOTION_CORROBORATION_WINDOW = timedelta(minutes=2)
 TRANSITION_CORROBORATION_WINDOW = timedelta(seconds=30)
+SUSTAINED_DURATION_TAU = timedelta(minutes=5)
+SUSTAINED_DURATION_MAX_LOG_ODDS = math.log(4.0)
+SUSTAINED_DURATION_BUCKET = timedelta(minutes=1)
+SUSTAINED_DEPARTURE_THRESHOLD = 0.85
 
 
 class JointOccupancyFilter:
@@ -111,6 +117,127 @@ class JointOccupancyFilter:
 
         return self._current_positive_evidence(now)
 
+    def asserted_positive_evidence(
+        self,
+        now: datetime,
+    ) -> dict[str, tuple[PositiveEvidence, ...]]:
+        """Return every positive entity whose latest observed state remains on."""
+
+        return self._current_positive_evidence(now, asserted_only=True)
+
+    def reinforce_asserted_evidence(
+        self,
+        now: datetime,
+        *,
+        advance_context_validity: bool = True,
+    ) -> bool:
+        """Apply bounded duration evidence once per asserted sustained episode."""
+
+        increments_by_zone: dict[str, float] = defaultdict(float)
+        asserted_zones: set[str] = set()
+        for zone, entity_ids in self._active_positive_entities.items():
+            for entity_id in entity_ids:
+                state = self.observations.entity_states.get(entity_id)
+                binding = self.map.entity_binding_for_entity(entity_id)
+                if (
+                    state is None
+                    or state.state != "on"
+                    or state.departure_observed
+                    or binding is None
+                ):
+                    continue
+                node = self.map.nodes[binding.node_id]
+                behavior = self.map.occupancy_behavior_for_node(node)
+                if behavior not in {"sticky", "sustained"}:
+                    continue
+                asserted_zones.add(zone)
+                elapsed = max(0.0, (now - state.changed_at).total_seconds())
+                bucket_seconds = SUSTAINED_DURATION_BUCKET.total_seconds()
+                elapsed = math.floor(elapsed / bucket_seconds) * bucket_seconds
+                target = SUSTAINED_DURATION_MAX_LOG_ODDS * (
+                    1.0
+                    - math.exp(-elapsed / SUSTAINED_DURATION_TAU.total_seconds())
+                )
+                increments_by_zone[zone] += self.observations.apply_duration_log_odds(
+                    entity_id,
+                    target,
+                )
+
+        previous = self.posterior
+        increments_by_key = {
+            hypothesis.key: sum(
+                increment
+                for zone, increment in increments_by_zone.items()
+                if _zone_count(hypothesis.key, zone) > 0
+            )
+            for hypothesis in previous.hypotheses
+        }
+        evidence_changed = any(
+            increment > 0.0 for increment in increments_by_zone.values()
+        )
+        total = (
+            log_sum_exp(
+                hypothesis.log_probability + increments_by_key[hypothesis.key]
+                for hypothesis in previous.hypotheses
+            )
+            if evidence_changed
+            else 0.0
+        )
+        if evidence_changed:
+            self.posterior = _normalize_dense_weights(
+                {
+                    hypothesis.key: (
+                        hypothesis.log_probability
+                        + increments_by_key[hypothesis.key]
+                    )
+                    for hypothesis in previous.hypotheses
+                },
+                self._configuration_keys,
+                now,
+            )
+        context_changed = False
+        directional_contexts: dict[
+            HypothesisKey,
+            tuple[DirectionalContext, ...],
+        ] = {}
+        for hypothesis in previous.hypotheses:
+            contexts: list[DirectionalContext] = []
+            for context in self._directional_contexts.get(
+                hypothesis.key,
+                (_contextless(hypothesis.log_probability),),
+            ):
+                current_node = self.map.nodes.get(context.current_node_id or "")
+                assertion_valid_until = context.assertion_valid_until
+                if (
+                    advance_context_validity
+                    and current_node is not None
+                    and current_node.occupancy_zone in asserted_zones
+                    and (
+                        assertion_valid_until is None
+                        or assertion_valid_until < now
+                    )
+                ):
+                    assertion_valid_until = now
+                    context_changed = True
+                contexts.append(
+                    replace(
+                        context,
+                        assertion_valid_until=assertion_valid_until,
+                        log_probability=(
+                            context.log_probability
+                            + increments_by_key[hypothesis.key]
+                            - total
+                            if evidence_changed
+                            else context.log_probability
+                        ),
+                    )
+                )
+            directional_contexts[hypothesis.key] = tuple(contexts)
+        self._directional_contexts = {
+            key: directional_contexts[key] for key in directional_contexts
+        }
+        return evidence_changed or context_changed
+
     @property
     def directional_contexts(
         self,
@@ -156,7 +283,6 @@ class JointOccupancyFilter:
     def _observe(self, event: OccupancyEvent) -> FilterUpdate:
         """Apply one event without the latency instrumentation wrapper."""
 
-        self._update_sequence += 1
         self._last_operation_count = 0
         self._last_context_compaction_count = 0
         previous = self.posterior
@@ -164,6 +290,9 @@ class JointOccupancyFilter:
             update = self._unchanged_update(event, "out_of_order")
             self.last_update = update
             return update
+        self._update_sequence += 1
+        self.reinforce_asserted_evidence(event.event_at)
+        previous = self.posterior
 
         provenance = self.observations.prepare_delta(event)
         if provenance.disposition in {"duplicate", "ignored"}:
@@ -299,6 +428,8 @@ class JointOccupancyFilter:
             for movement, score in movement_scores.items()
         }
         movement_evidence = _movement_evidence(evidence_scores, total)
+        self._invalidate_departed_assertions(movement_evidence, event.event_at)
+        current = self.posterior
         update = self._update_for(
             previous,
             current,
@@ -498,6 +629,7 @@ class JointOccupancyFilter:
             )
 
         paths: list[TransitionPath] = []
+        asserted_sustained_zones = self._asserted_sustained_zones()
         for hypothesis in posterior.hypotheses:
             if hypothesis.log_probability == -math.inf:
                 continue
@@ -531,6 +663,8 @@ class JointOccupancyFilter:
                     movements = ((source, event.zone),)
                 else:
                     weight = MISSED_MOVEMENT_WEIGHT * count
+                    if source in asserted_sustained_zones:
+                        weight *= ASSERTED_NONADJACENT_MOVEMENT_FACTOR
                     movements = ((source, event.zone),)
                 candidates.append((successor, weight, movements))
 
@@ -547,6 +681,96 @@ class JointOccupancyFilter:
                 for candidate, weight, movements in candidates
             )
         return tuple(paths)
+
+    def _asserted_sustained_zones(self) -> set[str]:
+        zones: set[str] = set()
+        entity_states = self.observations.entity_states
+        for zone, entity_ids in self._active_positive_entities.items():
+            if any(
+                state is not None
+                and state.state == "on"
+                and not state.departure_observed
+                and (binding := self.map.entity_binding_for_entity(entity_id))
+                is not None
+                and self.map.occupancy_behavior_for_node(
+                    self.map.nodes[binding.node_id]
+                )
+                in {"sticky", "sustained"}
+                for entity_id in entity_ids
+                for state in (entity_states.get(entity_id),)
+            ):
+                zones.add(zone)
+        return zones
+
+    def _invalidate_departed_assertions(
+        self,
+        movement_evidence: tuple[MovementEvidence, ...],
+        now: datetime,
+    ) -> bool:
+        probability_by_origin: dict[str, float] = defaultdict(float)
+        for evidence in movement_evidence:
+            if (
+                evidence.disposition == "graph_valid"
+                and evidence.origin_zone == evidence.source_zone
+                and evidence.target_zone in self.graph.neighbors(evidence.source_zone)
+            ):
+                probability_by_origin[evidence.origin_zone] += (
+                    evidence.coherent_probability
+                )
+        deltas_by_zone: dict[str, list[float]] = {}
+        for origin, probability in probability_by_origin.items():
+            if probability < SUSTAINED_DEPARTURE_THRESHOLD:
+                continue
+            zone_delta = [0.0] * (self.expected_occupants + 1)
+            for entity_id in sorted(self._active_positive_entities.get(origin, ())):
+                delta = self.observations.invalidate_asserted_episode(entity_id)
+                for count, value in enumerate(delta):
+                    zone_delta[count] += value
+            if any(value != 0.0 for value in zone_delta):
+                deltas_by_zone[origin] = zone_delta
+        if not deltas_by_zone:
+            return False
+
+        previous = self.posterior
+        increments_by_key = {
+            hypothesis.key: sum(
+                delta[_zone_count(hypothesis.key, zone)]
+                for zone, delta in deltas_by_zone.items()
+            )
+            for hypothesis in previous.hypotheses
+        }
+        total = log_sum_exp(
+            hypothesis.log_probability + increments_by_key[hypothesis.key]
+            for hypothesis in previous.hypotheses
+        )
+        self.posterior = _normalize_dense_weights(
+            {
+                hypothesis.key: (
+                    hypothesis.log_probability + increments_by_key[hypothesis.key]
+                )
+                for hypothesis in previous.hypotheses
+            },
+            self._configuration_keys,
+            now,
+        )
+        self._directional_contexts = {
+            hypothesis.key: tuple(
+                replace(
+                    context,
+                    log_probability=(
+                        context.log_probability
+                        + increments_by_key[hypothesis.key]
+                        - total
+                    ),
+                )
+                for context in self._directional_contexts.get(
+                    hypothesis.key,
+                    (_contextless(hypothesis.log_probability),),
+                )
+            )
+            for hypothesis in previous.hypotheses
+        }
+        return True
 
     def _update_active_positive_entities(self, event: OccupancyEvent) -> None:
         for entities in self._active_positive_entities.values():
@@ -590,9 +814,15 @@ class JointOccupancyFilter:
                 if transition_seconds is None
                 else transition_seconds
             )
-            if (
-                event.event_at - context.last_event_at
-            ).total_seconds() > allowed_seconds:
+            timing_reference = max(
+                reference
+                for reference in (
+                    context.last_event_at,
+                    context.assertion_valid_until,
+                )
+                if reference is not None
+            )
+            if (event.event_at - timing_reference).total_seconds() > allowed_seconds:
                 disposition = "missed_timing"
         advanced = DirectionalContext(
             origin_zone=origin,
@@ -751,6 +981,8 @@ class JointOccupancyFilter:
     def _current_positive_evidence(
         self,
         now: datetime,
+        *,
+        asserted_only: bool = False,
     ) -> dict[str, tuple[PositiveEvidence, ...]]:
         entity_states = self.observations.entity_states
         result: dict[str, tuple[PositiveEvidence, ...]] = {}
@@ -759,7 +991,12 @@ class JointOccupancyFilter:
             for entity_id in entity_ids:
                 state = entity_states.get(entity_id)
                 binding = self.map.entity_binding_for_entity(entity_id)
-                if state is None or state.state != "on" or binding is None:
+                if (
+                    state is None
+                    or state.state != "on"
+                    or state.departure_observed
+                    or binding is None
+                ):
                     continue
                 node = self.map.nodes[binding.node_id]
                 behavior = self.map.occupancy_behavior_for_node(node)
@@ -775,7 +1012,11 @@ class JointOccupancyFilter:
                     if behavior == "transient" or node.role == "transition_gate"
                     else MOTION_CORROBORATION_WINDOW
                 )
-                if not sustained and now - state.changed_at > freshness:
+                if (
+                    not asserted_only
+                    and not sustained
+                    and now - state.changed_at > freshness
+                ):
                     continue
                 candidates.append(
                     (
@@ -797,9 +1038,12 @@ class JointOccupancyFilter:
                     (
                         evidence
                         for evidence, started_at in candidates
-                        if latest_episode is not None
-                        and latest_episode - started_at
-                        <= self.observations.correlation_window
+                        if asserted_only
+                        or (
+                            latest_episode is not None
+                            and latest_episode - started_at
+                            <= self.observations.correlation_window
+                        )
                     ),
                     key=lambda evidence: evidence.entity_id,
                 )
@@ -816,6 +1060,7 @@ def _context_key(context: DirectionalContext) -> tuple[object, ...]:
         context.last_event_at,
         context.evidence_ids,
         context.disposition,
+        context.assertion_valid_until,
     )
 
 
@@ -832,6 +1077,7 @@ def _context_from_key(
         evidence_ids=key[5] if isinstance(key[5], tuple) else (),
         log_probability=log_probability,
         disposition=key[6] if isinstance(key[6], str) else "contextless",
+        assertion_valid_until=key[7] if isinstance(key[7], datetime) else None,
     )
 
 
@@ -848,6 +1094,8 @@ def _context_sort_key(context: DirectionalContext) -> tuple[object, ...]:
         context.last_event_at,
         context.evidence_ids,
         context.disposition,
+        context.assertion_valid_until is not None,
+        context.assertion_valid_until,
     )
 
 
@@ -867,6 +1115,8 @@ def _context_score_sort_key(
         key[4],
         key[5],
         key[6],
+        key[7] is not None,
+        key[7],
     )
 
 

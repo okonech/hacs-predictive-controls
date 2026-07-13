@@ -2,11 +2,11 @@
 
 ## Status
 
-**Not yet collected.** Automated tests and synthetic benchmarks cannot establish real sensor ordering, entity flapping, Home Assistant event-loop contention, or household movement accuracy. This evidence is an external rollout gate for 0.1.19.
+**Not yet collected.** Automated tests and synthetic benchmarks cannot establish real sensor ordering, entity flapping, Home Assistant event-loop contention, or household movement accuracy. This evidence is an external rollout gate for 0.1.20.
 
 ## Preconditions
 
-- Run the exact 0.1.19 release-candidate code and record its commit SHA.
+- Run the exact 0.1.20 release-candidate code and record its commit SHA.
 - Keep the map, expected-occupant source, and automation configuration unchanged for the observation window unless a change is logged as a restart of the window.
 - Use the canonical public contract: `activation_plausible -> on`, `keep_on -> off`, and optional `prelight_plausible -> prelight`.
 - Ensure diagnostics can be downloaded from the Home Assistant integration entry.

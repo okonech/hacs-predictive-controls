@@ -330,8 +330,15 @@ def test_joint_facade_projects_events_and_bounds_history() -> None:
     assert engine.diagnostics.joint_last_provenance is not None
     assert engine.diagnostics.joint_last_provenance.disposition == "duplicate"
     assert len(engine.recent_events) == 25
-    assert engine.tracks == ()
-    assert engine.diagnostics.tracks == ()
+    assert engine.tracks == engine.diagnostics.tracks
+    assert len(engine.tracks) == 1
+    track = engine.tracks[0]
+    assert track.track_id == "track_1"
+    assert track.zone == "office"
+    assert track.confidence == pytest.approx(first.current.confidence)
+    assert track.active
+    assert track.last_evidence_at == NOW
+    assert track.source_entities == ("binary_sensor.office",)
 
 
 def test_joint_facade_refresh_expiry_count_and_unknown_zone() -> None:
@@ -340,7 +347,10 @@ def test_joint_facade_refresh_expiry_count_and_unknown_zone() -> None:
     engine.observe(office)
 
     assert engine.expire_transient_state(NOW + timedelta(minutes=10))
-    assert not engine.expire_transient_state(NOW + timedelta(minutes=11))
+    assert engine.expire_transient_state(NOW + timedelta(minutes=11))
+    assert not engine.expire_transient_state(
+        NOW + timedelta(minutes=11, seconds=30)
+    )
     assert engine.refresh_active(NOW + timedelta(minutes=12)) == ()
     assert engine.state_for_zone("missing") == ZoneState(zone="missing")
 
@@ -349,7 +359,7 @@ def test_joint_facade_refresh_expiry_count_and_unknown_zone() -> None:
     assert engine.diagnostics.joint_posterior[0].key.positions == ()
 
 
-def test_joint_facade_periodically_releases_stale_low_confidence_latch() -> None:
+def test_joint_facade_preserves_stale_low_confidence_latch_on_expiry() -> None:
     engine = ZoneConfidenceEngine(make_map(), expected_occupants=1)
     engine.observe(
         make_event(
@@ -373,12 +383,12 @@ def test_joint_facade_periodically_releases_stale_low_confidence_latch() -> None
 
     assert engine.refresh_active(NOW + timedelta(minutes=20)) == ()
     assert engine.diagnostics.joint_policy_states["office"].keep_on
-    assert engine.expire_transient_state(NOW + timedelta(minutes=20))
+    engine.expire_transient_state(NOW + timedelta(minutes=20))
 
     state = engine.diagnostics.joint_policy_states["office"]
-    assert not state.keep_on
-    assert state.recovery_eligible
-    assert state.last_release_cause == "provisional_false_off"
+    assert state.keep_on
+    assert not state.recovery_eligible
+    assert state.last_release_cause is None
 
 
 def test_joint_facade_validates_count_guards_before_filter_creation() -> None:
@@ -388,7 +398,6 @@ def test_joint_facade_validates_count_guards_before_filter_creation() -> None:
         OccupancyTracker(make_map(), TrackerConfig(expected_occupants=-1))
 
     tracker = OccupancyTracker(make_map())
-    assert not tracker.suppress_last_activation("runtime_limit")
     with pytest.raises(ValueError, match="non-negative"):
         tracker.reconcile_expected_occupants(-1, NOW)
     with pytest.raises(ValueError, match="above two"):

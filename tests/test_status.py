@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import base64
+import zlib
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from custom_components.predictive_controls.confidence import ZoneState
 from custom_components.predictive_controls.events import OccupancyEvent
 from custom_components.predictive_controls.markov import Prediction
 from custom_components.predictive_controls.occupancy_state import (
     ObservationProvenance,
+    PackedPolicyAuditContext,
     PolicyAuditEntry,
     PolicyDecision,
     ReleaseCause,
@@ -199,6 +202,19 @@ def test_runtime_status_payload_serializes_prediction_and_without_prediction() -
     assert payload["expected_occupants"] == 0
     assert payload["occupancy_diagnostics"] == {
         "expected_occupants": 2,
+        "reliability": {
+            "criteria": {
+                "repeat_minimum": 2,
+                "flap_window_seconds": 30,
+            },
+            "coverage": {
+                "observed_event_count": 0,
+                "oldest_event_at": None,
+                "newest_event_at": None,
+            },
+            "rejected_motion_captures": [],
+            "low_confidence_flaps": [],
+        },
         "protected_tracks": ["living_room"],
         "protected_corridor": ["kitchen", "living_room"],
         "inferred_join_slots": [
@@ -267,6 +283,9 @@ def test_runtime_status_payload_serializes_prediction_and_without_prediction() -
 
 
 def test_runtime_status_payload_serializes_retained_policy_audit() -> None:
+    packed_context = PackedPolicyAuditContext(
+        zlib.compress(b'{"marker":"retained"}')
+    )
     diagnostics = replace(
         make_diagnostics(),
         joint_last_provenance=ObservationProvenance(
@@ -304,6 +323,7 @@ def test_runtime_status_payload_serializes_retained_policy_audit() -> None:
                 current_reason="graph-valid final occupant departure",
                 previous_release_cause=None,
                 current_release_cause=ReleaseCause.GRAPH_DEPARTURE,
+                context=packed_context,
             ),
         ),
     )
@@ -349,12 +369,115 @@ def test_runtime_status_payload_serializes_retained_policy_audit() -> None:
                 "reason": "graph-valid final occupant departure",
                 "release_cause": "graph_departure",
             },
-            "context": None,
+            "context": {
+                "encoding": "zlib-json-v1",
+                "data": base64.b64encode(packed_context.compressed_json).decode(
+                    "ascii"
+                ),
+            },
         }
     ]
     assert joint["policy_audit_retention"] == {
-        "retention_hours": 48,
+        "retention_hours": 12,
+        "max_entries": 8192,
+        "max_context_compressed_bytes": 12582912,
+        "context_compressed_bytes": len(packed_context.compressed_json),
         "entry_count": 1,
         "oldest_decision_at": "2026-06-07T12:00:00+00:00",
         "newest_decision_at": "2026-06-07T12:00:00+00:00",
+    }
+
+
+def test_runtime_status_payload_serializes_reliability_review() -> None:
+    now = datetime(2026, 6, 7, 12, tzinfo=UTC)
+
+    def entry(
+        event_id: str,
+        decision_at: datetime,
+        state: str,
+        occupied_marginal: float | None,
+    ) -> PolicyAuditEntry:
+        return PolicyAuditEntry(
+            decision_at=decision_at,
+            source="observation",
+            trigger_event_id=event_id,
+            trigger_entity_id="binary_sensor.office_motion",
+            trigger_zone="office",
+            trigger_state=state,
+            trigger_disposition="accepted",
+            decision=PolicyDecision(
+                zone="office",
+                action="activate",
+                accepted=False,
+                reason_code=(
+                    "occupied_gate_failed"
+                    if state == "on"
+                    else "non_positive_observation"
+                ),
+                gate_values={}
+                if occupied_marginal is None
+                else {"occupied_marginal": occupied_marginal},
+                evidence_ids=(event_id,),
+            ),
+            previous_keep_on=False,
+            current_keep_on=False,
+            previous_reason="no trusted occupancy",
+            current_reason="no trusted occupancy",
+            previous_release_cause=None,
+            current_release_cause=None,
+        )
+
+    diagnostics = replace(
+        make_diagnostics(),
+        joint_policy_audit=(
+            entry("on-1", now, "on", 0.2),
+            entry("off-1", now + timedelta(seconds=5), "off", None),
+            entry("on-2", now + timedelta(seconds=10), "on", 0.3),
+            entry("off-2", now + timedelta(seconds=14), "off", None),
+        ),
+    )
+    runtime = FakeRuntime(
+        zone_states={},
+        recent_occupancy_events=(),
+        last_source_node=None,
+        last_prediction=None,
+        probabilities={},
+        transition_counts={},
+        confidence=FakeConfidence(diagnostics),
+    )
+
+    reliability = runtime_status_payload(runtime)["occupancy_diagnostics"][
+        "reliability"
+    ]
+
+    assert reliability == {
+        "criteria": {
+            "repeat_minimum": 2,
+            "flap_window_seconds": 30,
+        },
+        "coverage": {
+            "observed_event_count": 4,
+            "oldest_event_at": "2026-06-07T12:00:00+00:00",
+            "newest_event_at": "2026-06-07T12:00:14+00:00",
+        },
+        "rejected_motion_captures": [
+            {
+                "entity_id": "binary_sensor.office_motion",
+                "zone": "office",
+                "capture_count": 2,
+                "last_capture_at": "2026-06-07T12:00:10+00:00",
+                "reason_counts": {"occupied_gate_failed": 2},
+                "max_occupied_marginal": 0.3,
+            }
+        ],
+        "low_confidence_flaps": [
+            {
+                "entity_id": "binary_sensor.office_motion",
+                "zone": "office",
+                "pulse_count": 2,
+                "last_flap_at": "2026-06-07T12:00:14+00:00",
+                "shortest_pulse_seconds": 4.0,
+                "max_occupied_marginal": 0.3,
+            }
+        ],
     }

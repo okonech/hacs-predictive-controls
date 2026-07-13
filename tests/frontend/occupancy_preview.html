@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Predictive Controls Occupancy Preview</title>
+  <title>Predictive Controls Local Preview</title>
   <style>
     :root {
       --primary-text-color: #e6e6e6;
@@ -87,6 +87,13 @@
       reason: "motion active at alex_office_motion; confidence is probable",
       last_node_id: "alex_office_motion",
     };
+    zoneStates.living_room = {
+      confidence: 0.82,
+      status: "confirmed",
+      occupancy_behavior: "sticky",
+      reason: "still target asserted at living_room_fireplace_left",
+      last_node_id: "living_room_fireplace_left",
+    };
 
     const config = {
       entry_id: "preview",
@@ -95,7 +102,7 @@
       actions_yaml: "actions: []\n",
       transition_window_seconds: 30,
       prediction_threshold: 0.6,
-      expected_occupants: 1,
+      expected_occupants: 2,
     };
     const status = {
       zone_states: zoneStates,
@@ -105,14 +112,45 @@
         bottom_of_staircase_motion: { top_of_staircase_motion: 2 },
       },
       occupancy_diagnostics: {
-        expected_occupants: 1,
-        protected_tracks: ["alex_office"],
-        protected_corridor: ["alex_office", "upstairs_hallway"],
+        expected_occupants: 2,
+        protected_tracks: ["alex_office", "living_room"],
+        protected_corridor: ["alex_office", "upstairs_hallway", "living_room"],
         prediction_hints: { upstairs_hallway: 0.62 },
         inferred_join_slots: [],
         inferred_departures: [],
         dwell_seconds: {},
-        tracks: [{ track_id: "track_1", zone: "alex_office", confidence: 0.65, active: true, source_entities: ["binary_sensor.alex_office_motion_detection"] }],
+        tracks: [
+          { track_id: "track_1", zone: "alex_office", confidence: 0.65, active: true, source_entities: ["binary_sensor.alex_office_motion_detection"] },
+          { track_id: "track_2", zone: "living_room", confidence: 0.82, active: true, source_entities: ["binary_sensor.apollo_msr_still"] },
+        ],
+        reliability: {
+          criteria: { repeat_minimum: 2, flap_window_seconds: 30 },
+          coverage: {
+            observed_event_count: 87,
+            oldest_event_at: "2026-07-13T00:05:00-04:00",
+            newest_event_at: "2026-07-13T11:58:42-04:00",
+          },
+          rejected_motion_captures: [
+            {
+              entity_id: "binary_sensor.upstairs_bathroom_motion_detection",
+              zone: "upstairs_bathroom",
+              capture_count: 5,
+              last_capture_at: "2026-07-13T11:42:18-04:00",
+              reason_counts: { occupied_gate_failed: 4, support_gate_failed: 1 },
+              max_occupied_marginal: 0.34,
+            },
+          ],
+          low_confidence_flaps: [
+            {
+              entity_id: "binary_sensor.entrance_mmwave_dimmer_motion_detection",
+              zone: "entrance_hallway",
+              pulse_count: 4,
+              last_flap_at: "2026-07-13T11:58:42-04:00",
+              shortest_pulse_seconds: 2.8,
+              max_occupied_marginal: 0.29,
+            },
+          ],
+        },
       },
     };
     const entities = Object.values(map.nodes).flatMap((node) => Object.values(node.entities || {})).map((entityId) => ({

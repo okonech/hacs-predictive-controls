@@ -337,7 +337,11 @@ def test_r08_directed_timing_accepts_fast_path_and_rejects_late_release() -> Non
     fast_evidence = fast.diagnostics.joint_movement_evidence[0]
 
     late = ZoneConfidenceEngine(predictive_map, expected_occupants=1)
-    for occupancy_event in (event("office", 0), event("hall", 10)):
+    for occupancy_event in (
+        event("office", 0),
+        event("office", 1, state="off"),
+        event("hall", 10),
+    ):
         late.observe(occupancy_event)
 
     assert fast_evidence.disposition == "graph_valid"

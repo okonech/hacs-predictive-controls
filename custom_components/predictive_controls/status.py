@@ -4,8 +4,21 @@ import math
 from datetime import datetime
 from typing import Any, cast
 
-from .automation_policy import POLICY_AUDIT_RETENTION
-from .occupancy_persistence import policy_audit_context_payload
+from .automation_policy import (
+    POLICY_AUDIT_MAX_CONTEXT_BYTES,
+    POLICY_AUDIT_MAX_ENTRIES,
+    POLICY_AUDIT_RETENTION,
+)
+from .policy_audit import (
+    packed_policy_audit_context_size,
+    stored_policy_audit_context_payload,
+)
+from .reliability import (
+    RELIABILITY_FLAP_WINDOW,
+    RELIABILITY_REPEAT_MINIMUM,
+    PolicyReliabilitySummary,
+    summarize_policy_reliability,
+)
 
 
 def runtime_status_payload(runtime: Any) -> dict[str, Any]:
@@ -61,8 +74,12 @@ def zone_state_payload(state: Any) -> dict[str, Any]:
 
 
 def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
+    policy_audit = tuple(getattr(diagnostics, "joint_policy_audit", ()))
     payload = {
         "expected_occupants": diagnostics.expected_occupants,
+        "reliability": reliability_payload(
+            summarize_policy_reliability(policy_audit)
+        ),
         "protected_tracks": list(diagnostics.protected_tracks),
         "protected_corridor": list(diagnostics.protected_corridor),
         "inferred_join_slots": [
@@ -87,7 +104,6 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
     joint_posterior = getattr(diagnostics, "joint_posterior", ())
     joint_provenance = getattr(diagnostics, "joint_last_provenance", None)
     if joint_posterior or joint_provenance is not None:
-        policy_audit = tuple(getattr(diagnostics, "joint_policy_audit", ()))
         oldest_decision_at = cast(
             datetime | None,
             min(
@@ -216,13 +232,21 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
                         if entry.current_release_cause is None
                         else entry.current_release_cause.value,
                     },
-                    "context": policy_audit_context_payload(entry.context),
+                    "context": stored_policy_audit_context_payload(entry.context),
                 }
                 for entry in policy_audit
             ],
             "policy_audit_retention": {
                 "retention_hours": int(
                     POLICY_AUDIT_RETENTION.total_seconds() // 3600
+                ),
+                "max_entries": POLICY_AUDIT_MAX_ENTRIES,
+                "max_context_compressed_bytes": (
+                    POLICY_AUDIT_MAX_CONTEXT_BYTES
+                ),
+                "context_compressed_bytes": sum(
+                    packed_policy_audit_context_size(entry.context)
+                    for entry in policy_audit
                 ),
                 "entry_count": len(policy_audit),
                 "oldest_decision_at": oldest_decision_at.isoformat()
@@ -292,6 +316,26 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
                 "joint_prediction_hints",
                 {},
             ),
+            "route_learning": {
+                "last_match": getattr(
+                    diagnostics,
+                    "joint_route_diagnostics",
+                    {},
+                ),
+                "statistics": [
+                    {
+                        "prefix": list(prefix),
+                        "targets": dict(sorted(targets.items())),
+                    }
+                    for prefix, targets in sorted(
+                        getattr(
+                            diagnostics,
+                            "joint_route_statistics",
+                            {},
+                        ).items()
+                    )
+                ],
+            },
             "last_provenance": None
             if joint_provenance is None
             else {
@@ -318,6 +362,50 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
             },
         }
     return payload
+
+
+def reliability_payload(summary: PolicyReliabilitySummary) -> dict[str, Any]:
+    """Serialize retained audit patterns for proactive reliability review."""
+
+    return {
+        "criteria": {
+            "repeat_minimum": RELIABILITY_REPEAT_MINIMUM,
+            "flap_window_seconds": int(
+                RELIABILITY_FLAP_WINDOW.total_seconds()
+            ),
+        },
+        "coverage": {
+            "observed_event_count": summary.observed_event_count,
+            "oldest_event_at": summary.oldest_event_at.isoformat()
+            if summary.oldest_event_at is not None
+            else None,
+            "newest_event_at": summary.newest_event_at.isoformat()
+            if summary.newest_event_at is not None
+            else None,
+        },
+        "rejected_motion_captures": [
+            {
+                "entity_id": item.entity_id,
+                "zone": item.zone,
+                "capture_count": item.capture_count,
+                "last_capture_at": item.last_capture_at.isoformat(),
+                "reason_counts": dict(item.reason_counts),
+                "max_occupied_marginal": item.max_occupied_marginal,
+            }
+            for item in summary.rejected_motion_captures
+        ],
+        "low_confidence_flaps": [
+            {
+                "entity_id": item.entity_id,
+                "zone": item.zone,
+                "pulse_count": item.pulse_count,
+                "last_flap_at": item.last_flap_at.isoformat(),
+                "shortest_pulse_seconds": item.shortest_pulse_seconds,
+                "max_occupied_marginal": item.max_occupied_marginal,
+            }
+            for item in summary.low_confidence_flaps
+        ],
+    }
 
 
 def track_payload(track: Any) -> dict[str, Any]:

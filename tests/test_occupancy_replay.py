@@ -80,7 +80,7 @@ def test_replay_events_can_skip_refresh_between_events() -> None:
         refresh_before_events=False,
     )
 
-    assert result.final_states["office"].confidence == pytest.approx(0.5102389078498295)
+    assert result.final_states["office"].confidence == pytest.approx(0.4233716475095785)
 
 
 def test_history_events_from_states_imports_home_assistant_history_rows() -> None:

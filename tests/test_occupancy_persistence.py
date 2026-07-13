@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import math
 from collections.abc import Callable
 from dataclasses import replace
@@ -9,6 +10,7 @@ from typing import cast
 
 import pytest
 
+import custom_components.predictive_controls.occupancy_persistence as persistence_module
 from custom_components.predictive_controls.automation_policy import (
     AutomationPolicy,
     PendingDeparture,
@@ -20,6 +22,8 @@ from custom_components.predictive_controls.observation_model import EntityEviden
 from custom_components.predictive_controls.occupancy_graph import ZoneGraph
 from custom_components.predictive_controls.occupancy_persistence import (
     _restore_policy_audit,
+    _restore_route_contexts,
+    _restore_route_counts,
     map_fingerprint,
     restore_occupancy_state,
     serialize_occupancy_state,
@@ -29,6 +33,9 @@ from custom_components.predictive_controls.occupancy_state import (
     PolicyDecision,
     PredictionLease,
     ReleaseCause,
+)
+from custom_components.predictive_controls.policy_audit import (
+    policy_audit_context_payload,
 )
 from custom_components.predictive_controls.prediction import PredictionManager
 
@@ -107,10 +114,14 @@ def test_restart_scenario_round_trips_complete_inference_state() -> None:
     predictions = PredictionManager(predictive_map)
     update = occupancy_filter.observe(event("office", NOW + timedelta(seconds=1)))
     policy.apply(update)
+    occupancy_filter.reinforce_asserted_evidence(NOW + timedelta(minutes=1))
     movement_update = occupancy_filter.observe(
-        event("hall", NOW + timedelta(seconds=2))
+        event("hall", NOW + timedelta(minutes=1, seconds=1))
     )
     policy.apply(movement_update)
+    assert occupancy_filter.reinforce_asserted_evidence(
+        NOW + timedelta(minutes=1, seconds=1)
+    )
     office_state = policy.states["office"]
     policy.restore_states(
         {
@@ -146,6 +157,10 @@ def test_restart_scenario_round_trips_complete_inference_state() -> None:
         directional_contexts=occupancy_filter.directional_contexts,
         pending_departures=policy.pending_departures,
         update_sequence=occupancy_filter.update_sequence,
+        route_counts={
+            ("office", "hall"): {"kitchen": 3.5},
+        },
+        route_contexts=(("office", "hall"),),
     )
 
     restored = restore_occupancy_state(payload, predictive_map, 1, NOW)
@@ -173,14 +188,69 @@ def test_restart_scenario_round_trips_complete_inference_state() -> None:
         )
     assert restored.prediction_leases == predictions.leases
     assert restored.entity_states == occupancy_filter.observations.entity_states
+    assert not occupancy_filter.reinforce_asserted_evidence(
+        NOW + timedelta(minutes=1, seconds=1)
+    )
     assert restored.transition_counts == {"office": {"hall": 2.5}}
+    assert restored.route_counts == {
+        ("office", "hall"): {"kitchen": 3.5},
+    }
+    assert restored.route_contexts == (("office", "hall"),)
     assert restored.map_compatible
     assert restored.restore_status == "restored"
     assert restored.update_sequence == 2
     assert payload["map_fingerprint"] == map_fingerprint(predictive_map)
 
 
-def test_restart_retains_only_last_two_days_of_policy_audit() -> None:
+def test_route_storage_defaults_filters_and_rejects_malformed_values() -> None:
+    predictive_map = make_map()
+    assert _restore_route_counts(None, predictive_map) == {}
+    assert _restore_route_contexts(None, predictive_map) == ()
+
+    with pytest.raises(ValueError, match="counts must be a list"):
+        _restore_route_counts({}, predictive_map)
+    with pytest.raises(ValueError, match="entry must be a mapping"):
+        _restore_route_counts(["bad"], predictive_map)
+    with pytest.raises(ValueError, match="entry is invalid"):
+        _restore_route_counts([{"prefix": "office", "targets": {}}], predictive_map)
+    assert _restore_route_counts(
+        [{"prefix": ["office", "kitchen"], "targets": {"hall": 1.0}}],
+        predictive_map,
+    ) == {}
+    assert _restore_route_counts(
+        [{"prefix": ["office", "hall"], "targets": {"missing": 1.0}}],
+        predictive_map,
+    ) == {}
+    invalid_targets = (
+        (3, 1.0),
+        ("kitchen", "bad"),
+        ("kitchen", math.nan),
+        ("kitchen", 0.0),
+    )
+    for target, value in invalid_targets:
+        with pytest.raises(ValueError, match="route count is invalid"):
+            _restore_route_counts(
+                [{"prefix": ["office", "hall"], "targets": {target: value}}],
+                predictive_map,
+            )
+
+    with pytest.raises(ValueError, match="contexts are invalid"):
+        _restore_route_contexts({}, predictive_map)
+    with pytest.raises(ValueError, match="contexts are invalid"):
+        _restore_route_contexts([[], [], [], [], []], predictive_map)
+    with pytest.raises(ValueError, match="context is invalid"):
+        _restore_route_contexts(["bad"], predictive_map)
+    assert _restore_route_contexts(
+        [["office", "kitchen"]],
+        predictive_map,
+    ) == ()
+    assert _restore_route_contexts(
+        [["office", "hall"], ["office", "hall"]],
+        predictive_map,
+    ) == (("office", "hall"),)
+
+
+def test_restart_retains_only_last_twelve_hours_of_policy_audit() -> None:
     predictive_map = make_map()
     occupancy_filter = JointOccupancyFilter(predictive_map, 1, NOW)
     policy = AutomationPolicy(ZoneGraph.from_map(predictive_map))
@@ -192,8 +262,8 @@ def test_restart_retains_only_last_two_days_of_policy_audit() -> None:
         occupancy_filter.observations.entity_states,
         {},
         policy_audit=(
-            policy_audit_entry(NOW - timedelta(days=2, seconds=1)),
-            policy_audit_entry(NOW - timedelta(days=2)),
+            policy_audit_entry(NOW - timedelta(hours=12, seconds=1)),
+            policy_audit_entry(NOW - timedelta(hours=12)),
             policy_audit_entry(NOW - timedelta(minutes=1)),
         ),
     )
@@ -201,10 +271,39 @@ def test_restart_retains_only_last_two_days_of_policy_audit() -> None:
     restored = restore_occupancy_state(payload, predictive_map, 1, NOW)
 
     assert [entry.decision_at for entry in restored.policy_audit] == [
-        NOW - timedelta(days=2),
+        NOW - timedelta(hours=12),
         NOW - timedelta(minutes=1),
     ]
     assert restored.policy_audit[-1].decision.evidence_ids == ("office-hall",)
+
+
+def test_policy_audit_restore_applies_hard_entry_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(persistence_module, "POLICY_AUDIT_MAX_ENTRIES", 1)
+    predictive_map = make_map()
+    occupancy_filter = JointOccupancyFilter(predictive_map, 1, NOW)
+    payload = serialize_occupancy_state(
+        predictive_map,
+        occupancy_filter.posterior,
+        AutomationPolicy(ZoneGraph.from_map(predictive_map)).states,
+        (),
+        occupancy_filter.observations.entity_states,
+        {},
+        policy_audit=(
+            policy_audit_entry(NOW - timedelta(minutes=1)),
+            policy_audit_entry(NOW),
+        ),
+    )
+
+    restored = _restore_policy_audit(
+        payload["policy_audit"],
+        set(predictive_map.zones()),
+        NOW,
+    )
+
+    assert len(restored) == 1
+    assert restored[0].decision_at == NOW
 
 
 def test_policy_audit_round_trips_observation_context() -> None:
@@ -229,6 +328,21 @@ def test_policy_audit_round_trips_observation_context() -> None:
     assert actual.context == expected.context
 
     raw_audit = cast(list[dict[str, object]], payload["policy_audit"])
+    stored_context = next(
+        cast(dict[str, object], entry["context"])
+        for entry in raw_audit
+        if entry.get("context") is not None
+    )
+    assert stored_context["encoding"] == "zlib-json-v1"
+    expanded_size = len(
+        json.dumps(
+            policy_audit_context_payload(expected.context),
+            separators=(",", ":"),
+        )
+    )
+    assert len(json.dumps(stored_context, separators=(",", ":"))) < (
+        expanded_size * 2 / 3
+    )
     for entry in raw_audit:
         entry.pop("context")
     legacy = _restore_policy_audit(raw_audit, set(predictive_map.zones()), NOW)
@@ -334,13 +448,12 @@ def _contextual_policy_audit_entry() -> tuple[dict[str, object], set[str]]:
         policy_audit=policy.policy_audit,
     )
     raw_audit = cast(list[dict[str, object]], payload["policy_audit"])
-    entry = next(
-        item
-        for item in raw_audit
-        if isinstance(item.get("context"), dict)
-        and cast(dict[str, object], item["context"])["movement_evidence"]
-    )
-    return entry, set(predictive_map.zones())
+    for entry, audit_entry in zip(raw_audit, policy.policy_audit, strict=True):
+        context = policy_audit_context_payload(audit_entry.context)
+        if context is not None and context["movement_evidence"]:
+            entry["context"] = context
+            return entry, set(predictive_map.zones())
+    raise AssertionError("test fixture did not produce movement evidence")
 
 
 def _replace_nested(
@@ -684,6 +797,9 @@ def test_schema_two_migrates_policy_and_valid_counts_only() -> None:
         ),
         lambda payload: payload["entity_states"]["binary_sensor.office"].update(
             binding_signature={}
+        ),
+        lambda payload: payload["entity_states"]["binary_sensor.office"].update(
+            duration_log_odds=-1.0
         ),
         lambda payload: payload.update(directional_contexts={}),
         lambda payload: payload["directional_contexts"].append("bad"),

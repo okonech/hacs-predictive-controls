@@ -3,10 +3,12 @@ from __future__ import annotations
 import math
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 import pytest
 
 from custom_components.predictive_controls.automation_policy import (
+    POLICY_AUDIT_MAX_ENTRIES,
     AutomationPolicy,
     PendingDeparture,
 )
@@ -26,6 +28,9 @@ from custom_components.predictive_controls.occupancy_state import (
     canonical_hypothesis,
     normalize_hypotheses,
     zone_marginals,
+)
+from custom_components.predictive_controls.policy_audit import (
+    policy_audit_context_payload,
 )
 
 NOW = datetime(2026, 7, 12, 12, tzinfo=UTC)
@@ -87,7 +92,7 @@ def test_policy_scenario_sensor_flap_keeps_latch_and_activation_expires() -> Non
     assert policy.states["office"].keep_on
 
 
-def test_policy_provisionally_releases_stale_low_confidence_latch() -> None:
+def test_policy_elapsed_time_and_low_confidence_do_not_release_latch() -> None:
     graph = ZoneGraph.from_map(make_map())
     policy = AutomationPolicy(graph)
     policy.restore_states(
@@ -108,29 +113,18 @@ def test_policy_provisionally_releases_stale_low_confidence_latch() -> None:
         {"office": 0.0862},
     )
     assert policy.states["office"].keep_on
-    assert policy.expire(
+    assert not policy.expire(
         NOW + timedelta(minutes=50),
         {"office": 0.0862},
     )
 
     state = policy.states["office"]
-    assert not state.keep_on
-    assert state.last_release_cause == "provisional_false_off"
-    assert state.recovery_eligible
-    assert state.reason == "sustained low occupancy without active local evidence"
-    decision = policy.policy_audit[-1]
-    assert decision.source == "policy_expiry"
-    assert decision.decision.reason_code == "provisional_false_off"
-    assert decision.decision.gate_values == {
-        "occupied_marginal": 0.0862,
-        "occupied_threshold": 0.1,
-        "seconds_since_trusted": 3000.0,
-        "grace_seconds": 900.0,
-        "active_positive_episode_count": 0.0,
-    }
+    assert state.keep_on
+    assert state.last_release_cause is None
+    assert not state.recovery_eligible
 
 
-def test_policy_provisional_release_requires_low_confidence_and_no_local_evidence() -> (
+def test_policy_silence_and_low_confidence_preserve_latch_with_local_evidence() -> (
     None
 ):
     predictive_map = make_map()
@@ -175,7 +169,7 @@ def test_policy_provisional_release_requires_low_confidence_and_no_local_evidenc
     assert active_evidence.states["office"].keep_on
 
 
-def test_policy_observation_releases_other_stale_low_confidence_zone() -> None:
+def test_policy_unrelated_observation_preserves_stale_low_confidence_zone() -> None:
     graph = ZoneGraph.from_map(make_map())
     policy = AutomationPolicy(graph)
     policy.restore_states(
@@ -200,13 +194,11 @@ def test_policy_observation_releases_other_stale_low_confidence_zone() -> None:
         )
     )
 
-    assert not policy.states["office"].keep_on
-    office_decision = next(
-        decision
+    assert policy.states["office"].keep_on
+    assert not any(
+        decision.zone == "office" and decision.action == "release"
         for decision in policy.last_decisions
-        if decision.zone == "office"
     )
-    assert office_decision.reason_code == "provisional_false_off"
 
 
 def test_policy_scenario_graph_departure_uses_coherent_multihop_evidence() -> None:
@@ -275,12 +267,40 @@ def test_policy_audit_records_count_release_with_before_and_after_state() -> Non
     assert office_entry.current_release_cause == "authoritative_away"
 
 
-def test_policy_expiry_prunes_audit_entries_older_than_two_days() -> None:
+def test_policy_expiry_prunes_audit_entries_older_than_twelve_hours() -> None:
     policy = AutomationPolicy(ZoneGraph.from_map(make_map()))
 
-    policy.reconcile_count(0, NOW - timedelta(days=2, seconds=1), "old-away")
+    policy.reconcile_count(0, NOW - timedelta(hours=12, seconds=1), "old-away")
 
     assert policy.expire(NOW)
+    assert policy.policy_audit == ()
+
+
+def test_policy_audit_entry_bound_discards_oldest_decisions() -> None:
+    policy = AutomationPolicy(ZoneGraph.from_map(make_map()))
+    decisions_per_update = len(make_map().zones())
+
+    for index in range(POLICY_AUDIT_MAX_ENTRIES // decisions_per_update + 2):
+        policy.reconcile_count(0, NOW, f"away-{index}")
+
+    assert len(policy.policy_audit) == POLICY_AUDIT_MAX_ENTRIES
+    assert policy.policy_audit[0].trigger_event_id != "away-0"
+
+
+def test_policy_audit_compressed_context_bound_discards_oldest_decisions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "custom_components.predictive_controls.automation_policy."
+        "POLICY_AUDIT_MAX_CONTEXT_BYTES",
+        1,
+    )
+    predictive_map = make_map()
+    policy = AutomationPolicy(ZoneGraph.from_map(predictive_map))
+    occupancy_filter = JointOccupancyFilter(predictive_map, 1, NOW)
+
+    policy.apply(occupancy_filter.observe(event("office", NOW)))
+
     assert policy.policy_audit == ()
 
 
@@ -343,12 +363,16 @@ def test_policy_accepts_supported_adjacent_arrival_and_audits_context() -> None:
     assert activation.decision.reason_code == "graph_supported_arrival"
     assert activation.decision.gate_values["movement_threshold"] == 0.4
     assert activation.context is not None
-    assert activation.context.previous_occupied_marginals == pytest.approx(
+    context = policy_audit_context_payload(activation.context)
+    assert context is not None
+    assert context["previous_occupied_marginals"] == pytest.approx(
         {"garage": 0.0, "hall": 0.95, "kitchen": 0.0, "office": 0.05}
     )
-    assert activation.context.occupied_marginals == update.occupied_marginals
-    assert activation.context.count_marginals == update.count_marginals
-    assert activation.context.movement_evidence == update.movement_evidence
+    assert context["occupied_marginals"] == update.occupied_marginals
+    count_marginals = cast(dict[str, object], context["count_marginals"])
+    movement_evidence = cast(list[object], context["movement_evidence"])
+    assert set(count_marginals) == set(update.count_marginals)
+    assert len(movement_evidence) == len(update.movement_evidence)
 
 
 def test_policy_recovers_provisional_release_after_supported_local_jump() -> None:
@@ -649,10 +673,8 @@ def test_policy_ignores_non_evidence_and_validates_restore_zones() -> None:
         policy.restore_states({})
 
 
-def test_policy_suppression_and_pending_departure_validation() -> None:
+def test_policy_pending_departure_validation() -> None:
     policy = AutomationPolicy(ZoneGraph.from_map(make_map()))
-    assert not policy.suppress_activation("missing", "runtime_limit")
-    assert not policy.suppress_activation("office", "runtime_limit")
     with pytest.raises(ValueError, match="pending departure"):
         policy.restore_pending_departures(
             {

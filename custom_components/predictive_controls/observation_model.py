@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
 from .events import OccupancyEvent
@@ -31,6 +31,8 @@ class EntityEvidence:
     log_likelihood_by_count: tuple[float, ...]
     changed_at: datetime
     episode_started_at: datetime
+    duration_log_odds: float = 0.0
+    departure_observed: bool = False
 
 
 class ObservationModel:
@@ -93,11 +95,15 @@ class ObservationModel:
                 else previous.episode_started_at
             )
             delta = tuple(
-                current - old
-                for current, old in zip(
-                    current_likelihood,
-                    previous.log_likelihood_by_count,
-                    strict=True,
+                current
+                - old
+                - (previous.duration_log_odds if count > 0 else 0.0)
+                for count, (current, old) in enumerate(
+                    zip(
+                        current_likelihood,
+                        previous.log_likelihood_by_count,
+                        strict=True,
+                    )
                 )
             )
             disposition = "replacement"
@@ -149,6 +155,38 @@ class ObservationModel:
             raise ValueError("restored likelihood vector length does not match count")
         self._evidence = states.copy()
 
+    def apply_duration_log_odds(self, entity_id: str, target: float) -> float:
+        """Advance one asserted episode to an absolute bounded duration factor."""
+
+        state = self._evidence.get(entity_id)
+        if state is None or state.state != "on" or state.departure_observed:
+            return 0.0
+        increment = max(0.0, target - state.duration_log_odds)
+        if increment > 0.0:
+            self._evidence[entity_id] = replace(
+                state,
+                duration_log_odds=target,
+            )
+        return increment
+
+    def invalidate_asserted_episode(self, entity_id: str) -> tuple[float, ...]:
+        """Remove one asserted episode after confirmed path-specific departure."""
+
+        state = self._evidence.get(entity_id)
+        if state is None or state.state != "on" or state.departure_observed:
+            return self._neutral()
+        applied = tuple(
+            value + (state.duration_log_odds if count > 0 else 0.0)
+            for count, value in enumerate(state.log_likelihood_by_count)
+        )
+        self._evidence[entity_id] = replace(
+            state,
+            log_likelihood_by_count=self._neutral(),
+            duration_log_odds=0.0,
+            departure_observed=True,
+        )
+        return tuple(-value for value in applied)
+
     def _neutral(self) -> tuple[float, ...]:
         return (0.0,) * (self.expected_occupants + 1)
 
@@ -188,10 +226,13 @@ class ObservationModel:
 
 
 def _profile_for_event(event: OccupancyEvent) -> ObservationProfile:
-    if event.signal_type == "still_target" or event.occupancy_behavior == "sticky":
-        return SUSTAINED_PROFILE
     if event.occupancy_behavior == "transient" or event.role == "transition_gate":
         return TRANSITION_PROFILE
+    if event.signal_type == "still_target" or event.occupancy_behavior in {
+        "sticky",
+        "sustained",
+    }:
+        return SUSTAINED_PROFILE
     return ORDINARY_PROFILE
 
 

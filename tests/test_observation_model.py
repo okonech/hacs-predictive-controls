@@ -65,7 +65,8 @@ def test_observation_scenario_replaces_flaps_and_deduplicates_same_source() -> N
         ({"occupancy_behavior": "sticky"}, 0.97, 0.02),
         ({"occupancy_behavior": "transient"}, 0.85, 0.05),
         ({"role": "transition_gate"}, 0.85, 0.05),
-        ({}, 0.90, 0.04),
+        ({}, 0.97, 0.02),
+        ({"occupancy_behavior": "ambiguous"}, 0.90, 0.04),
     ),
 )
 def test_observation_profiles_are_selected_by_sensor_semantics(
@@ -96,7 +97,7 @@ def test_observation_model_handles_neutral_states_counts_and_restore_validation(
     model.set_expected_occupants(1)
     accepted = model.prepare_delta(make_event(reliability=2.0))
     assert accepted.log_likelihood_by_count == pytest.approx(
-        (math.log(0.04), math.log(0.90))
+        (math.log(0.02), math.log(0.97))
     )
     model.set_expected_occupants(2)
     assert model.entity_states == {}
@@ -123,6 +124,25 @@ def test_observation_model_handles_neutral_states_counts_and_restore_validation(
         )
     with pytest.raises(ValueError, match="non-negative"):
         model.set_expected_occupants(-1)
+
+
+def test_duration_and_departure_ignore_missing_inactive_or_invalidated_episodes() -> (
+    None
+):
+    model = ObservationModel(1)
+    assert model.apply_duration_log_odds("missing", 1.0) == 0.0
+    assert model.invalidate_asserted_episode("missing") == (0.0, 0.0)
+
+    off = make_event(state="off")
+    model.prepare_delta(off)
+    assert model.apply_duration_log_odds(off.entity_id, 1.0) == 0.0
+    assert model.invalidate_asserted_episode(off.entity_id) == (0.0, 0.0)
+
+    on = replace(off, state="on", event_at=NOW + timedelta(seconds=1))
+    model.prepare_delta(on)
+    assert model.invalidate_asserted_episode(on.entity_id) != (0.0, 0.0)
+    assert model.apply_duration_log_odds(on.entity_id, 1.0) == 0.0
+    assert model.invalidate_asserted_episode(on.entity_id) == (0.0, 0.0)
 
 
 def test_snapshot_removes_previous_factor_for_unsupported_state() -> None:

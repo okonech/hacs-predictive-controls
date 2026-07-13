@@ -12,9 +12,9 @@ own:
 
 It models the home as anonymous people moving over a sensor adjacency graph,
 maintains a probability distribution over joint occupant locations, learns
-first-order Markov transitions from sufficiently certain movement, and
-publishes a small, stable set of Home Assistant entities plus a graphical
-editor.
+first-order transitions and bounded multi-step route prefixes from sufficiently
+certain movement, and publishes a small, stable set of Home Assistant entities
+plus a graphical editor.
 
 The first target use case is predictive lighting, but actions are generic Home
 Assistant service calls, so other domains can be added without redesigning the
@@ -51,7 +51,9 @@ The sidebar panel includes:
 - a motion-entity list discovered from Home Assistant binary sensors;
 - a drag-and-drop board for placing predictive nodes;
 - an occupancy tab that visualizes configured zones by floor with live
-  confidence and status;
+  confidence, status, and current anonymous posterior tracks;
+- a reliability tab that ranks repeated policy-rejected motion captures and
+  repeated short low-confidence pulses over retained audit coverage;
 - a connect mode for creating adjacency edges between nodes;
 - a node inspector for labels, entity bindings, initial weights, and edge removal;
 - an actions tab for generic Home Assistant service-call YAML;
@@ -180,16 +182,10 @@ off when zone `keep_on` clears, and optionally soft pre-light from zone
 `prelight_plausible`. Raw entities remain inputs and diagnostics, not the
 recommended automation contract.
 
-Graph-confirmed movement remains the primary `keep_on` release path. A latch is
-released provisionally only when all of the following remain true during live
-evaluation: the zone occupied marginal is at most `0.10`, at least 15 minutes
-have elapsed since trusted local occupancy, and no fresh or sustained positive
-local evidence is active. The 15-minute grace matches the observation
-correlation horizon, while `0.10` matches the existing relocation-origin
-threshold. Provisional releases are recovery eligible, so trusted local evidence
-can immediately emit a new activation pulse if the release was wrong. Snapshot
-bootstrap never emits this release; normal observations and the five-second
-policy evaluation do.
+`keep_on` releases only after path-specific evidence supports the final
+occupant's graph departure, strict relocation after missed movement,
+authoritative count or away state, or explicit reset. Elapsed time, low
+confidence, local clear, and unrelated activity do not release ownership.
 
 ## Entities
 
@@ -331,19 +327,24 @@ without emitting activation.
 
 ### Prediction (pre-lighting)
 
-A first-order Markov chain learns node-to-node transitions only when posterior
-movement mass reaches `0.80`. Predictions exclude the incoming zone, remain
+The predictor learns node-to-node transitions and bounded anonymous multi-step
+route prefixes only when path-specific graph movement reaches `0.80`. At a
+branch it uses the longest sufficiently supported compatible prefix, backs off
+to shorter prefixes, then uses shared first-order counts. Learned route history
+provides a capped branch-prior boost, ages over time, and learns outbound and
+return paths independently. Predictions exclude the incoming zone, remain
 independent for simultaneous path keys, and expire after their own lease. A
-forced graph continuation needs no history; learned counts rank only ambiguous
-forward branches. Predictions are published through `prelight_plausible` and
-`sensor.diagnostic_predicted_next_zone` but never alter the posterior.
+forced graph continuation needs no history. Predictions are published through
+`prelight_plausible` and `sensor.diagnostic_predicted_next_zone` but never alter
+the occupancy posterior, activation, or `keep_on`.
 
 ### Restart behavior
 
 The existing Home Assistant Store persists the normalized posterior, map
 fingerprint, authoritative count, policy latches/evidence IDs, unexpired leases,
 entity evidence needed for bootstrap deduplication, and shared transition
-counts. Restore is validated atomically before current HA states are replayed.
+counts plus bounded route statistics and live anonymous route contexts. Restore
+is validated atomically before current HA states are replayed.
 Bootstrap observations reconcile state without emitting activation or prediction
 pulses. Expired leases are dropped; removed map zones become `unlocated` rather
 than being guessed. Invalid schema, count, datetime, or probability data is
@@ -356,12 +357,13 @@ The hard callback ceiling is 100 ms; an over-budget update completes its state
 change atomically but suppresses activation and predictive actions. Routine core
 and runtime tail latency should remain at or below 30 ms.
 
-The 0.1.19 release-candidate benchmark uses the checked-in 16-zone, 17-node,
+The 0.1.20 release-candidate benchmark uses the checked-in 16-zone, 17-node,
 23-entity reference map with two occupants and 10,000 deterministic events. On
-CPython 3.12.13 it measured a 15.389 ms core maximum and 17.953 ms runtime
-maximum, retained all 153 exact configurations, and pruned zero occupancy
-probability. See `PERFORMANCE_RESULTS.json` for the complete environment,
-percentiles, bootstrap timings, work bounds, and memory measurements.
+CPython 3.12.13 it measured a 25.512 ms core maximum, 24.995 ms runtime p99,
+and 45.068 ms runtime maximum, retained all 153 exact configurations, and
+pruned zero occupancy probability. See `PERFORMANCE_RESULTS.json` for the
+complete environment, percentiles, bootstrap timings, work bounds, and memory
+measurements.
 
 Automated gates do not replace real sensor validation. The required seven-day
 Home Assistant observation has not yet been collected; see
@@ -415,17 +417,35 @@ logger:
 
 Diagnostics are available from the integration entry and include loaded nodes,
 entity bindings, current probabilities, and transition counts. The
-`occupancy_diagnostics.joint.policy_audit` field retains 48 hours of policy
-decisions across restarts. Each observation record includes complete provenance,
+`occupancy_diagnostics.joint.policy_audit` retains up to 12 hours of policy
+decisions across restarts, capped at 8,192 decision entries and 12 MiB of
+compressed observation context. Each observation context remains complete but
+is transported and persisted as a `zlib-json-v1` envelope: base64-decode its
+`data` field, then zlib-decompress the canonical JSON. It contains provenance,
 pre/post occupied marginals, count marginals, active positive evidence, movement
-alternatives, pending departures, gate values, and each affected latch's
-before/after state. Accepted, replacement, duplicate, stale, and rejected
-observations all schedule a coalesced Store write. The adjacent
-`policy_audit_retention` object reports the configured hours, entry count, and
-oldest/newest retained decision timestamps so diagnostics state their actual
-coverage.
+alternatives, and pending departures. Decision records retain gate values and
+each affected latch's before/after state. Accepted, replacement, duplicate,
+stale, and rejected observations all schedule a coalesced Store write. The
+adjacent `policy_audit_retention` object reports configured time and size bounds,
+current compressed-context bytes, entry count, and oldest/newest retained
+timestamps so diagnostics state their actual coverage.
+
+`occupancy_diagnostics.reliability` provides a compact review summary without
+decompressing retained contexts. It deduplicates policy rows by sensor trigger,
+groups repeated positive captures rejected while `keep_on` remained off, and
+reports repeated pulses of at most 30 seconds whose positive edge failed the
+occupied gate. These are investigation signals, not automatic declarations of
+sensor failure. The Occupancy tab also projects the most probable exact joint
+configuration as current anonymous tracks; track labels do not claim persistent
+person identity.
 
 ## Development
+
+The [`docs/spec`](docs/spec/README.md) set is the canonical project and model
+contract. Every reported error, regression, threshold change, or
+inference/policy redesign must follow the repository-local
+[`predictive-controls-regression-review`](.github/skills/predictive-controls-regression-review/SKILL.md)
+skill before production behavior is edited.
 
 For every diagnosed live incident, add a permanent regression containing the
 observed event order, timing, posterior/gate values, and expected public
