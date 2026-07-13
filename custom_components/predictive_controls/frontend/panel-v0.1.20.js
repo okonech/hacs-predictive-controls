@@ -182,9 +182,9 @@ function zoneSummaries(map) {
         .filter((position) => position && Number.isFinite(Number(position.x)) && Number.isFinite(Number(position.y)));
       const average = positions.length
         ? {
-            x: Math.round(positions.reduce((sum, position) => sum + Number(position.x), 0) / positions.length),
-            y: Math.round(positions.reduce((sum, position) => sum + Number(position.y), 0) / positions.length),
-          }
+          x: Math.round(positions.reduce((sum, position) => sum + Number(position.x), 0) / positions.length),
+          y: Math.round(positions.reduce((sum, position) => sum + Number(position.y), 0) / positions.length),
+        }
         : { x: 80, y: 80 };
       const roles = new Set(entries.map(({ node }) => node.role).filter(Boolean));
       const behaviors = new Set(entries.map(({ node }) => node.occupancy_behavior).filter(Boolean));
@@ -747,8 +747,8 @@ class PredictiveControlsPanel extends HTMLElement {
         </div>
         <div class="track-list">
           ${tracks.length
-            ? tracks.map((track) => this.renderTrackDiagnostic(track)).join("")
-            : `<p class="empty-state">No occupants are currently localized.</p>`}
+        ? tracks.map((track) => this.renderTrackDiagnostic(track)).join("")
+        : `<p class="empty-state">No occupants are currently localized.</p>`}
         </div>
       </section>
       <section class="diagnostics-panel">
@@ -820,8 +820,8 @@ class PredictiveControlsPanel extends HTMLElement {
           </div>
           <div class="reliability-list">
             ${captures.length
-              ? captures.map((item) => this.renderRejectedCapture(item)).join("")
-              : `<p class="empty-state">No repeated rejected motion in retained coverage.</p>`}
+        ? captures.map((item) => this.renderRejectedCapture(item)).join("")
+        : `<p class="empty-state">No repeated rejected motion in retained coverage.</p>`}
           </div>
         </section>
         <section class="reliability-section">
@@ -831,8 +831,8 @@ class PredictiveControlsPanel extends HTMLElement {
           </div>
           <div class="reliability-list">
             ${flaps.length
-              ? flaps.map((item) => this.renderLowConfidenceFlap(item)).join("")
-              : `<p class="empty-state">No repeated low-confidence flaps in retained coverage.</p>`}
+        ? flaps.map((item) => this.renderLowConfidenceFlap(item)).join("")
+        : `<p class="empty-state">No repeated low-confidence flaps in retained coverage.</p>`}
           </div>
         </section>
       </main>
