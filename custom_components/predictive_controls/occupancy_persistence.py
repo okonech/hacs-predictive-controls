@@ -7,7 +7,7 @@ from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from .automation_policy import PendingDeparture
 from .const import STORAGE_VERSION
@@ -16,9 +16,14 @@ from .observation_model import EntityEvidence
 from .occupancy_state import (
     DirectionalContext,
     HypothesisKey,
+    MovementEvidence,
+    ObservationProvenance,
+    PendingDepartureAudit,
+    PolicyAuditContext,
     PolicyAuditEntry,
     PolicyDecision,
     PositionState,
+    PositiveEvidence,
     Posterior,
     PredictionLease,
     ReleaseCause,
@@ -240,7 +245,89 @@ def _policy_audit_payload(entry: PolicyAuditEntry) -> dict[str, object]:
             if entry.current_release_cause is None
             else entry.current_release_cause.value,
         },
+        "context": policy_audit_context_payload(entry.context),
     }
+
+
+def policy_audit_context_payload(
+    context: PolicyAuditContext | None,
+) -> dict[str, object] | None:
+    if context is None:
+        return None
+    return {
+        "observation": {
+            "event_id": context.provenance.event_id,
+            "evidence_episode_id": context.provenance.evidence_episode_id,
+            "entity_id": context.provenance.entity_id,
+            "node_id": context.provenance.node_id,
+            "zone": context.provenance.zone,
+            "state": context.provenance.state,
+            "signal_type": context.provenance.signal_type,
+            "reliability": _stored_probability(context.provenance.reliability),
+            "log_likelihood_by_count": list(
+                context.provenance.log_likelihood_by_count
+            ),
+            "disposition": context.provenance.disposition,
+        },
+        "previous_occupied_marginals": {
+            zone: _stored_probability(probability)
+            for zone, probability in sorted(
+                context.previous_occupied_marginals.items()
+            )
+        },
+        "occupied_marginals": {
+            zone: _stored_probability(probability)
+            for zone, probability in sorted(context.occupied_marginals.items())
+        },
+        "count_marginals": {
+            zone: [_stored_probability(probability) for probability in probabilities]
+            for zone, probabilities in sorted(context.count_marginals.items())
+        },
+        "active_positive_evidence": {
+            zone: [
+                {
+                    "entity_id": evidence.entity_id,
+                    "evidence_episode_id": evidence.evidence_episode_id,
+                    "changed_at": evidence.changed_at.isoformat(),
+                    "signal_type": evidence.signal_type,
+                }
+                for evidence in evidence_items
+            ]
+            for zone, evidence_items in sorted(
+                context.active_positive_evidence.items()
+            )
+        },
+        "movement_evidence": [
+            {
+                "path_key": list(evidence.path_key),
+                "origin_zone": evidence.origin_zone,
+                "source_zone": evidence.source_zone,
+                "target_zone": evidence.target_zone,
+                "coherent_probability": _stored_probability(
+                    evidence.coherent_probability
+                ),
+                "source_node_id": evidence.source_node_id,
+                "target_node_id": evidence.target_node_id,
+                "evidence_ids": list(evidence.evidence_ids),
+                "disposition": evidence.disposition,
+            }
+            for evidence in context.movement_evidence
+        ],
+        "pending_departures": {
+            departure.origin: {
+                "current": departure.current,
+                "probability": _stored_probability(departure.probability),
+                "nonadjacent": departure.nonadjacent,
+                "evidence_ids": list(departure.evidence_ids),
+                "disposition": departure.disposition,
+            }
+            for departure in context.pending_departures
+        },
+    }
+
+
+def _stored_probability(value: float) -> float:
+    return min(1.0, max(0.0, value))
 
 
 def restore_occupancy_state(
@@ -580,6 +667,10 @@ def _restore_policy_audit(
         current_release_cause = _restore_audit_release_cause(
             raw_current.get("release_cause")
         )
+        context = _restore_policy_audit_context(
+            raw_entry.get("context"),
+            valid_zones,
+        )
         if decision_at < cutoff:
             continue
         retained.append(
@@ -605,9 +696,258 @@ def _restore_policy_audit(
                 current_reason=current_reason,
                 previous_release_cause=previous_release_cause,
                 current_release_cause=current_release_cause,
+                context=context,
             )
         )
     return tuple(retained)
+
+
+def _restore_policy_audit_context(
+    raw_context: object,
+    valid_zones: set[str],
+) -> PolicyAuditContext | None:
+    if raw_context is None:
+        return None
+    if not isinstance(raw_context, Mapping):
+        raise ValueError("stored policy audit context must be a mapping")
+    provenance = _restore_audit_provenance(
+        raw_context.get("observation"),
+        valid_zones,
+    )
+    previous_marginals = _restore_audit_marginals(
+        raw_context.get("previous_occupied_marginals"),
+        valid_zones,
+    )
+    occupied_marginals = _restore_audit_marginals(
+        raw_context.get("occupied_marginals"),
+        valid_zones,
+    )
+    count_marginals = _restore_audit_count_marginals(
+        raw_context.get("count_marginals"),
+        valid_zones,
+    )
+    active_positive_evidence = _restore_audit_positive_evidence(
+        raw_context.get("active_positive_evidence"),
+        valid_zones,
+    )
+    movement_evidence = _restore_audit_movement_evidence(
+        raw_context.get("movement_evidence"),
+        valid_zones,
+    )
+    pending_departures = tuple(
+        PendingDepartureAudit(
+            origin=departure.origin,
+            current=departure.current,
+            probability=departure.probability,
+            nonadjacent=departure.nonadjacent,
+            evidence_ids=departure.evidence_ids,
+            disposition=departure.disposition,
+        )
+        for _, departure in sorted(
+            _restore_pending_departures(
+                raw_context.get("pending_departures"),
+                valid_zones,
+            ).items()
+        )
+    )
+    return PolicyAuditContext(
+        provenance=provenance,
+        previous_occupied_marginals=previous_marginals,
+        occupied_marginals=occupied_marginals,
+        count_marginals=count_marginals,
+        active_positive_evidence=active_positive_evidence,
+        movement_evidence=movement_evidence,
+        pending_departures=pending_departures,
+    )
+
+
+def _restore_audit_provenance(
+    raw_provenance: object,
+    valid_zones: set[str],
+) -> ObservationProvenance:
+    if not isinstance(raw_provenance, Mapping):
+        raise ValueError("stored policy audit observation must be a mapping")
+    event_id = raw_provenance.get("event_id")
+    episode_id = raw_provenance.get("evidence_episode_id")
+    entity_id = raw_provenance.get("entity_id")
+    node_id = raw_provenance.get("node_id")
+    zone = raw_provenance.get("zone")
+    state = raw_provenance.get("state")
+    signal_type = raw_provenance.get("signal_type")
+    disposition = raw_provenance.get("disposition")
+    raw_likelihood = raw_provenance.get("log_likelihood_by_count")
+    if (
+        not all(
+            isinstance(value, str) and value
+            for value in (
+                event_id,
+                episode_id,
+                entity_id,
+                node_id,
+                state,
+                signal_type,
+                disposition,
+            )
+        )
+        or not isinstance(zone, str)
+        or zone not in valid_zones
+        or not isinstance(raw_likelihood, list)
+        or not raw_likelihood
+        or not all(
+            isinstance(value, int | float) and math.isfinite(value)
+            for value in raw_likelihood
+        )
+    ):
+        raise ValueError("stored policy audit observation is invalid")
+    return ObservationProvenance(
+        event_id=cast(str, event_id),
+        evidence_episode_id=cast(str, episode_id),
+        entity_id=cast(str, entity_id),
+        node_id=cast(str, node_id),
+        zone=zone,
+        state=cast(str, state),
+        signal_type=cast(str, signal_type),
+        reliability=_finite_probability(
+            raw_provenance.get("reliability"),
+            allow_zero=True,
+        ),
+        log_likelihood_by_count=tuple(float(value) for value in raw_likelihood),
+        disposition=cast(str, disposition),
+    )
+
+
+def _restore_audit_marginals(
+    raw_marginals: object,
+    valid_zones: set[str],
+) -> dict[str, float]:
+    if not isinstance(raw_marginals, Mapping):
+        raise ValueError("stored policy audit marginals must be a mapping")
+    marginals: dict[str, float] = {}
+    for zone, value in raw_marginals.items():
+        if not isinstance(zone, str) or zone not in valid_zones:
+            raise ValueError("stored policy audit marginal zone is invalid")
+        marginals[zone] = _finite_probability(value, allow_zero=True)
+    return marginals
+
+
+def _restore_audit_count_marginals(
+    raw_marginals: object,
+    valid_zones: set[str],
+) -> dict[str, tuple[float, ...]]:
+    if not isinstance(raw_marginals, Mapping):
+        raise ValueError("stored policy audit count marginals must be a mapping")
+    marginals: dict[str, tuple[float, ...]] = {}
+    for zone, raw_probabilities in raw_marginals.items():
+        if (
+            not isinstance(zone, str)
+            or zone not in valid_zones
+            or not isinstance(raw_probabilities, list)
+            or not raw_probabilities
+        ):
+            raise ValueError("stored policy audit count marginal is invalid")
+        marginals[zone] = tuple(
+            _finite_probability(value, allow_zero=True)
+            for value in raw_probabilities
+        )
+    return marginals
+
+
+def _restore_audit_positive_evidence(
+    raw_evidence: object,
+    valid_zones: set[str],
+) -> dict[str, tuple[PositiveEvidence, ...]]:
+    if not isinstance(raw_evidence, Mapping):
+        raise ValueError("stored policy audit positive evidence must be a mapping")
+    restored: dict[str, tuple[PositiveEvidence, ...]] = {}
+    for zone, raw_items in raw_evidence.items():
+        if (
+            not isinstance(zone, str)
+            or zone not in valid_zones
+            or not isinstance(raw_items, list)
+        ):
+            raise ValueError("stored policy audit positive evidence is invalid")
+        items: list[PositiveEvidence] = []
+        for raw_item in raw_items:
+            if not isinstance(raw_item, Mapping):
+                raise ValueError("stored policy audit positive evidence is invalid")
+            entity_id = raw_item.get("entity_id")
+            episode_id = raw_item.get("evidence_episode_id")
+            signal_type = raw_item.get("signal_type")
+            if not all(
+                isinstance(value, str) and value
+                for value in (entity_id, episode_id, signal_type)
+            ):
+                raise ValueError("stored policy audit positive evidence is invalid")
+            items.append(
+                PositiveEvidence(
+                    entity_id=cast(str, entity_id),
+                    evidence_episode_id=cast(str, episode_id),
+                    changed_at=_parse_datetime(
+                        raw_item.get("changed_at"),
+                        "audit positive evidence time",
+                    ),
+                    signal_type=cast(str, signal_type),
+                )
+            )
+        restored[zone] = tuple(items)
+    return restored
+
+
+def _restore_audit_movement_evidence(
+    raw_evidence: object,
+    valid_zones: set[str],
+) -> tuple[MovementEvidence, ...]:
+    if not isinstance(raw_evidence, list):
+        raise ValueError("stored policy audit movement evidence must be a list")
+    restored: list[MovementEvidence] = []
+    for raw_item in raw_evidence:
+        if not isinstance(raw_item, Mapping):
+            raise ValueError("stored policy audit movement evidence is invalid")
+        path_key = raw_item.get("path_key")
+        origin = raw_item.get("origin_zone")
+        source = raw_item.get("source_zone")
+        target = raw_item.get("target_zone")
+        source_node_id = raw_item.get("source_node_id")
+        target_node_id = raw_item.get("target_node_id")
+        evidence_ids = raw_item.get("evidence_ids")
+        disposition = raw_item.get("disposition")
+        if (
+            not isinstance(path_key, list)
+            or len(path_key) != 3
+            or not isinstance(path_key[0], str)
+            or not (path_key[1] is None or isinstance(path_key[1], str))
+            or not isinstance(path_key[2], str)
+            or not isinstance(origin, str)
+            or origin not in valid_zones
+            or not isinstance(source, str)
+            or source not in valid_zones
+            or not isinstance(target, str)
+            or target not in valid_zones
+            or not (source_node_id is None or isinstance(source_node_id, str))
+            or not isinstance(target_node_id, str)
+            or not isinstance(evidence_ids, list)
+            or not all(isinstance(item, str) for item in evidence_ids)
+            or disposition
+            not in {"graph_valid", "missed_movement", "missed_timing"}
+        ):
+            raise ValueError("stored policy audit movement evidence is invalid")
+        restored.append(
+            MovementEvidence(
+                path_key=(path_key[0], path_key[1], path_key[2]),
+                origin_zone=origin,
+                source_zone=source,
+                target_zone=target,
+                coherent_probability=_finite_probability(
+                    raw_item.get("coherent_probability"),
+                    allow_zero=True,
+                ),
+                source_node_id=source_node_id,
+                target_node_id=target_node_id,
+                evidence_ids=tuple(evidence_ids),
+                disposition=disposition,
+            )
+        )
+    return tuple(restored)
 
 
 def _restore_audit_release_cause(value: object) -> ReleaseCause | None:

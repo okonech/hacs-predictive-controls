@@ -194,6 +194,38 @@ def test_policy_scenario_false_positive_requires_independent_corroboration() -> 
     )
 
 
+def test_policy_accepts_supported_adjacent_arrival_and_audits_context() -> None:
+    graph = ZoneGraph.from_map(make_map())
+    policy = AutomationPolicy(graph)
+    update = make_update(
+        previous={"hall": 0.95, "office": 0.05},
+        current={"hall": 0.3638, "office": 0.6362},
+        movement={"hall": ("office", 0.4348)},
+        event_id="office-entrance-motion",
+        zone="office",
+        entity_id="binary_sensor.office_entrance_motion",
+        positive_entities=("binary_sensor.office_entrance_motion",),
+    )
+
+    policy.apply(update)
+
+    assert policy.states["office"].keep_on
+    activation = next(
+        entry
+        for entry in policy.policy_audit
+        if entry.decision.zone == "office" and entry.decision.action == "activate"
+    )
+    assert activation.decision.reason_code == "graph_supported_arrival"
+    assert activation.decision.gate_values["movement_threshold"] == 0.4
+    assert activation.context is not None
+    assert activation.context.previous_occupied_marginals == pytest.approx(
+        {"garage": 0.0, "hall": 0.95, "kitchen": 0.0, "office": 0.05}
+    )
+    assert activation.context.occupied_marginals == update.occupied_marginals
+    assert activation.context.count_marginals == update.count_marginals
+    assert activation.context.movement_evidence == update.movement_evidence
+
+
 def test_policy_does_not_reuse_stale_corroboration_after_release() -> None:
     graph = ZoneGraph.from_map(make_map())
     policy = AutomationPolicy(graph)

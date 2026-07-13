@@ -8,6 +8,8 @@ from .occupancy_graph import ZoneGraph
 from .occupancy_state import (
     FilterUpdate,
     ObservationProvenance,
+    PendingDepartureAudit,
+    PolicyAuditContext,
     PolicyAuditEntry,
     PolicyDecision,
     ReleaseCause,
@@ -17,6 +19,7 @@ from .occupancy_state import (
 
 ACTIVATION_OCCUPIED_THRESHOLD = 0.60
 ACTIVATION_DELTA_THRESHOLD = 0.20
+ACTIVATION_MOVEMENT_THRESHOLD = 0.40
 GRAPH_RELEASE_OCCUPIED_THRESHOLD = 0.20
 GRAPH_RELEASE_MOVEMENT_THRESHOLD = 0.85
 RELOCATION_ORIGIN_THRESHOLD = 0.10
@@ -106,10 +109,12 @@ class AutomationPolicy:
                 source="observation",
                 previous_states=previous_states,
                 provenance=provenance,
+                context=self._audit_context(update),
             )
             return self.states
 
         self._advance_departures(update)
+        audit_context = self._audit_context(update)
         previous_marginals = (
             dict(update.previous_occupied_marginals)
             if update.previous_occupied_marginals
@@ -142,6 +147,7 @@ class AutomationPolicy:
             source="observation",
             previous_states=previous_states,
             provenance=provenance,
+            context=audit_context,
         )
         return self.states
 
@@ -377,9 +383,10 @@ class AutomationPolicy:
         previous_states: dict[str, ZonePolicyState],
         provenance: ObservationProvenance | None = None,
         trigger_event_id: str = "",
+        context: PolicyAuditContext | None = None,
     ) -> None:
         self._last_decisions = decisions
-        for decision in decisions:
+        for index, decision in enumerate(decisions):
             previous = previous_states.get(decision.zone, ZonePolicyState())
             current = self._states.get(decision.zone, ZonePolicyState())
             self._policy_audit.append(
@@ -406,9 +413,39 @@ class AutomationPolicy:
                     current_reason=current.reason,
                     previous_release_cause=previous.last_release_cause,
                     current_release_cause=current.last_release_cause,
+                    context=context if index == len(decisions) - 1 else None,
                 )
             )
         self._prune_policy_audit(decision_at)
+
+    def _audit_context(self, update: FilterUpdate) -> PolicyAuditContext:
+        previous_marginals = (
+            dict(update.previous_occupied_marginals)
+            if update.previous_occupied_marginals
+            else zone_marginals(update.previous, self.graph.zones())[0]
+        )
+        return PolicyAuditContext(
+            provenance=update.provenance,
+            previous_occupied_marginals=previous_marginals,
+            occupied_marginals=dict(update.occupied_marginals),
+            count_marginals=dict(update.count_marginals),
+            active_positive_evidence={
+                zone: tuple(evidence)
+                for zone, evidence in sorted(update.active_positive_evidence.items())
+            },
+            movement_evidence=update.movement_evidence,
+            pending_departures=tuple(
+                PendingDepartureAudit(
+                    origin=departure.origin,
+                    current=departure.current,
+                    probability=departure.probability,
+                    nonadjacent=departure.nonadjacent,
+                    evidence_ids=departure.evidence_ids,
+                    disposition=departure.disposition,
+                )
+                for _, departure in sorted(self._pending_departures.items())
+            ),
+        )
 
     def _prune_policy_audit(self, now: datetime) -> None:
         cutoff = now - POLICY_AUDIT_RETENTION
@@ -468,7 +505,7 @@ class AutomationPolicy:
             and state.last_release_cause == ReleaseCause.PROVISIONAL_FALSE_OFF
         )
         supported = (
-            movement_in >= 0.50
+            movement_in >= ACTIVATION_MOVEMENT_THRESHOLD
             or prior_unlocated >= 0.50
             or independently_corroborated
             or recovering
@@ -479,6 +516,7 @@ class AutomationPolicy:
             "increase": increase,
             "increase_threshold": ACTIVATION_DELTA_THRESHOLD,
             "movement_in": movement_in,
+            "movement_threshold": ACTIVATION_MOVEMENT_THRESHOLD,
             "prior_unlocated": prior_unlocated,
             "independently_corroborated": independently_corroborated,
             "corroborating_entity_count": float(len(eligible_entities)),
@@ -517,7 +555,7 @@ class AutomationPolicy:
         reason = "trusted local occupancy established"
         if recovering:
             reason = "trusted occupancy reacquired after release"
-        elif movement_in >= 0.50:
+        elif movement_in >= ACTIVATION_MOVEMENT_THRESHOLD:
             reason = "graph-supported local arrival"
         elif independently_corroborated:
             reason = "independent local sensors corroborated occupancy"
@@ -545,7 +583,7 @@ class AutomationPolicy:
         reason_code = "trusted_local_occupancy"
         if recovering:
             reason_code = "provisional_false_off_recovery"
-        elif movement_in >= 0.50:
+        elif movement_in >= ACTIVATION_MOVEMENT_THRESHOLD:
             reason_code = "graph_supported_arrival"
         elif independently_corroborated:
             reason_code = "independent_corroboration"

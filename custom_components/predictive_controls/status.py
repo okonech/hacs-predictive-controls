@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import math
-from typing import Any
+from datetime import datetime
+from typing import Any, cast
+
+from .automation_policy import POLICY_AUDIT_RETENTION
+from .occupancy_persistence import policy_audit_context_payload
 
 
 def runtime_status_payload(runtime: Any) -> dict[str, Any]:
@@ -83,6 +87,21 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
     joint_posterior = getattr(diagnostics, "joint_posterior", ())
     joint_provenance = getattr(diagnostics, "joint_last_provenance", None)
     if joint_posterior or joint_provenance is not None:
+        policy_audit = tuple(getattr(diagnostics, "joint_policy_audit", ()))
+        oldest_decision_at = cast(
+            datetime | None,
+            min(
+                (entry.decision_at for entry in policy_audit),
+                default=None,
+            ),
+        )
+        newest_decision_at = cast(
+            datetime | None,
+            max(
+                (entry.decision_at for entry in policy_audit),
+                default=None,
+            ),
+        )
         payload["joint"] = {
             "hypotheses": [
                 {
@@ -197,9 +216,22 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
                         if entry.current_release_cause is None
                         else entry.current_release_cause.value,
                     },
+                    "context": policy_audit_context_payload(entry.context),
                 }
-                for entry in getattr(diagnostics, "joint_policy_audit", ())
+                for entry in policy_audit
             ],
+            "policy_audit_retention": {
+                "retention_hours": int(
+                    POLICY_AUDIT_RETENTION.total_seconds() // 3600
+                ),
+                "entry_count": len(policy_audit),
+                "oldest_decision_at": oldest_decision_at.isoformat()
+                if oldest_decision_at is not None
+                else None,
+                "newest_decision_at": newest_decision_at.isoformat()
+                if newest_decision_at is not None
+                else None,
+            },
             "movement_evidence": [
                 {
                     "path_key": list(evidence.path_key),

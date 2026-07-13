@@ -111,6 +111,18 @@ def test_runtime_s19_s20_restore_bootstrap_and_reject_corrupt_state(
     assert store.delayed
     assert runtime.transition_store_data()["schema_version"] == 3
 
+    store.delayed = False
+    runtime.observe_entity(
+        "binary_sensor.office",
+        "off",
+        restart_at + timedelta(seconds=1),
+        process_prediction_actions=False,
+    )
+    provenance = runtime.confidence.diagnostics.joint_last_provenance
+    assert provenance is not None
+    assert provenance.disposition == "duplicate"
+    assert store.delayed
+
     rejected = runtime_type(
         _FakeHass(),
         predictive_map,

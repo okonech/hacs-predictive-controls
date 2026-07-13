@@ -143,9 +143,11 @@ For each zone, the integration exposes:
   and reason attributes for troubleshooting.
 
 `activation_plausible` is intentionally stricter than posterior occupancy. A
-positive event must raise occupied probability above the activation thresholds
-and have graph support, independent corroboration, prior unlocated mass, or a
-trusted recovery. Prediction alone never makes activation plausible.
+positive event must raise occupied probability to at least `0.60`, increase it
+by at least `0.20`, and have graph support, independent corroboration, prior
+unlocated mass, or a trusted recovery. Coherent adjacent movement support of at
+least `0.40` satisfies the graph-support gate. Prediction alone never makes
+activation plausible.
 
 The three automation signals are independent:
 
@@ -399,8 +401,17 @@ logger:
     custom_components.predictive_controls: debug
 ```
 
-Diagnostics are available from the integration entry and include loaded nodes, entity bindings, current probabilities, and transition counts. The
-`occupancy_diagnostics.joint.policy_audit` field retains 48 hours of policy decisions across restarts, including the triggering evidence, gate values, and each affected latch's before/after state.
+Diagnostics are available from the integration entry and include loaded nodes,
+entity bindings, current probabilities, and transition counts. The
+`occupancy_diagnostics.joint.policy_audit` field retains 48 hours of policy
+decisions across restarts. Each observation record includes complete provenance,
+pre/post occupied marginals, count marginals, active positive evidence, movement
+alternatives, pending departures, gate values, and each affected latch's
+before/after state. Accepted, replacement, duplicate, stale, and rejected
+observations all schedule a coalesced Store write. The adjacent
+`policy_audit_retention` object reports the configured hours, entry count, and
+oldest/newest retained decision timestamps so diagnostics state their actual
+coverage.
 
 ## Development
 

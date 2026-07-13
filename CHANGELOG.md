@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Lowered the named coherent adjacent-movement activation gate from `0.50` to
+	`0.40`. This admits supported room arrivals that already pass the `0.60`
+	occupied-marginal and `0.20` increase gates, without changing conservative
+	release thresholds.
+- Retained complete observation context with each policy audit event and exposed
+	explicit 48-hour coverage metadata in integration diagnostics.
+- Scheduled coalesced Store persistence for every processed observation,
+	including duplicate, stale, and rejected events needed to explain no-action
+	decisions.
+- Canonicalized persisted audit probabilities to prevent floating-point
+	roundoff such as `1.0000000000000002` from invalidating restart state produced
+	by the integration itself.
+
 ## 0.1.19 release candidate
 
 ### Fixed

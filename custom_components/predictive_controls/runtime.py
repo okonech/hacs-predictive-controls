@@ -328,12 +328,7 @@ class PredictiveControlsRuntime:
         )
 
         async_dispatcher_send(self.hass, DISPATCH_UPDATE)
-        provenance = self.confidence.diagnostics.joint_last_provenance
-        if provenance is not None and provenance.disposition in {
-            "accepted",
-            "replacement",
-        }:
-            self.schedule_transition_count_save()
+        self.schedule_transition_count_save()
         self._execute_actions(action_decisions)
 
     def observe_node(self, node_id: str, now: datetime) -> None:

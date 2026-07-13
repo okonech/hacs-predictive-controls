@@ -154,6 +154,31 @@ class PolicyDecision:
 
 
 @dataclass(frozen=True)
+class PendingDepartureAudit:
+    """One pending departure snapshot retained with an observation audit."""
+
+    origin: str
+    current: str
+    probability: float
+    nonadjacent: bool
+    evidence_ids: tuple[str, ...]
+    disposition: str
+
+
+@dataclass(frozen=True)
+class PolicyAuditContext:
+    """Filter evidence needed to reconstruct one policy evaluation."""
+
+    provenance: ObservationProvenance
+    previous_occupied_marginals: Mapping[str, float]
+    occupied_marginals: Mapping[str, float]
+    count_marginals: Mapping[str, tuple[float, ...]]
+    active_positive_evidence: Mapping[str, tuple[PositiveEvidence, ...]]
+    movement_evidence: tuple[MovementEvidence, ...]
+    pending_departures: tuple[PendingDepartureAudit, ...]
+
+
+@dataclass(frozen=True)
 class PolicyAuditEntry:
     """One timestamped policy decision retained for post-incident diagnosis."""
 
@@ -171,6 +196,7 @@ class PolicyAuditEntry:
     current_reason: str
     previous_release_cause: ReleaseCause | None
     current_release_cause: ReleaseCause | None
+    context: PolicyAuditContext | None = None
 
 
 class ReleaseCause(StrEnum):

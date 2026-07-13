@@ -317,9 +317,8 @@ def test_runtime_status_payload_serializes_retained_policy_audit() -> None:
         confidence=FakeConfidence(diagnostics),
     )
 
-    audit = runtime_status_payload(runtime)["occupancy_diagnostics"]["joint"][
-        "policy_audit"
-    ]
+    joint = runtime_status_payload(runtime)["occupancy_diagnostics"]["joint"]
+    audit = joint["policy_audit"]
 
     assert audit == [
         {
@@ -350,5 +349,12 @@ def test_runtime_status_payload_serializes_retained_policy_audit() -> None:
                 "reason": "graph-valid final occupant departure",
                 "release_cause": "graph_departure",
             },
+            "context": None,
         }
     ]
+    assert joint["policy_audit_retention"] == {
+        "retention_hours": 48,
+        "entry_count": 1,
+        "oldest_decision_at": "2026-06-07T12:00:00+00:00",
+        "newest_decision_at": "2026-06-07T12:00:00+00:00",
+    }

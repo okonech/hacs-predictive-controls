@@ -207,6 +207,34 @@ def test_restart_retains_only_last_two_days_of_policy_audit() -> None:
     assert restored.policy_audit[-1].decision.evidence_ids == ("office-hall",)
 
 
+def test_policy_audit_round_trips_observation_context() -> None:
+    predictive_map = make_map()
+    occupancy_filter = JointOccupancyFilter(predictive_map, 1, NOW)
+    policy = AutomationPolicy(ZoneGraph.from_map(predictive_map))
+    policy.apply(occupancy_filter.observe(event("office", NOW + timedelta(seconds=1))))
+    expected = next(entry for entry in policy.policy_audit if entry.context is not None)
+    payload = serialize_occupancy_state(
+        predictive_map,
+        occupancy_filter.posterior,
+        policy.states,
+        (),
+        occupancy_filter.observations.entity_states,
+        {},
+        policy_audit=policy.policy_audit,
+    )
+
+    restored = restore_occupancy_state(payload, predictive_map, 1, NOW)
+
+    actual = next(entry for entry in restored.policy_audit if entry.context is not None)
+    assert actual.context == expected.context
+
+    raw_audit = cast(list[dict[str, object]], payload["policy_audit"])
+    for entry in raw_audit:
+        entry.pop("context")
+    legacy = _restore_policy_audit(raw_audit, set(predictive_map.zones()), NOW)
+    assert all(entry.context is None for entry in legacy)
+
+
 def test_policy_audit_restore_rejects_non_list_and_non_mapping_entries() -> None:
     valid_zones = set(make_map().zones())
 
@@ -264,6 +292,7 @@ def test_policy_audit_restore_rejects_non_list_and_non_mapping_entries() -> None
             ),
             "release cause is invalid",
         ),
+        (lambda entry: entry.update(context=[]), "context must be a mapping"),
     ),
 )
 def test_policy_audit_restore_rejects_corrupt_entry(
@@ -287,6 +316,204 @@ def test_policy_audit_restore_rejects_corrupt_entry(
 
     with pytest.raises(ValueError, match=message):
         _restore_policy_audit([raw_entry], set(predictive_map.zones()), NOW)
+
+
+def _contextual_policy_audit_entry() -> tuple[dict[str, object], set[str]]:
+    predictive_map = make_map()
+    occupancy_filter = JointOccupancyFilter(predictive_map, 1, NOW)
+    policy = AutomationPolicy(ZoneGraph.from_map(predictive_map))
+    policy.apply(occupancy_filter.observe(event("office", NOW + timedelta(seconds=1))))
+    policy.apply(occupancy_filter.observe(event("hall", NOW + timedelta(seconds=2))))
+    payload = serialize_occupancy_state(
+        predictive_map,
+        occupancy_filter.posterior,
+        policy.states,
+        (),
+        occupancy_filter.observations.entity_states,
+        {},
+        policy_audit=policy.policy_audit,
+    )
+    raw_audit = cast(list[dict[str, object]], payload["policy_audit"])
+    entry = next(
+        item
+        for item in raw_audit
+        if isinstance(item.get("context"), dict)
+        and cast(dict[str, object], item["context"])["movement_evidence"]
+    )
+    return entry, set(predictive_map.zones())
+
+
+def _replace_nested(
+    payload: dict[str, object],
+    path: tuple[str | int, ...],
+    value: object,
+) -> None:
+    target: object = payload
+    for key in path[:-1]:
+        if isinstance(key, int):
+            target = cast(list[object], target)[key]
+        else:
+            target = cast(dict[str, object], target)[key]
+    final_key = path[-1]
+    if isinstance(final_key, int):
+        cast(list[object], target)[final_key] = value
+    else:
+        cast(dict[str, object], target)[final_key] = value
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "message"),
+    (
+        (("observation",), [], "observation must be a mapping"),
+        (("observation", "event_id"), "", "observation is invalid"),
+        (("observation", "zone"), 3, "observation is invalid"),
+        (("observation", "zone"), "attic", "observation is invalid"),
+        (
+            ("observation", "log_likelihood_by_count"),
+            {},
+            "observation is invalid",
+        ),
+        (
+            ("observation", "log_likelihood_by_count"),
+            [],
+            "observation is invalid",
+        ),
+        (
+            ("observation", "log_likelihood_by_count", 0),
+            math.nan,
+            "observation is invalid",
+        ),
+        (("previous_occupied_marginals",), [], "marginals must be a mapping"),
+        (
+            ("previous_occupied_marginals",),
+            {"attic": 0.5},
+            "marginal zone is invalid",
+        ),
+        (("count_marginals",), [], "count marginals must be a mapping"),
+        (
+            ("count_marginals",),
+            {"attic": [1.0]},
+            "count marginal is invalid",
+        ),
+        (
+            ("count_marginals",),
+            {"office": "invalid"},
+            "count marginal is invalid",
+        ),
+        (
+            ("count_marginals",),
+            {"office": []},
+            "count marginal is invalid",
+        ),
+        (
+            ("active_positive_evidence",),
+            [],
+            "positive evidence must be a mapping",
+        ),
+        (
+            ("active_positive_evidence",),
+            {"attic": []},
+            "positive evidence is invalid",
+        ),
+        (
+            ("active_positive_evidence",),
+            {"office": "invalid"},
+            "positive evidence is invalid",
+        ),
+        (
+            ("active_positive_evidence", "hall", 0),
+            [],
+            "positive evidence is invalid",
+        ),
+        (
+            ("active_positive_evidence", "hall", 0, "entity_id"),
+            "",
+            "positive evidence is invalid",
+        ),
+        (("movement_evidence",), {}, "movement evidence must be a list"),
+        (
+            ("movement_evidence", 0),
+            [],
+            "movement evidence is invalid",
+        ),
+        (
+            ("movement_evidence", 0, "path_key"),
+            {},
+            "movement evidence is invalid",
+        ),
+        (
+            ("movement_evidence", 0, "path_key"),
+            ["office", "hall"],
+            "movement evidence is invalid",
+        ),
+        (
+            ("movement_evidence", 0, "path_key"),
+            [3, None, "hall"],
+            "movement evidence is invalid",
+        ),
+        (
+            ("movement_evidence", 0, "path_key"),
+            ["office", 3, "hall"],
+            "movement evidence is invalid",
+        ),
+        (
+            ("movement_evidence", 0, "path_key"),
+            ["office", None, 3],
+            "movement evidence is invalid",
+        ),
+        (
+            ("movement_evidence", 0, "origin_zone"),
+            "attic",
+            "movement evidence is invalid",
+        ),
+        (
+            ("movement_evidence", 0, "source_zone"),
+            "attic",
+            "movement evidence is invalid",
+        ),
+        (
+            ("movement_evidence", 0, "target_zone"),
+            "attic",
+            "movement evidence is invalid",
+        ),
+        (
+            ("movement_evidence", 0, "source_node_id"),
+            3,
+            "movement evidence is invalid",
+        ),
+        (
+            ("movement_evidence", 0, "target_node_id"),
+            3,
+            "movement evidence is invalid",
+        ),
+        (
+            ("movement_evidence", 0, "evidence_ids"),
+            {},
+            "movement evidence is invalid",
+        ),
+        (
+            ("movement_evidence", 0, "evidence_ids"),
+            [3],
+            "movement evidence is invalid",
+        ),
+        (
+            ("movement_evidence", 0, "disposition"),
+            "invalid",
+            "movement evidence is invalid",
+        ),
+    ),
+)
+def test_policy_audit_restore_rejects_corrupt_context(
+    path: tuple[str | int, ...],
+    value: object,
+    message: str,
+) -> None:
+    raw_entry, valid_zones = _contextual_policy_audit_entry()
+    context = cast(dict[str, object], raw_entry["context"])
+    _replace_nested(context, path, value)
+
+    with pytest.raises(ValueError, match=message):
+        _restore_policy_audit([raw_entry], valid_zones, NOW)
 
 
 @pytest.mark.scenario
