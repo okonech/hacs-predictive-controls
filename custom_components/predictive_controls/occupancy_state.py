@@ -72,6 +72,7 @@ class PositiveEvidence:
     evidence_episode_id: str
     changed_at: datetime
     signal_type: str
+    node_id: str | None = None
 
 
 @dataclass(frozen=True)

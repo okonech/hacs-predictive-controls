@@ -149,6 +149,7 @@ def _expanded_context_payload(context: PolicyAuditContext) -> dict[str, object]:
                     "evidence_episode_id": evidence.evidence_episode_id,
                     "changed_at": evidence.changed_at.isoformat(),
                     "signal_type": evidence.signal_type,
+                    "node_id": evidence.node_id,
                 }
                 for evidence in evidence_items
             ]

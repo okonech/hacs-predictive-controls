@@ -564,6 +564,14 @@ class OccupancyTracker:
         confidence: float,
     ) -> ZoneState:
         assert self._joint_filter is not None
+        latest_zone_node_id = next(
+            (
+                event.node_id
+                for event in reversed(self._recent_events)
+                if event.zone == zone
+            ),
+            base.last_node_id,
+        )
         explanation: dict[str, Any] = {
             "type": "joint_posterior",
             "occupied_marginal": confidence,
@@ -577,7 +585,11 @@ class OccupancyTracker:
             confidence=confidence,
             status=status_for_confidence(confidence),
             updated_at=self._joint_filter.posterior.updated_at,
-            last_node_id=None if provenance is None else provenance.node_id,
+            last_node_id=(
+                provenance.node_id
+                if provenance is not None and provenance.zone == zone
+                else latest_zone_node_id
+            ),
             reason=self._joint_policy.states[zone].reason,
             explanation=explanation,
         )

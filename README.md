@@ -462,9 +462,13 @@ python -m pytest
 python -m ruff check .
 python -m mypy
 npm run test:frontend
-python benchmarks/occupancy_performance.py
+python benchmarks/occupancy_performance.py \
+  --events 100 \
+  --output /tmp/predictive-controls-performance.json
 ```
 
 CI runs whole-package coverage, Ruff, strict mypy, frontend tests, and a portable
 benchmark smoke test. The full 10,000-event wall-clock benchmark is a release
-gate because shared CI timing is too noisy for a meaningful hard ceiling.
+gate because shared CI timing is too noisy for a meaningful hard ceiling. Run
+the full benchmark locally only for event-path performance changes, a smoke or
+latency regression, or explicit release validation.

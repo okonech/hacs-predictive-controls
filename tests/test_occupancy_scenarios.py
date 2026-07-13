@@ -70,8 +70,15 @@ def make_map() -> PredictiveMap:
                 "garage": {
                     "entities": {
                         "motion": "binary_sensor.garage",
-                        "presence": "binary_sensor.garage_presence",
+                        "moving_target": "binary_sensor.garage_moving_target",
+                        "still_target": "binary_sensor.garage_still_target",
+                        "zone_occupancy": "binary_sensor.garage_zone_occupancy",
                     },
+                    "adjacent": [],
+                },
+                "garage_presence": {
+                    "zone": "garage",
+                    "entities": {"presence": "binary_sensor.garage_presence"},
                     "adjacent": [],
                 },
             }
@@ -85,11 +92,12 @@ def event(
     *,
     state: str = "on",
     entity_id: str | None = None,
+    node_id: str | None = None,
     reliability: float = 0.99,
 ) -> OccupancyEvent:
     return OccupancyEvent(
         entity_id=entity_id or f"binary_sensor.{zone}",
-        node_id=zone,
+        node_id=node_id or zone,
         zone=zone,
         floor=None,
         role="transition_gate" if zone in {"hall", "landing"} else "room_occupancy",
@@ -168,6 +176,7 @@ def test_s05_s07_independent_corroboration_repairs_missed_movement() -> None:
             "garage",
             12,
             entity_id="binary_sensor.garage_presence",
+            node_id="garage_presence",
         )
     )
     snapshot = public_snapshot(tracker, predictive_map, office)
@@ -199,6 +208,50 @@ def test_s06_repeated_single_source_never_manufactures_corroboration() -> None:
     assert not snapshot.zones["garage"].activation_plausible
     assert not snapshot.zones["garage"].keep_on
     assert tracker.diagnostics.joint_policy_states["garage"].evidence_ids == ()
+
+
+def test_s06_correlated_remote_aliases_cannot_release_sustained_ownership() -> None:
+    predictive_map = make_map()
+    tracker = ZoneConfidenceEngine(predictive_map, expected_occupants=1)
+    office = event("office", 1)
+    tracker.observe(office)
+    tracker.expire_transient_state(NOW + timedelta(minutes=10))
+
+    tracker.observe(
+        event(
+            "garage",
+            601,
+            entity_id="binary_sensor.garage",
+        )
+    )
+    tracker.observe(
+        event(
+            "garage",
+            602,
+            entity_id="binary_sensor.garage_moving_target",
+        )
+    )
+    tracker.observe(
+        event(
+            "garage",
+            603,
+            entity_id="binary_sensor.garage_still_target",
+        )
+    )
+    tracker.observe(
+        event(
+            "garage",
+            604,
+            entity_id="binary_sensor.garage_zone_occupancy",
+        )
+    )
+    snapshot = public_snapshot(tracker, predictive_map, office)
+
+    assert snapshot.zones["office"].keep_on
+    assert not snapshot.zones["garage"].activation_plausible
+    assert not snapshot.zones["garage"].keep_on
+    assert tracker.diagnostics.joint_policy_states["office"].last_release_cause is None
+    assert tracker.states["office"].last_node_id == "office"
 
 
 def test_s08_two_interleaved_paths_conserve_both_occupants() -> None:

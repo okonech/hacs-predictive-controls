@@ -530,9 +530,18 @@ class AutomationPolicy:
             if evidence.evidence_episode_id not in state.blocked_episode_ids
         )
         eligible_entities = tuple(evidence.entity_id for evidence in eligible_evidence)
+        eligible_nodes = tuple(
+            sorted(
+                {
+                    evidence.node_id or evidence.entity_id
+                    for evidence in eligible_evidence
+                }
+            )
+        )
         if not structured_evidence:
             eligible_entities = update.active_positive_entities.get(zone, ())
-        independently_corroborated = len(eligible_entities) >= 2
+            eligible_nodes = eligible_entities
+        independently_corroborated = len(eligible_nodes) >= 2
         recovering = (
             state.last_trusted_at is not None
             and not state.keep_on
@@ -564,6 +573,8 @@ class AutomationPolicy:
             "independently_corroborated": independently_corroborated,
             "corroborating_entity_count": float(len(eligible_entities)),
             "corroborating_entities": ",".join(eligible_entities),
+            "corroborating_node_count": float(len(eligible_nodes)),
+            "corroborating_nodes": ",".join(eligible_nodes),
             "recovering": recovering,
             "supported": supported,
         }
@@ -687,6 +698,14 @@ class AutomationPolicy:
                 pending.current,
                 0.0,
             )
+            destination_nodes = {
+                evidence.node_id or evidence.entity_id
+                for evidence in update.active_positive_evidence.get(
+                    pending.current,
+                    (),
+                )
+            }
+            independently_corroborated = len(destination_nodes) >= 2
             if pending.disposition == "missed_timing":
                 releasable = False
                 reason = "movement timing outside graph release window"
@@ -697,6 +716,7 @@ class AutomationPolicy:
                     origin_probability <= RELOCATION_ORIGIN_THRESHOLD
                     and destination_probability >= RELOCATION_DESTINATION_THRESHOLD
                     and odds >= RELOCATION_ODDS_THRESHOLD
+                    and independently_corroborated
                 )
                 reason = "confident non-adjacent relocation"
                 reason_code = "confirmed_relocation"
@@ -716,6 +736,15 @@ class AutomationPolicy:
             }
             if pending.nonadjacent and pending.disposition != "missed_timing":
                 gate_values["relocation_odds"] = odds
+                gate_values["independently_corroborated"] = (
+                    independently_corroborated
+                )
+                gate_values["corroborating_node_count"] = float(
+                    len(destination_nodes)
+                )
+                gate_values["corroborating_nodes"] = ",".join(
+                    sorted(destination_nodes)
+                )
             if not releasable:
                 decisions.append(
                     PolicyDecision(

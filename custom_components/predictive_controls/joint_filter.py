@@ -1025,6 +1025,7 @@ class JointOccupancyFilter:
                             f"{entity_id}@{state.episode_started_at.isoformat()}",
                             state.changed_at,
                             binding.signal_type,
+                            binding.node_id,
                         ),
                         state.episode_started_at,
                     )

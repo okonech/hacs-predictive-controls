@@ -844,10 +844,11 @@ def _restore_audit_positive_evidence(
             entity_id = raw_item.get("entity_id")
             episode_id = raw_item.get("evidence_episode_id")
             signal_type = raw_item.get("signal_type")
+            node_id = raw_item.get("node_id")
             if not all(
                 isinstance(value, str) and value
                 for value in (entity_id, episode_id, signal_type)
-            ):
+            ) or not (node_id is None or isinstance(node_id, str)):
                 raise ValueError("stored policy audit positive evidence is invalid")
             items.append(
                 PositiveEvidence(
@@ -858,6 +859,7 @@ def _restore_audit_positive_evidence(
                         "audit positive evidence time",
                     ),
                     signal_type=cast(str, signal_type),
+                    node_id=node_id,
                 )
             )
         restored[zone] = tuple(items)

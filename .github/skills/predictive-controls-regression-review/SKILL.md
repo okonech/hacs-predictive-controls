@@ -248,12 +248,16 @@ Run all repository gates before completion:
 .venv/bin/python -m ruff check .
 .venv/bin/python -m mypy
 npm run test:frontend
-.venv/bin/python benchmarks/occupancy_performance.py
+.venv/bin/python benchmarks/occupancy_performance.py \
+  --events 100 \
+  --output /tmp/predictive-controls-performance.json
 ```
 
 The Python test command enforces whole-package 100% branch coverage. Do not
 weaken coverage, exact-state, performance, or retained-regression gates to make a
-change pass.
+change pass. Run the full benchmark without `--events` only when the change
+touches event-path performance, a smoke or latency gate regresses, or release
+validation explicitly requires the 10,000-event wall-clock result.
 
 ## Stage 8: Report the Decision
 

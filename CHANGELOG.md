@@ -40,6 +40,13 @@
 	graph-valid prediction leases.
 - Made callback latency degradation diagnostic-only; exceeding the hard budget
 	no longer suppresses an otherwise valid activation.
+- Required corroboration from distinct physical nodes before non-adjacent
+	relocation can activate a destination or release sustained origin ownership.
+	Correlated aliases from one flapping device no longer manufacture independent
+	evidence, while genuinely independent destination sensors can still override a
+	stale or stuck origin assertion.
+- Kept each occupancy card's last-node attribution scoped to events from that
+	zone instead of copying the latest whole-house observation onto every zone.
 
 ### Rollout status
 

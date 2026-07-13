@@ -496,6 +496,22 @@ def test_policy_scenario_relocation_recovery_count_zero_and_reset() -> None:
         movement={"office": ("garage", 0.9)},
         event_id="relocation",
         zone="garage",
+        positive_evidence=(
+            PositiveEvidence(
+                "binary_sensor.garage_left",
+                "garage-left-episode",
+                NOW,
+                "presence",
+                "garage_left",
+            ),
+            PositiveEvidence(
+                "binary_sensor.garage_right",
+                "garage-right-episode",
+                NOW,
+                "presence",
+                "garage_right",
+            ),
+        ),
     )
     policy.apply(relocation)
     assert policy.states["office"].reason == "confident non-adjacent relocation"
@@ -700,6 +716,7 @@ def make_update(
     entity_id: str | None = None,
     disposition: str = "accepted",
     positive_entities: tuple[str, ...] = (),
+    positive_evidence: tuple[PositiveEvidence, ...] = (),
     include_movement_evidence: bool = True,
     movement_origins: dict[str, str] | None = None,
 ) -> FilterUpdate:
@@ -721,6 +738,7 @@ def make_update(
             for source, (target, probability) in movement.items()
         },
         active_positive_entities={zone: positive_entities},
+        active_positive_evidence={zone: positive_evidence},
         movement_evidence=(
             tuple(
                 MovementEvidence(
