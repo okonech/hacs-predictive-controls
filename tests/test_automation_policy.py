@@ -21,6 +21,7 @@ from custom_components.predictive_controls.occupancy_state import (
     PositionState,
     PositiveEvidence,
     Posterior,
+    ReleaseCause,
     ZonePolicyState,
     canonical_hypothesis,
     normalize_hypotheses,
@@ -348,6 +349,77 @@ def test_policy_accepts_supported_adjacent_arrival_and_audits_context() -> None:
     assert activation.context.occupied_marginals == update.occupied_marginals
     assert activation.context.count_marginals == update.count_marginals
     assert activation.context.movement_evidence == update.movement_evidence
+
+
+def test_policy_recovers_provisional_release_after_supported_local_jump() -> None:
+    graph = ZoneGraph.from_map(make_map())
+    policy = AutomationPolicy(graph)
+    policy.restore_states(
+        {
+            zone: ZonePolicyState(
+                keep_on=False,
+                last_trusted_at=NOW - timedelta(hours=1)
+                if zone == "office"
+                else None,
+                last_release_cause=ReleaseCause.PROVISIONAL_FALSE_OFF
+                if zone == "office"
+                else None,
+                recovery_eligible=zone == "office",
+                reason="sustained low occupancy without active local evidence"
+                if zone == "office"
+                else "no trusted occupancy",
+            )
+            for zone in graph.zones()
+        }
+    )
+    update = make_update(
+        previous={
+            "office": 0.000000062398192077,
+            "hall": 0.0434218294512191,
+            "kitchen": 0.6652335824047371,
+            "garage": 0.2913445257458517,
+        },
+        current={
+            "office": 0.4113746471684672,
+            "hall": 0.027032041587682788,
+            "kitchen": 0.4,
+            "garage": 0.16159331124385,
+        },
+        movement={"hall": ("office", 0.03238892574420407)},
+        event_id=(
+            "binary_sensor.upstairs_bathroom_motion_motion_detection@"
+            "2026-07-13T02:27:41.385185-04:00:on"
+        ),
+        zone="office",
+        entity_id="binary_sensor.upstairs_bathroom_motion_motion_detection",
+        positive_entities=(
+            "binary_sensor.upstairs_bathroom_motion_motion_detection",
+        ),
+    )
+
+    policy.apply(update)
+
+    assert policy.states["office"].keep_on
+    assert policy.activation_plausible("office", update.current.updated_at)
+    activation = next(
+        decision
+        for decision in policy.last_decisions
+        if decision.zone == "office" and decision.action == "activate"
+    )
+    assert activation.accepted
+    assert activation.reason_code == "provisional_false_off_recovery"
+
+    ordinary_policy = AutomationPolicy(graph)
+    ordinary_policy.apply(update)
+    ordinary_activation = next(
+        decision
+        for decision in ordinary_policy.last_decisions
+        if decision.zone == "office" and decision.action == "activate"
+    )
+    assert not ordinary_policy.states["office"].keep_on
+    assert not ordinary_activation.accepted
+    assert ordinary_activation.reason_code == "occupied_gate_failed"
+    assert ordinary_activation.gate_values["occupied_threshold"] == 0.6
 
 
 def test_policy_does_not_reuse_stale_corroboration_after_release() -> None:

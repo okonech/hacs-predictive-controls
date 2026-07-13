@@ -29,6 +29,7 @@ RELOCATION_DESTINATION_THRESHOLD = 0.80
 RELOCATION_ODDS_THRESHOLD = 10.0
 PROVISIONAL_RELEASE_OCCUPIED_THRESHOLD = 0.10
 PROVISIONAL_RELEASE_GRACE = timedelta(minutes=15)
+PROVISIONAL_RECOVERY_OCCUPIED_THRESHOLD = 0.40
 POLICY_AUDIT_RETENTION = timedelta(days=2)
 
 
@@ -550,6 +551,11 @@ class AutomationPolicy:
             and state.recovery_eligible
             and state.last_release_cause == ReleaseCause.PROVISIONAL_FALSE_OFF
         )
+        occupied_threshold = (
+            PROVISIONAL_RECOVERY_OCCUPIED_THRESHOLD
+            if recovering
+            else ACTIVATION_OCCUPIED_THRESHOLD
+        )
         supported = (
             movement_in >= ACTIVATION_MOVEMENT_THRESHOLD
             or prior_unlocated >= 0.50
@@ -558,7 +564,7 @@ class AutomationPolicy:
         )
         gate_values: dict[str, float | bool | str] = {
             "occupied_marginal": occupied,
-            "occupied_threshold": ACTIVATION_OCCUPIED_THRESHOLD,
+            "occupied_threshold": occupied_threshold,
             "increase": increase,
             "increase_threshold": ACTIVATION_DELTA_THRESHOLD,
             "movement_in": movement_in,
@@ -570,7 +576,7 @@ class AutomationPolicy:
             "recovering": recovering,
             "supported": supported,
         }
-        if occupied < ACTIVATION_OCCUPIED_THRESHOLD:
+        if occupied < occupied_threshold:
             return PolicyDecision(
                 zone,
                 "activate",
