@@ -26,6 +26,7 @@ from custom_components.predictive_controls.occupancy_state import (
     ReleaseCause,
     ZonePolicyState,
     canonical_hypothesis,
+    competing_current_update_source_nodes,
     normalize_hypotheses,
     zone_marginals,
 )
@@ -305,6 +306,231 @@ def test_policy_releases_immediate_segment_across_ambiguous_route_origins() -> N
     assert decision.gate_values["origin_decrease"] == pytest.approx(
         0.8407715724992886
     )
+
+
+def test_policy_asserted_office_survives_other_occupant_hallway_route() -> None:
+    graph = ZoneGraph.from_map(make_map())
+    policy = AutomationPolicy(graph)
+    office_detected_at = datetime.fromisoformat(
+        "2026-07-14T18:19:28.191772-04:00"
+    )
+    hallway_detected_at = datetime.fromisoformat(
+        "2026-07-14T18:25:24.760937-04:00"
+    )
+    policy.restore_states(
+        {
+            zone: ZonePolicyState(
+                keep_on=zone == "office",
+                last_trusted_at=office_detected_at if zone == "office" else None,
+                reason=(
+                    "graph-supported local arrival"
+                    if zone == "office"
+                    else "no trusted occupancy"
+                ),
+            )
+            for zone in graph.zones()
+        }
+    )
+    update = make_update(
+        previous={"office": 0.9834496225277384, "hall": 0.06702069063261329},
+        current={"office": 0.14857533676907292, "hall": 0.9329793093673867},
+        movement={"office": ("hall", 0.927880457512608)},
+        event_id=(
+            "binary_sensor.hall@"
+            "2026-07-14T18:25:24.760937-04:00:on"
+        ),
+        zone="hall",
+    )
+    update = replace(
+        update,
+        previous_occupied_marginals={"office": 0.9834496225277384},
+        occupied_marginals={
+            "office": 0.14857533676907292,
+            "hall": 0.9329793093673867,
+        },
+        active_positive_entities={"kitchen": ("binary_sensor.kitchen",)},
+        active_positive_evidence={
+            "kitchen": (
+                PositiveEvidence(
+                    entity_id="binary_sensor.kitchen",
+                    evidence_episode_id=(
+                        "binary_sensor.kitchen@"
+                        "2026-07-14T18:14:30.934769-04:00"
+                    ),
+                    changed_at=datetime.fromisoformat(
+                        "2026-07-14T18:25:21.820608-04:00"
+                    ),
+                    signal_type="motion",
+                ),
+            )
+        },
+        movement_evidence=(
+            MovementEvidence(
+                path_key=("office", "office", "hall"),
+                origin_zone="office",
+                source_zone="office",
+                target_zone="hall",
+                coherent_probability=0.927880457512608,
+                source_node_id="office",
+                target_node_id="hall",
+                evidence_ids=(
+                    "binary_sensor.office@"
+                    "2026-07-14T18:19:28.191772-04:00:on",
+                    "binary_sensor.hall@"
+                    "2026-07-14T18:25:24.760937-04:00:on",
+                ),
+                disposition="graph_valid",
+            ),
+            MovementEvidence(
+                path_key=("kitchen", "kitchen", "hall"),
+                origin_zone="kitchen",
+                source_zone="kitchen",
+                target_zone="hall",
+                coherent_probability=0.071855459827822,
+                source_node_id="kitchen",
+                target_node_id="hall",
+                evidence_ids=(
+                    "binary_sensor.kitchen@"
+                    "2026-07-14T18:25:21.820608-04:00:on",
+                    "binary_sensor.hall@"
+                    "2026-07-14T18:25:24.760937-04:00:on",
+                ),
+                disposition="graph_valid",
+            ),
+        ),
+    )
+
+    policy.apply(update)
+
+    assert hallway_detected_at - office_detected_at == timedelta(
+        minutes=5,
+        seconds=56,
+        microseconds=569165,
+    )
+    assert policy.states["office"].keep_on
+    assert policy.states["office"].last_release_cause is None
+    decision = next(
+        decision
+        for decision in policy.last_decisions
+        if decision.zone == "office" and decision.action == "release"
+    )
+    assert not decision.accepted
+    assert decision.reason_code == "competing_source_gate_failed"
+    assert decision.gate_values["origin_asserted"] is False
+    assert decision.gate_values["competing_source_present"] is True
+    assert decision.gate_values["competing_source_nodes"] == "binary_sensor.kitchen"
+
+
+def test_policy_graph_departure_overrides_asserted_origin_when_confirmed() -> None:
+    graph = ZoneGraph.from_map(make_map())
+    policy = AutomationPolicy(graph)
+    policy.restore_states(
+        {
+            zone: ZonePolicyState(keep_on=zone == "office")
+            for zone in graph.zones()
+        }
+    )
+    update = make_update(
+        previous={"office": 0.95, "hall": 0.05},
+        current={"office": 0.04, "hall": 0.96},
+        movement={"office": ("hall", 0.95)},
+        event_id="hall-edge",
+        zone="hall",
+    )
+    update = replace(
+        update,
+        active_positive_entities={"office": ("binary_sensor.office",)},
+        active_positive_evidence={
+            "office": (
+                PositiveEvidence(
+                    "binary_sensor.office",
+                    "office-episode",
+                    NOW,
+                    "motion",
+                    "office",
+                ),
+            )
+        },
+    )
+
+    policy.apply(update)
+
+    assert not policy.states["office"].keep_on
+    decision = next(
+        decision
+        for decision in policy.last_decisions
+        if decision.zone == "office" and decision.action == "release"
+    )
+    assert decision.accepted
+    assert decision.reason_code == "graph_departure"
+    assert decision.gate_values["origin_asserted"] is True
+    assert decision.gate_values["competing_source_present"] is False
+
+
+def test_competing_source_requires_current_graph_valid_active_edge() -> None:
+    target_event_id = "binary_sensor.hall@2026-07-14T18:25:24+00:00:on"
+    source_changed_at = datetime.fromisoformat("2026-07-14T18:25:21+00:00")
+    source_edge_id = (
+        f"binary_sensor.kitchen@{source_changed_at.isoformat()}:on"
+    )
+    evidence = MovementEvidence(
+        path_key=("kitchen", "kitchen", "hall"),
+        origin_zone="kitchen",
+        source_zone="kitchen",
+        target_zone="hall",
+        coherent_probability=0.1,
+        source_node_id="kitchen",
+        target_node_id="hall",
+        evidence_ids=(source_edge_id, target_event_id),
+        disposition="graph_valid",
+    )
+    positive = PositiveEvidence(
+        "binary_sensor.kitchen",
+        "kitchen-episode",
+        source_changed_at,
+        "motion",
+        "kitchen",
+    )
+
+    def competing(
+        candidate: MovementEvidence,
+        active: dict[str, tuple[PositiveEvidence, ...]] | None = None,
+    ) -> tuple[str, ...]:
+        return competing_current_update_source_nodes(
+            (candidate,),
+            {"kitchen": (positive,)} if active is None else active,
+            origin_source_zone="office",
+            target_zone="hall",
+            target_node_id="hall",
+            target_event_id=target_event_id,
+        )
+
+    assert competing(evidence) == ("kitchen",)
+    assert competing(
+        evidence,
+        {"kitchen": (replace(positive, node_id=None),)},
+    ) == ("binary_sensor.kitchen",)
+    assert competing(replace(evidence, disposition="missed_movement")) == ()
+    assert competing(replace(evidence, source_zone="office")) == ()
+    assert competing(replace(evidence, target_zone="garage")) == ()
+    assert competing(replace(evidence, target_node_id="other_hall")) == ()
+    assert competing(replace(evidence, evidence_ids=(source_edge_id,))) == ()
+    assert competing(evidence, {}) == ()
+    assert competing(
+        evidence,
+        {
+            "kitchen": (
+                replace(
+                    positive,
+                    changed_at=source_changed_at - timedelta(seconds=1),
+                ),
+            )
+        },
+    ) == ()
+    assert competing(
+        evidence,
+        {"kitchen": (replace(positive, node_id="other_kitchen"),)},
+    ) == ()
 
 
 @pytest.mark.parametrize(

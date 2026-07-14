@@ -10,6 +10,7 @@ from custom_components.predictive_controls.events import OccupancyEvent
 from custom_components.predictive_controls.joint_filter import JointOccupancyFilter
 from custom_components.predictive_controls.model import PredictiveMap
 from custom_components.predictive_controls.occupancy_state import (
+    MovementEvidence,
     PositionState,
     Posterior,
     WeightedHypothesis,
@@ -555,6 +556,61 @@ def test_filter_sustained_duration_saturates_and_stops_after_departure() -> None
     assert not occupancy_filter.reinforce_asserted_evidence(
         NOW + timedelta(minutes=30)
     )
+
+
+def test_filter_competing_current_route_preserves_asserted_origin() -> None:
+    occupancy_filter = JointOccupancyFilter(make_map(), 2, NOW)
+    office_at = NOW + timedelta(seconds=1)
+    kitchen_at = NOW + timedelta(seconds=2)
+    hall_at = NOW + timedelta(seconds=3)
+    occupancy_filter.observe(event("office", office_at))
+    occupancy_filter.observe(event("kitchen", kitchen_at))
+    occupancy_filter.restore_posterior(
+        normalize_hypotheses(
+            {
+                canonical_hypothesis(
+                    (PositionState("hall"), PositionState("kitchen"))
+                ): 0.0
+            },
+            kitchen_at,
+        )
+    )
+    hall_event = event("hall", hall_at)
+    hall_event_id = f"binary_sensor.hall@{hall_at.isoformat()}:on"
+    movement_evidence = (
+        MovementEvidence(
+            ("office", "office", "hall"),
+            "office",
+            "office",
+            "hall",
+            0.90,
+            "office",
+            "hall",
+            (f"binary_sensor.office@{office_at.isoformat()}:on", hall_event_id),
+            "graph_valid",
+        ),
+        MovementEvidence(
+            ("kitchen", "kitchen", "hall"),
+            "kitchen",
+            "kitchen",
+            "hall",
+            0.10,
+            "kitchen",
+            "hall",
+            (f"binary_sensor.kitchen@{kitchen_at.isoformat()}:on", hall_event_id),
+            "graph_valid",
+        ),
+    )
+
+    invalidated = occupancy_filter._invalidate_departed_assertions(  # noqa: SLF001
+        movement_evidence,
+        hall_event,
+    )
+
+    assert not invalidated
+    assert not occupancy_filter.observations.entity_states[
+        "binary_sensor.office"
+    ].departure_observed
 
 
 def test_filter_out_of_order_event_cannot_advance_sustained_evidence() -> None:

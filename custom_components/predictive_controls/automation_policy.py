@@ -18,6 +18,7 @@ from .occupancy_state import (
     PositiveEvidence,
     ReleaseCause,
     ZonePolicyState,
+    competing_current_update_source_nodes,
     zone_marginals,
 )
 from .policy_audit import (
@@ -790,6 +791,17 @@ class AutomationPolicy:
                 origin_decrease = (
                     previous_marginals.get(origin, 0.0) - origin_probability
                 )
+                origin_asserted = bool(
+                    update.active_positive_evidence.get(origin, ())
+                )
+                competing_source_nodes = competing_current_update_source_nodes(
+                    update.movement_evidence,
+                    update.active_positive_evidence,
+                    origin_source_zone=origin,
+                    target_zone=pending.current,
+                    target_node_id=update.provenance.node_id,
+                    target_event_id=update.provenance.event_id,
+                )
                 if pending.segment_probability is None:
                     releasable = (
                         origin_probability <= GRAPH_RELEASE_OCCUPIED_THRESHOLD
@@ -805,8 +817,13 @@ class AutomationPolicy:
                         and origin_decrease >= ACTIVATION_DELTA_THRESHOLD
                         and destination_probability >= ACTIVATION_OCCUPIED_THRESHOLD
                     )
-                reason = "graph-valid final occupant departure"
-                reason_code = "graph_departure"
+                if competing_source_nodes:
+                    releasable = False
+                    reason = "competing current-update source segment"
+                    reason_code = "competing_source"
+                else:
+                    reason = "graph-valid final occupant departure"
+                    reason_code = "graph_departure"
             gate_values: dict[str, float | bool | str] = {
                 "origin_marginal": origin_probability,
                 "destination_marginal": destination_probability,
@@ -819,6 +836,13 @@ class AutomationPolicy:
                     pending.destination_movement_probability or 0.0
                 )
                 gate_values["origin_decrease"] = origin_decrease
+                gate_values["origin_asserted"] = origin_asserted
+                gate_values["competing_source_present"] = bool(
+                    competing_source_nodes
+                )
+                gate_values["competing_source_nodes"] = ",".join(
+                    competing_source_nodes
+                )
             if pending.nonadjacent and pending.disposition != "missed_timing":
                 gate_values["relocation_odds"] = odds
                 gate_values["independently_corroborated"] = (

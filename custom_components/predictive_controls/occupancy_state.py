@@ -111,6 +111,40 @@ class MovementEvidence:
     via_node_id: str | None = None
 
 
+def competing_current_update_source_nodes(
+    movement_evidence: tuple[MovementEvidence, ...],
+    active_positive_evidence: Mapping[str, tuple[PositiveEvidence, ...]],
+    *,
+    origin_source_zone: str,
+    target_zone: str,
+    target_node_id: str,
+    target_event_id: str,
+) -> tuple[str, ...]:
+    competing_nodes: set[str] = set()
+    for evidence in movement_evidence:
+        if (
+            evidence.disposition != "graph_valid"
+            or evidence.source_zone == origin_source_zone
+            or evidence.target_zone != target_zone
+            or evidence.target_node_id != target_node_id
+            or target_event_id not in evidence.evidence_ids
+        ):
+            continue
+        for positive in active_positive_evidence.get(evidence.source_zone, ()):
+            source_edge_id = (
+                f"{positive.entity_id}@{positive.changed_at.isoformat()}:on"
+            )
+            if source_edge_id not in evidence.evidence_ids:
+                continue
+            if (
+                positive.node_id is not None
+                and evidence.source_node_id != positive.node_id
+            ):
+                continue
+            competing_nodes.add(positive.node_id or positive.entity_id)
+    return tuple(sorted(competing_nodes))
+
+
 @dataclass(frozen=True)
 class FilterUpdate:
     """One immutable posterior update and its derived evidence."""

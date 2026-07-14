@@ -23,6 +23,7 @@ from .occupancy_state import (
     WeightedHypothesis,
     canonical_hypothesis,
     cold_start_posterior,
+    competing_current_update_source_nodes,
     hypothesis_sort_key,
     initial_posterior,
     log_sum_exp,
@@ -468,7 +469,7 @@ class JointOccupancyFilter:
             for movement, score in movement_scores.items()
         }
         movement_evidence = _movement_evidence(evidence_scores, total)
-        self._invalidate_departed_assertions(movement_evidence, event.event_at)
+        self._invalidate_departed_assertions(movement_evidence, event)
         current = self.posterior
         update = self._update_for(
             previous,
@@ -949,9 +950,10 @@ class JointOccupancyFilter:
     def _invalidate_departed_assertions(
         self,
         movement_evidence: tuple[MovementEvidence, ...],
-        now: datetime,
+        event: OccupancyEvent,
     ) -> bool:
         occupied_marginals = zone_marginals(self.posterior, self.map.zones())[0]
+        active_positive_evidence = self._current_positive_evidence(event.event_at)
         probability_by_origin: dict[str, float] = defaultdict(float)
         for evidence in movement_evidence:
             if (
@@ -964,10 +966,21 @@ class JointOccupancyFilter:
                 )
         deltas_by_zone: dict[str, list[float]] = {}
         for origin, probability in probability_by_origin.items():
+            competing_sources = competing_current_update_source_nodes(
+                movement_evidence,
+                active_positive_evidence,
+                origin_source_zone=origin,
+                target_zone=event.zone,
+                target_node_id=event.node_id,
+                target_event_id=(
+                    f"{event.entity_id}@{event.event_at.isoformat()}:{event.state}"
+                ),
+            )
             if (
                 probability < SUSTAINED_DEPARTURE_THRESHOLD
                 or occupied_marginals.get(origin, 0.0)
                 > SUSTAINED_DEPARTURE_REMAINING_OCCUPANCY_THRESHOLD
+                or competing_sources
             ):
                 continue
             zone_delta = [0.0] * (self.expected_occupants + 1)
@@ -1000,7 +1013,7 @@ class JointOccupancyFilter:
                 for hypothesis in previous.hypotheses
             },
             self._configuration_keys,
-            now,
+            event.event_at,
         )
         self._directional_contexts = {
             hypothesis.key: tuple(
