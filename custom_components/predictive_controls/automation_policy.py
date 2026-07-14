@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from .occupancy_graph import ZoneGraph
 from .occupancy_state import (
     FilterUpdate,
+    MovementEvidence,
     ObservationProvenance,
     PendingDepartureAudit,
     PolicyAuditContext,
@@ -29,6 +30,7 @@ ACTIVATION_DELTA_THRESHOLD = 0.20
 ACTIVATION_SOURCE_OCCUPIED_THRESHOLD = 0.10
 GRAPH_RELEASE_OCCUPIED_THRESHOLD = 0.20
 GRAPH_RELEASE_MOVEMENT_THRESHOLD = 0.85
+GRAPH_RELEASE_SEGMENT_PROBABILITY_THRESHOLD = 0.80
 RELOCATION_ORIGIN_THRESHOLD = 0.10
 RELOCATION_DESTINATION_THRESHOLD = 0.80
 RELOCATION_ODDS_THRESHOLD = 10.0
@@ -48,6 +50,9 @@ class PendingDeparture:
     nonadjacent: bool
     evidence_ids: tuple[str, ...]
     disposition: str = "graph_valid"
+    segment_probability: float | None = None
+    destination_movement_probability: float | None = None
+    source_episode_ids: tuple[str, ...] = ()
 
 
 class AutomationPolicy:
@@ -443,6 +448,11 @@ class AutomationPolicy:
                     nonadjacent=departure.nonadjacent,
                     evidence_ids=departure.evidence_ids,
                     disposition=departure.disposition,
+                    segment_probability=departure.segment_probability,
+                    destination_movement_probability=(
+                        departure.destination_movement_probability
+                    ),
+                    source_episode_ids=departure.source_episode_ids,
                 )
                 for _, departure in sorted(self._pending_departures.items())
             ),
@@ -480,6 +490,18 @@ class AutomationPolicy:
             or origin not in valid_zones
             or departure.current not in valid_zones
             or not 0.0 <= departure.probability <= 1.0
+            or (
+                departure.segment_probability is not None
+                and not 0.0 <= departure.segment_probability <= 1.0
+            )
+            or (
+                departure.destination_movement_probability is not None
+                and not 0.0 <= departure.destination_movement_probability <= 1.0
+            )
+            or not all(
+                isinstance(episode_id, str)
+                for episode_id in departure.source_episode_ids
+            )
             or departure.disposition
             not in {"graph_valid", "missed_movement", "missed_timing"}
             for origin, departure in departures.items()
@@ -680,6 +702,50 @@ class AutomationPolicy:
             evidence_ids=strongest.evidence_ids,
             disposition=strongest.disposition,
         )
+        graph_segments: dict[tuple[str, str], list[MovementEvidence]] = {}
+        for evidence in candidates:
+            if (
+                evidence.disposition == "graph_valid"
+                and evidence.target_zone in self.graph.neighbors(evidence.source_zone)
+            ):
+                graph_segments.setdefault(
+                    (evidence.source_zone, evidence.target_zone),
+                    [],
+                ).append(evidence)
+        destination_totals: dict[str, float] = {}
+        for (_, target), alternatives in graph_segments.items():
+            destination_totals[target] = destination_totals.get(target, 0.0) + sum(
+                evidence.coherent_probability for evidence in alternatives
+            )
+        for (source, target), alternatives in graph_segments.items():
+            segment_probability = sum(
+                evidence.coherent_probability for evidence in alternatives
+            )
+            destination_probability = destination_totals[target]
+            segment_share = segment_probability / destination_probability
+            self._pending_departures[source] = PendingDeparture(
+                origin=source,
+                current=target,
+                probability=segment_share,
+                nonadjacent=False,
+                evidence_ids=tuple(
+                    dict.fromkeys(
+                        evidence_id
+                        for evidence in alternatives
+                        for evidence_id in evidence.evidence_ids
+                    )
+                ),
+                segment_probability=segment_probability,
+                destination_movement_probability=destination_probability,
+                source_episode_ids=tuple(
+                    dict.fromkeys(
+                        evidence.evidence_ids[-2].rsplit(":", 1)[0]
+                        for evidence in alternatives
+                        if len(evidence.evidence_ids) >= 2
+                        and evidence.evidence_ids[-2].endswith(":on")
+                    )
+                ),
+            )
 
     def _release_supported_origins(
         self,
@@ -719,11 +785,24 @@ class AutomationPolicy:
                 reason = "confident non-adjacent relocation"
                 reason_code = "confirmed_relocation"
             else:
-                releasable = (
-                    origin_probability <= GRAPH_RELEASE_OCCUPIED_THRESHOLD
-                    and pending.probability >= GRAPH_RELEASE_MOVEMENT_THRESHOLD
-                    and previous_marginals.get(origin, 0.0) > origin_probability
+                origin_decrease = (
+                    previous_marginals.get(origin, 0.0) - origin_probability
                 )
+                if pending.segment_probability is None:
+                    releasable = (
+                        origin_probability <= GRAPH_RELEASE_OCCUPIED_THRESHOLD
+                        and pending.probability >= GRAPH_RELEASE_MOVEMENT_THRESHOLD
+                        and origin_decrease > 0.0
+                    )
+                else:
+                    releasable = (
+                        origin_probability <= GRAPH_RELEASE_OCCUPIED_THRESHOLD
+                        and pending.probability >= GRAPH_RELEASE_MOVEMENT_THRESHOLD
+                        and pending.segment_probability
+                        >= GRAPH_RELEASE_SEGMENT_PROBABILITY_THRESHOLD
+                        and origin_decrease >= ACTIVATION_DELTA_THRESHOLD
+                        and destination_probability >= ACTIVATION_OCCUPIED_THRESHOLD
+                    )
                 reason = "graph-valid final occupant departure"
                 reason_code = "graph_departure"
             gate_values: dict[str, float | bool | str] = {
@@ -732,6 +811,12 @@ class AutomationPolicy:
                 "coherent_probability": pending.probability,
                 "nonadjacent": pending.nonadjacent,
             }
+            if pending.segment_probability is not None:
+                gate_values["segment_probability"] = pending.segment_probability
+                gate_values["destination_movement_probability"] = (
+                    pending.destination_movement_probability or 0.0
+                )
+                gate_values["origin_decrease"] = origin_decrease
             if pending.nonadjacent and pending.disposition != "missed_timing":
                 gate_values["relocation_odds"] = odds
                 gate_values["independently_corroborated"] = (
@@ -770,7 +855,10 @@ class AutomationPolicy:
                     state.evidence_ids,
                     *pending.evidence_ids,
                 ),
-                blocked_episode_ids=self._latest_positive_episodes.get(origin, ()),
+                blocked_episode_ids=(
+                    self._latest_positive_episodes.get(origin, ())
+                    or pending.source_episode_ids
+                ),
             )
             del self._pending_departures[origin]
             decisions.append(

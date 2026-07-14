@@ -66,7 +66,11 @@ Permitted release causes are:
 - **POL-010:** Graph departure alone is not enough to release ownership. The
   same update MUST also support that the final occupant is no longer in the
   origin, using origin marginal, remaining count, or equivalent posterior
-  evidence.
+  evidence. When anonymous route histories disagree about an older route origin
+  but agree on the immediate graph-valid segment, release uses that segment's
+  posterior mass and its normalized share of graph-valid movement into the
+  destination. Release still requires a material origin-marginal decrease, low
+  remaining origin occupancy, and occupied destination support.
 - **POL-011:** Every accepted and rejected release records gates, evidence IDs,
   prior latch, resulting latch, and reason.
 - **POL-012:** Compatible restart or reload preserves ownership without synthetic

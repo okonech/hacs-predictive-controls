@@ -199,6 +199,11 @@ def serialize_occupancy_state(
                 "nonadjacent": departure.nonadjacent,
                 "evidence_ids": list(departure.evidence_ids),
                 "disposition": departure.disposition,
+                "segment_probability": departure.segment_probability,
+                "destination_movement_probability": (
+                    departure.destination_movement_probability
+                ),
+                "source_episode_ids": list(departure.source_episode_ids),
             }
             for origin, departure in sorted((pending_departures or {}).items())
         },
@@ -718,6 +723,11 @@ def _restore_policy_audit_context(
             nonadjacent=departure.nonadjacent,
             evidence_ids=departure.evidence_ids,
             disposition=departure.disposition,
+            segment_probability=departure.segment_probability,
+            destination_movement_probability=(
+                departure.destination_movement_probability
+            ),
+            source_episode_ids=departure.source_episode_ids,
         )
         for _, departure in sorted(
             _restore_pending_departures(
@@ -1145,12 +1155,19 @@ def _restore_pending_departures(
             "disposition",
             "missed_movement" if nonadjacent else "graph_valid",
         )
+        segment_probability = raw_departure.get("segment_probability")
+        destination_movement_probability = raw_departure.get(
+            "destination_movement_probability"
+        )
+        source_episode_ids = raw_departure.get("source_episode_ids", [])
         if (
             not isinstance(current, str)
             or current not in valid_zones
             or not isinstance(nonadjacent, bool)
             or not isinstance(evidence_ids, list)
             or not all(isinstance(item, str) for item in evidence_ids)
+            or not isinstance(source_episode_ids, list)
+            or not all(isinstance(item, str) for item in source_episode_ids)
             or disposition not in {"graph_valid", "missed_movement", "missed_timing"}
         ):
             raise ValueError("stored pending departure fields are invalid")
@@ -1161,6 +1178,17 @@ def _restore_pending_departures(
             nonadjacent=nonadjacent,
             evidence_ids=tuple(evidence_ids),
             disposition=disposition,
+            segment_probability=(
+                None
+                if segment_probability is None
+                else _finite_probability(segment_probability)
+            ),
+            destination_movement_probability=(
+                None
+                if destination_movement_probability is None
+                else _finite_probability(destination_movement_probability)
+            ),
+            source_episode_ids=tuple(source_episode_ids),
         )
     return departures
 

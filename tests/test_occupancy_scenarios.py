@@ -150,6 +150,53 @@ def test_s03_observed_departure_releases_origin_and_activates_destination() -> N
     assert_count_conserved(tracker, 1)
 
 
+def test_s03_sustained_intermediate_releases_after_adjacent_departure() -> None:
+    predictive_map = make_map()
+    tracker = ZoneConfidenceEngine(predictive_map, expected_occupants=1)
+
+    def incident_event(
+        zone: str,
+        timestamp: str,
+        *,
+        state: str = "on",
+    ) -> OccupancyEvent:
+        return replace(
+            event(zone, 0, state=state),
+            event_at=datetime.fromisoformat(timestamp),
+        )
+
+    snapshots = run_trace(
+        tracker,
+        predictive_map,
+        (
+            incident_event("office", "2026-07-13T19:44:25.720044-04:00"),
+            incident_event("hall", "2026-07-13T19:45:01.417700-04:00"),
+            incident_event(
+                "hall",
+                "2026-07-13T19:45:02.417700-04:00",
+                state="off",
+            ),
+            incident_event("kitchen", "2026-07-13T19:45:05.638025-04:00"),
+            incident_event("hall", "2026-07-13T19:46:09.704142-04:00"),
+            incident_event(
+                "kitchen",
+                "2026-07-13T19:46:24.508538-04:00",
+                state="off",
+            ),
+        ),
+    )
+
+    assert snapshots[3].zones["kitchen"].keep_on
+    assert snapshots[3].zones["kitchen"].activation_plausible
+    assert not snapshots[-1].zones["kitchen"].keep_on
+    assert snapshots[-1].zones["hall"].keep_on
+    assert (
+        tracker.diagnostics.joint_policy_states["kitchen"].last_release_cause
+        == "graph_departure"
+    )
+    assert_count_conserved(tracker, 1)
+
+
 def test_s04_weak_nonadjacent_hit_is_quarantined() -> None:
     predictive_map = make_map()
     tracker = ZoneConfidenceEngine(predictive_map, expected_occupants=1)

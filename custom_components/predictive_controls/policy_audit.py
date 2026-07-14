@@ -180,6 +180,11 @@ def _expanded_context_payload(context: PolicyAuditContext) -> dict[str, object]:
                 "nonadjacent": departure.nonadjacent,
                 "evidence_ids": list(departure.evidence_ids),
                 "disposition": departure.disposition,
+                "segment_probability": departure.segment_probability,
+                "destination_movement_probability": (
+                    departure.destination_movement_probability
+                ),
+                "source_episode_ids": list(departure.source_episode_ids),
             }
             for departure in context.pending_departures
         },

@@ -920,6 +920,8 @@ def test_restart_reconciles_stale_leases_departures_and_unmapped_evidence() -> N
                 False,
                 ("office-hall",),
                 "graph_valid",
+                0.54,
+                0.72,
             ),
             "kitchen": PendingDeparture(
                 "kitchen",
@@ -943,6 +945,11 @@ def test_restart_reconciles_stale_leases_departures_and_unmapped_evidence() -> N
     assert restored.prediction_leases == ()
     assert restored.entity_states["binary_sensor.unmapped"].state == "on"
     assert restored.pending_departures["office"].disposition == "graph_valid"
+    assert restored.pending_departures["office"].segment_probability == 0.54
+    assert (
+        restored.pending_departures["office"].destination_movement_probability
+        == 0.72
+    )
     assert restored.pending_departures["kitchen"].disposition == "missed_movement"
 
 

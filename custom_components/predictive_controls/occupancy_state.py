@@ -165,6 +165,9 @@ class PendingDepartureAudit:
     nonadjacent: bool
     evidence_ids: tuple[str, ...]
     disposition: str
+    segment_probability: float | None = None
+    destination_movement_probability: float | None = None
+    source_episode_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

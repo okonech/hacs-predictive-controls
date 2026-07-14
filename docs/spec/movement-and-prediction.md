@@ -8,7 +8,10 @@ retains origin, source, target, nodes, evidence IDs, probability, and dispositio
 before occupancy successors merge.
 
 - **MOVE-001:** Release and learning MUST use path-specific coherent probability,
-  not an aggregate of unrelated zone marginals.
+  not an aggregate of unrelated zone marginals. Learning retains the complete
+  route origin. Release MAY aggregate mutually exclusive route alternatives
+  that agree on the same immediate graph-valid source-to-target segment, but it
+  MUST NOT combine different source segments or graph-invalid dispositions.
 - **MOVE-002:** Graph departure MAY invalidate sustained origin evidence only
   after the configured coherent movement gate passes.
 - **MOVE-003:** When two occupants share an origin, one departure leaves one

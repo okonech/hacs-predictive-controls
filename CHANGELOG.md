@@ -13,6 +13,12 @@
 
 ### Fixed
 
+- Released `keep_on` for a supported intermediate-zone departure when anonymous
+	route histories disagree about the older route origin but overwhelmingly agree
+	on the immediate graph-valid segment. Release now audits both absolute segment
+	mass and destination-normalized segment share while retaining low-origin,
+	material-decrease, and occupied-destination gates. The retained regression uses
+	the exact 2026-07-13 production event timestamps and policy probabilities.
 - Preserved sustained origin evidence when graph-valid movement carries one of
 	two occupants away but the exact posterior still supports another occupant in
 	the origin. Interleaved activity can no longer erase a continuously asserted

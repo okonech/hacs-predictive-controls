@@ -239,6 +239,141 @@ def test_policy_scenario_graph_departure_uses_coherent_multihop_evidence() -> No
     assert policy.pending_departures == {}
 
 
+def test_policy_releases_immediate_segment_across_ambiguous_route_origins() -> None:
+    graph = ZoneGraph.from_map(make_map())
+    policy = AutomationPolicy(graph)
+    policy.restore_states(
+        {
+            zone: ZonePolicyState(
+                keep_on=zone == "kitchen",
+                last_trusted_at=NOW if zone == "kitchen" else None,
+            )
+            for zone in graph.zones()
+        }
+    )
+    update = make_update(
+        previous={"kitchen": 0.9768120157474351},
+        current={"kitchen": 0.13604044324814651, "hall": 0.892307709342551},
+        movement={},
+        event_id="hall@2026-07-13T19:46:09.704142-04:00",
+        zone="hall",
+    )
+    alternatives = (
+        ("office", "kitchen", 0.26560508798058513),
+        ("hall", "kitchen", 0.15550854013610185),
+        ("kitchen", "kitchen", 0.3965465521546088),
+        ("office", "office", 0.0071718640178732),
+    )
+    update = replace(
+        update,
+        previous_occupied_marginals={"kitchen": 0.9768120157474351},
+        occupied_marginals={
+            "kitchen": 0.13604044324814651,
+            "hall": 0.892307709342551,
+        },
+        movement_evidence=tuple(
+            MovementEvidence(
+                path_key=(origin, source, "hall"),
+                origin_zone=origin,
+                source_zone=source,
+                target_zone="hall",
+                coherent_probability=probability,
+                source_node_id=source,
+                target_node_id="hall",
+                evidence_ids=(update.provenance.event_id,),
+                disposition="graph_valid",
+            )
+            for origin, source, probability in alternatives
+        ),
+    )
+
+    policy.apply(update)
+
+    assert not policy.states["kitchen"].keep_on
+    decision = next(
+        decision
+        for decision in policy.last_decisions
+        if decision.zone == "kitchen" and decision.action == "release"
+    )
+    assert decision.accepted
+    assert decision.gate_values["segment_probability"] == pytest.approx(
+        0.8176601802712958
+    )
+    assert decision.gate_values["coherent_probability"] == pytest.approx(
+        0.9913050613545762
+    )
+    assert decision.gate_values["origin_decrease"] == pytest.approx(
+        0.8407715724992886
+    )
+
+
+@pytest.mark.parametrize(
+    ("previous_origin", "current_origin", "destination", "segment", "competing"),
+    (
+        (0.95, 0.25, 0.90, 0.90, 0.05),
+        (0.95, 0.10, 0.55, 0.90, 0.05),
+        (0.30, 0.15, 0.90, 0.90, 0.05),
+        (0.95, 0.10, 0.90, 0.84, 0.16),
+        (0.95, 0.10, 0.90, 0.79, 0.01),
+    ),
+)
+def test_policy_segment_departure_requires_every_release_gate(
+    previous_origin: float,
+    current_origin: float,
+    destination: float,
+    segment: float,
+    competing: float,
+) -> None:
+    graph = ZoneGraph.from_map(make_map())
+    policy = AutomationPolicy(graph)
+    policy.restore_states(
+        {
+            zone: ZonePolicyState(keep_on=zone == "kitchen")
+            for zone in graph.zones()
+        }
+    )
+    update = make_update(
+        previous={"kitchen": previous_origin},
+        current={"kitchen": current_origin, "hall": destination},
+        movement={},
+        event_id="hall-edge",
+        zone="hall",
+    )
+    update = replace(
+        update,
+        previous_occupied_marginals={"kitchen": previous_origin},
+        occupied_marginals={"kitchen": current_origin, "hall": destination},
+        movement_evidence=(
+            MovementEvidence(
+                ("office", "kitchen", "hall"),
+                "office",
+                "kitchen",
+                "hall",
+                segment,
+                "kitchen",
+                "hall",
+                ("hall-edge",),
+                "graph_valid",
+            ),
+            MovementEvidence(
+                ("office", "office", "hall"),
+                "office",
+                "office",
+                "hall",
+                competing,
+                "office",
+                "hall",
+                ("hall-edge",),
+                "graph_valid",
+            ),
+        ),
+    )
+
+    policy.apply(update)
+
+    assert policy.states["kitchen"].keep_on
+
+
 def test_policy_audit_records_count_release_with_before_and_after_state() -> None:
     graph = ZoneGraph.from_map(make_map())
     policy = AutomationPolicy(graph)
