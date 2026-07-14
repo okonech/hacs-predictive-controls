@@ -133,9 +133,10 @@ def test_r02_release_followed_by_unsupported_local_hit_stays_released() -> None:
         tracker.observe(occupancy_event)
     assert not tracker.diagnostics.joint_policy_states["office"].keep_on
 
-    tracker.observe(event("office", 4, state="off"))
-    tracker.observe(event("office", 5))
-    snapshot = public_snapshot(tracker, predictive_map, event("office", 5))
+    tracker.observe(event("hall", 4, state="off"))
+    tracker.observe(event("office", 5, state="off"))
+    tracker.observe(event("office", 6))
+    snapshot = public_snapshot(tracker, predictive_map, event("office", 6))
 
     assert not snapshot.zones["office"].keep_on
     assert not snapshot.zones["office"].activation_plausible
@@ -143,7 +144,7 @@ def test_r02_release_followed_by_unsupported_local_hit_stays_released() -> None:
         "graph_departure"
     )
     assert tracker.diagnostics.joint_policy_decisions[-1].reason_code == (
-        "support_gate_failed"
+        "occupied_gate_failed"
     )
 
 

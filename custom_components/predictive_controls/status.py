@@ -265,6 +265,8 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
                     "coherent_probability": evidence.coherent_probability,
                     "source_node_id": evidence.source_node_id,
                     "target_node_id": evidence.target_node_id,
+                    "via_zone": evidence.via_zone,
+                    "via_node_id": evidence.via_node_id,
                     "evidence_ids": list(evidence.evidence_ids),
                     "disposition": evidence.disposition,
                 }

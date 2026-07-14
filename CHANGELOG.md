@@ -13,6 +13,14 @@
 
 ### Fixed
 
+- Added a one-use `censored_graph_path` movement candidate for a quick return
+	through a still-on transient gate whose PIR cannot emit a second positive
+	edge. Eligibility follows configured graph timings, preserves the actual
+	occupant source and intermediate gate provenance, survives compatible restart,
+	and supports activation without changing thresholds or affecting release,
+	prediction, or learning. The retained two-occupant regression uses the exact
+	2026-07-14 production timestamps and verifies entrance, closet, and bathroom
+	activation.
 - Released `keep_on` for a supported intermediate-zone departure when anonymous
 	route histories disagree about the older route origin but overwhelmingly agree
 	on the immediate graph-valid segment. Release now audits both absolute segment

@@ -107,6 +107,8 @@ class MovementEvidence:
     target_node_id: str
     evidence_ids: tuple[str, ...]
     disposition: str
+    via_zone: str | None = None
+    via_node_id: str | None = None
 
 
 @dataclass(frozen=True)

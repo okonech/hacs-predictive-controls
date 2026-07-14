@@ -507,6 +507,9 @@ class OccupancyTracker:
             policy_audit=self._joint_policy.policy_audit,
             route_counts=self._joint_predictions.route_counts,
             route_contexts=self._joint_predictions.route_contexts,
+            consumed_censored_paths=(
+                self._joint_filter.consumed_censored_paths
+            ),
         )
 
     def restore_joint_state(self, restored: RestoredOccupancyState) -> None:
@@ -521,6 +524,9 @@ class OccupancyTracker:
             restored.update_sequence,
         )
         self._joint_filter.observations.restore_entity_states(restored.entity_states)
+        self._joint_filter.restore_consumed_censored_paths(
+            restored.consumed_censored_paths
+        )
         self._joint_policy.restore_states(restored.policy_states)
         self._joint_policy.restore_policy_audit(restored.policy_audit)
         self._joint_policy.restore_pending_departures(restored.pending_departures)

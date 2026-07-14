@@ -522,7 +522,8 @@ class AutomationPolicy:
         graph_arrivals = tuple(
             evidence
             for evidence in update.movement_evidence
-            if evidence.target_zone == zone and evidence.disposition == "graph_valid"
+            if evidence.target_zone == zone
+            and evidence.disposition in {"graph_valid", "censored_graph_path"}
         )
         strongest_arrival = max(
             graph_arrivals,
@@ -677,6 +678,7 @@ class AutomationPolicy:
             evidence
             for evidence in update.movement_evidence
             if evidence.coherent_probability > 0.0
+            and evidence.disposition != "censored_graph_path"
         )
         if not candidates:
             return

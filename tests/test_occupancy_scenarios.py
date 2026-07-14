@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import itertools
 import json
+import math
 import random
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -19,6 +21,7 @@ from custom_components.predictive_controls.events import OccupancyEvent
 from custom_components.predictive_controls.joint_filter import JointOccupancyFilter
 from custom_components.predictive_controls.markov import MarkovChain
 from custom_components.predictive_controls.model import PredictiveMap
+from custom_components.predictive_controls.observation_model import ObservationModel
 from custom_components.predictive_controls.occupancy_state import (
     PositionState,
     ReleaseCause,
@@ -195,6 +198,178 @@ def test_s03_sustained_intermediate_releases_after_adjacent_departure() -> None:
         == "graph_departure"
     )
     assert_count_conserved(tracker, 1)
+
+
+def test_s03_asserted_transition_supports_second_occupant_route() -> None:
+    adjacency = {
+        "workroom": ["hall"],
+        "hall": ["workroom", "entry", "other_office", "stairs", "washroom"],
+        "entry": ["hall", "closet"],
+        "closet": ["entry", "bath"],
+        "bath": ["closet"],
+        "anchor": ["living", "stairs"],
+        "dining": ["foyer", "gym", "kitchen", "living", "vestibule"],
+        "vestibule": ["dining", "kitchen", "laundry"],
+        "laundry": ["vestibule"],
+        "foyer": ["dining", "stairs"],
+        "gym": ["dining"],
+        "kitchen": ["dining", "vestibule"],
+        "living": ["anchor", "dining"],
+        "other_office": ["hall", "washroom"],
+        "stairs": ["anchor", "foyer", "hall"],
+        "washroom": ["hall", "other_office"],
+    }
+    roles = {"hall": "transition_gate", "entry": "transition_gate"}
+    behaviors = {
+        "workroom": "sustained",
+        "hall": "transient",
+        "entry": "transient",
+        "closet": "sustained",
+        "bath": "sticky",
+        "anchor": "sustained",
+    }
+    reliabilities = {
+        "workroom": 0.75,
+        "hall": 0.85,
+        "entry": 0.8,
+        "closet": 0.8,
+        "bath": 0.7,
+    }
+    predictive_map = PredictiveMap.from_mapping(
+        {
+            "nodes": {
+                zone: {
+                    "role": roles.get(zone, "room_occupancy"),
+                    "occupancy_behavior": behaviors.get(zone, "sustained"),
+                    "initial_weight": reliabilities.get(zone, 0.75),
+                    "entities": {"motion": f"binary_sensor.{zone}"},
+                    "adjacent": neighbors,
+                }
+                for zone, neighbors in adjacency.items()
+            },
+        }
+    )
+    tracker = ZoneConfidenceEngine(predictive_map, expected_occupants=2)
+
+    captured_marginals = {
+        "workroom": 0.9937038430546176,
+        "dining": 0.000015110767781681922,
+        "vestibule": 0.00005399074001303046,
+        "laundry": 0.000000000003897432414031003,
+        "foyer": 0.000012839346120867392,
+        "anchor": 0.994706277850614,
+        "gym": 1.688402858897895e-49,
+        "kitchen": 0.000001236868555867169,
+        "living": 0.00000000138817218194856,
+        "bath": 0.00006570032515892287,
+        "closet": 0.004692490991988322,
+        "entry": 0.00014534408440393935,
+        "other_office": 2.712543665519932e-15,
+        "stairs": 0.00004901371615440477,
+        "washroom": 0.0006377408068999706,
+        "hall": 0.005899844087237978,
+    }
+    zones = tuple(sorted(predictive_map.zones()))
+    keys = tuple(
+        canonical_hypothesis((PositionState(left), PositionState(right)))
+        for left, right in itertools.combinations_with_replacement(zones, 2)
+    )
+    weights = {key: 1.0 / len(keys) for key in keys}
+    for _ in range(2_000):
+        for zone in zones:
+            current = math.fsum(
+                probability
+                for key, probability in weights.items()
+                if any(position.zone == zone for position in key.positions)
+            )
+            wanted = captured_marginals[zone]
+            odds_factor = wanted * (1.0 - current) / (current * (1.0 - wanted))
+            weights = {
+                key: probability
+                * (
+                    odds_factor
+                    if any(position.zone == zone for position in key.positions)
+                    else 1.0
+                )
+                for key, probability in weights.items()
+            }
+            total = math.fsum(weights.values())
+            weights = {key: probability / total for key, probability in weights.items()}
+
+    started_at = datetime.fromisoformat("2026-07-14T03:17:12.508501-04:00")
+    tracker.reconcile_expected_occupants(2, started_at)
+    assert tracker._joint_filter is not None  # noqa: SLF001
+    tracker._joint_filter.restore_posterior(  # noqa: SLF001
+        normalize_hypotheses(
+            {
+                key: math.log(probability)
+                for key, probability in weights.items()
+                if probability > 1e-300
+            },
+            started_at,
+        )
+    )
+    assert all(
+        tracker.states[zone].confidence == pytest.approx(marginal, abs=1e-6)
+        for zone, marginal in captured_marginals.items()
+    )
+
+    def incident_event(
+        zone: str,
+        timestamp: str,
+        *,
+        state: str = "on",
+    ) -> OccupancyEvent:
+        node = predictive_map.nodes[zone]
+        return OccupancyEvent(
+            entity_id=f"binary_sensor.{zone}",
+            node_id=zone,
+            zone=zone,
+            floor=None,
+            role=node.role,
+            occupancy_behavior=predictive_map.occupancy_behavior_for_node(node),
+            signal_type="motion",
+            state=state,
+            event_at=datetime.fromisoformat(timestamp),
+            reliability=node.initial_weight,
+        )
+
+    prior_workroom = incident_event("workroom", "2026-07-14T03:15:00-04:00")
+    observations = ObservationModel(2, predictive_map=predictive_map)
+    observations.prepare_delta(prior_workroom)
+    tracker._joint_filter.observations.restore_entity_states(  # noqa: SLF001
+        observations.entity_states
+    )
+
+    snapshots = run_trace(
+        tracker,
+        predictive_map,
+        (
+            incident_event("hall", "2026-07-14T03:17:12.508502-04:00"),
+            incident_event(
+                "workroom",
+                "2026-07-14T03:17:28.821313-04:00",
+                state="off",
+            ),
+            incident_event("workroom", "2026-07-14T03:17:35.172120-04:00"),
+            incident_event("entry", "2026-07-14T03:17:43.573416-04:00"),
+            incident_event("closet", "2026-07-14T03:17:46.913480-04:00"),
+            incident_event("hall", "2026-07-14T03:17:53.495404-04:00", state="off"),
+            incident_event(
+                "workroom",
+                "2026-07-14T03:17:56.196848-04:00",
+                state="off",
+            ),
+            incident_event("entry", "2026-07-14T03:18:00.055739-04:00", state="off"),
+            incident_event("bath", "2026-07-14T03:18:02.005122-04:00"),
+        ),
+    )
+
+    assert snapshots[8].zones["bath"].activation_plausible
+    assert snapshots[3].zones["entry"].activation_plausible
+    assert snapshots[4].zones["closet"].activation_plausible
+    assert_count_conserved(tracker, 2)
+    assert_normalized(tracker)
 
 
 def test_s04_weak_nonadjacent_hit_is_quarantined() -> None:

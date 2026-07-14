@@ -3,7 +3,7 @@ from __future__ import annotations
 import itertools
 import math
 from collections import defaultdict, deque
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from time import perf_counter_ns
 
@@ -45,6 +45,24 @@ SUSTAINED_DURATION_MAX_LOG_ODDS = math.log(4.0)
 SUSTAINED_DURATION_BUCKET = timedelta(minutes=1)
 SUSTAINED_DEPARTURE_THRESHOLD = 0.85
 SUSTAINED_DEPARTURE_REMAINING_OCCUPANCY_THRESHOLD = 0.20
+
+
+@dataclass(frozen=True)
+class CensoredGraphPath:
+    """One eligible source-via-target route whose via sensor cannot retrigger."""
+
+    source_zone: str
+    source_node_id: str
+    via_zone: str
+    via_node_id: str
+    target_zone: str
+    target_node_id: str
+    source_edge_id: str
+    gate_episode_id: str
+
+    @property
+    def consumption_key(self) -> tuple[str, str]:
+        return (self.gate_episode_id, self.source_edge_id)
 
 
 class JointOccupancyFilter:
@@ -89,6 +107,8 @@ class JointOccupancyFilter:
             for hypothesis in self.posterior.hypotheses
         }
         self._restored_context_keys: set[HypothesisKey] | None = None
+        self._consumed_censored_paths: set[tuple[str, str]] = set()
+        self._event_censored_paths: dict[tuple[str, str], CensoredGraphPath] = {}
         self._update_sequence = 0
         self._latency_samples_ms: deque[float] = deque(maxlen=256)
         self._last_operation_count = 0
@@ -257,6 +277,10 @@ class JointOccupancyFilter:
         return self._update_sequence
 
     @property
+    def consumed_censored_paths(self) -> tuple[tuple[str, str], ...]:
+        return tuple(sorted(self._consumed_censored_paths))
+
+    @property
     def performance_metrics(self) -> dict[str, float | int]:
         samples = tuple(self._latency_samples_ms)
         return {
@@ -300,11 +324,14 @@ class JointOccupancyFilter:
 
         provenance = self.observations.prepare_delta(event)
         if provenance.disposition in {"duplicate", "ignored"}:
+            self._update_active_positive_entities(event)
+            self._prune_consumed_censored_paths()
             update = self._update_for(previous, previous, provenance, {})
             self.last_update = update
             return update
 
         self._update_active_positive_entities(event)
+        self._prune_consumed_censored_paths()
         if provenance.disposition == "correlated_alias":
             current = self._apply_stationary_likelihood(
                 previous,
@@ -672,6 +699,7 @@ class JointOccupancyFilter:
         posterior: Posterior,
         event: OccupancyEvent,
     ) -> tuple[TransitionPath, ...]:
+        self._event_censored_paths = {}
         if event.state != "on":
             return tuple(
                 TransitionPath(
@@ -730,6 +758,16 @@ class JointOccupancyFilter:
                     if source in asserted_sustained_zones and competing_explanation:
                         weight *= self._asserted_empty_to_occupied_ratio(source)
                     movements = ((source, event.zone),)
+                elif (
+                    censored_path := self._censored_graph_path(source, event)
+                ) is not None:
+                    weight = (
+                        ADJACENT_MOVEMENT_WEIGHT
+                        * count
+                        / max(1, len(self.graph.neighbors(source)))
+                    )
+                    movements = ((source, event.zone),)
+                    self._event_censored_paths[(source, event.zone)] = censored_path
                 else:
                     weight = MISSED_MOVEMENT_WEIGHT * count
                     if source in asserted_sustained_zones:
@@ -749,7 +787,133 @@ class JointOccupancyFilter:
                 )
                 for candidate, weight, movements in candidates
             )
+        self._consumed_censored_paths.update(
+            path.consumption_key for path in self._event_censored_paths.values()
+        )
         return tuple(paths)
+
+    def _censored_graph_path(
+        self,
+        source: str,
+        event: OccupancyEvent,
+    ) -> CensoredGraphPath | None:
+        entity_states = self.observations.entity_states
+        candidates: list[tuple[tuple[object, ...], CensoredGraphPath]] = []
+        for via_zone, entity_ids in self._active_positive_entities.items():
+            if (
+                via_zone in {source, event.zone}
+                or via_zone not in self.graph.neighbors(source)
+                or event.zone not in self.graph.neighbors(via_zone)
+            ):
+                continue
+            for gate_entity_id in sorted(entity_ids):
+                gate_state = entity_states.get(gate_entity_id)
+                gate_binding = self.map.entity_binding_for_entity(gate_entity_id)
+                if (
+                    gate_state is None
+                    or gate_state.state != "on"
+                    or gate_state.departure_observed
+                    or gate_binding is None
+                ):
+                    continue
+                gate_node = self.map.nodes[gate_binding.node_id]
+                if (
+                    self.map.occupancy_behavior_for_node(gate_node) != "transient"
+                    and gate_node.role != "transition_gate"
+                ):
+                    continue
+                gate_episode_id = (
+                    f"{gate_entity_id}@{gate_state.episode_started_at.isoformat()}"
+                )
+                for source_entity_id in sorted(
+                    self._active_positive_entities.get(source, ())
+                ):
+                    source_state = entity_states.get(source_entity_id)
+                    source_binding = self.map.entity_binding_for_entity(
+                        source_entity_id
+                    )
+                    if (
+                        source_state is None
+                        or source_state.state != "on"
+                        or source_state.departure_observed
+                        or source_binding is None
+                        or source_state.changed_at <= gate_state.episode_started_at
+                        or source_state.changed_at >= event.event_at
+                        or gate_binding.node_id
+                        not in self.map.neighbors(source_binding.node_id)
+                        or event.node_id not in self.map.neighbors(gate_binding.node_id)
+                    ):
+                        continue
+                    source_to_gate = (
+                        self.map.transition_seconds_between_nodes(
+                            source_binding.node_id,
+                            gate_binding.node_id,
+                        )
+                        or DEFAULT_TRANSITION_SECONDS
+                    )
+                    gate_to_target = (
+                        self.map.transition_seconds_between_nodes(
+                            gate_binding.node_id,
+                            event.node_id,
+                        )
+                        or DEFAULT_TRANSITION_SECONDS
+                    )
+                    if (
+                        (event.event_at - gate_state.episode_started_at).total_seconds()
+                        > source_to_gate + gate_to_target
+                        or (event.event_at - source_state.changed_at).total_seconds()
+                        > gate_to_target
+                    ):
+                        continue
+                    source_edge_id = (
+                        f"{source_entity_id}@{source_state.changed_at.isoformat()}"
+                    )
+                    path = CensoredGraphPath(
+                        source,
+                        source_binding.node_id,
+                        via_zone,
+                        gate_binding.node_id,
+                        event.zone,
+                        event.node_id,
+                        source_edge_id,
+                        gate_episode_id,
+                    )
+                    if path.consumption_key in self._consumed_censored_paths:
+                        continue
+                    candidates.append(
+                        (
+                            (
+                                gate_state.episode_started_at,
+                                via_zone,
+                                gate_binding.node_id,
+                                gate_entity_id,
+                                source_state.changed_at,
+                                source_binding.node_id,
+                                source_entity_id,
+                            ),
+                            path,
+                        )
+                    )
+        if not candidates:
+            return None
+        return max(candidates, key=lambda item: item[0])[1]
+
+    def _prune_consumed_censored_paths(self) -> None:
+        live_gate_episodes: set[str] = set()
+        live_source_edges: set[str] = set()
+        for entity_id, state in self.observations.entity_states.items():
+            if state.state != "on" or state.departure_observed:
+                continue
+            live_gate_episodes.add(
+                f"{entity_id}@{state.episode_started_at.isoformat()}"
+            )
+            live_source_edges.add(f"{entity_id}@{state.changed_at.isoformat()}")
+        self._consumed_censored_paths.intersection_update(
+            (gate_episode_id, source_edge_id)
+            for gate_episode_id, source_edge_id in self._consumed_censored_paths
+            if gate_episode_id in live_gate_episodes
+            and source_edge_id in live_source_edges
+        )
 
     def _asserted_empty_to_occupied_ratio(self, zone: str) -> float:
         return math.exp(
@@ -885,8 +1049,24 @@ class JointOccupancyFilter:
             context.evidence_ids if coherent else (),
             event_id,
         )
+        censored_path = self._event_censored_paths.get((source, target))
         graph_valid = target in self.graph.neighbors(source)
-        disposition = "graph_valid" if graph_valid else "missed_movement"
+        disposition = (
+            "censored_graph_path"
+            if censored_path is not None and not graph_valid
+            else "graph_valid"
+            if graph_valid
+            else "missed_movement"
+        )
+        if censored_path is not None and not graph_valid:
+            evidence_ids = _append_evidence(
+                evidence_ids,
+                censored_path.source_edge_id,
+            )
+            evidence_ids = _append_evidence(
+                evidence_ids,
+                censored_path.gate_episode_id,
+            )
         if coherent and context.disposition in {"missed_movement", "missed_timing"}:
             disposition = context.disposition
         elif coherent and graph_valid and context.last_event_at is not None:
@@ -927,8 +1107,24 @@ class JointOccupancyFilter:
             event.node_id,
             evidence_ids,
             disposition,
+            None if censored_path is None else censored_path.via_zone,
+            None if censored_path is None else censored_path.via_node_id,
         )
         return advanced, evidence_key
+
+    def restore_consumed_censored_paths(
+        self,
+        consumed_paths: tuple[tuple[str, str], ...],
+    ) -> None:
+        """Restore bounded one-use route tokens after evidence has been restored."""
+
+        if any(
+            not gate_episode_id or not source_edge_id
+            for gate_episode_id, source_edge_id in consumed_paths
+        ):
+            raise ValueError("consumed censored path identifiers must be non-empty")
+        self._consumed_censored_paths = set(consumed_paths)
+        self._prune_consumed_censored_paths()
 
     def restore_posterior(self, posterior: Posterior) -> None:
         """Restore a validated normalized posterior for the configured map/count."""
@@ -1263,6 +1459,8 @@ def _movement_evidence(
             target_node_id=str(key[4]),
             evidence_ids=key[5] if isinstance(key[5], tuple) else (),
             disposition=str(key[6]),
+            via_zone=key[7] if isinstance(key[7], str) else None,
+            via_node_id=key[8] if isinstance(key[8], str) else None,
         )
         for key, score in scores.items()
     )

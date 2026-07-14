@@ -1,10 +1,72 @@
 ---
 name: predictive-controls-regression-review
-description: 'Use for every Predictive Controls regression, reported error, false activation, false shutoff, wrong keep_on state, missed activation, incorrect prediction, occupancy probability defect, movement-track defect, policy threshold change, inference redesign, or incident-derived fix. Reviews evidence and proposed changes against the canonical docs/spec contracts before production edits, requires a generic retained public-contract regression, and rejects room-specific or probabilistically incoherent workarounds.'
+description: 'Use for every report that Predictive Controls did not work properly, including a regression, incident, reported error, false activation, false shutoff, wrong keep_on state, missed activation, incorrect prediction, occupancy probability defect, movement-track defect, policy threshold change, inference redesign, or incident-derived fix. Requires an exact-timestamp failing public regression before implementation diagnosis, fresh context-isolated subagents for investigation and iterative specification verification, and a post-implementation conformance review.'
 argument-hint: 'Describe the incident, regression, wrong prediction, or proposed model/policy change'
 ---
 
 # Predictive Controls Regression Review
+
+## Non-Negotiable Incident Order
+
+For every report that something did not work properly, execute these gates in
+order. Do not inspect or edit production implementation before Gate 1 passes.
+These nine gates are the sole execution sequence. Later sections provide detail
+for individual gates and are not a second workflow.
+
+1. **Capture the failure as a test.** Build the smallest generic public-contract
+  regression using the captured production timestamps, material event order,
+  states, occupant count, and recorded probabilities or policy gates. Never
+  invent missing timestamps. Reading retained evidence, map configuration, test
+  utilities, and neighboring tests is allowed at this gate; diagnosing
+  production implementation is not.
+2. **Prove the regression.** Run only the new test against unchanged production
+  code. It MUST fail on the reported `activation_plausible`, `keep_on`, or
+  `prelight_plausible` behavior for the diagnosed reason. If it passes or fails
+  for another reason, repair the reproduction before continuing.
+  Once proved, freeze the regression for the remainder of the solution. Do not
+  change its events, timestamps, topology, evidence strength, initial state,
+  assertions, or tolerances to accommodate an implementation. A later test edit
+  is permitted only when new independent evidence demonstrates a factual mistake
+  in the regression. Record that evidence, return to Gate 1, correct only the
+  mistake, and re-prove the corrected test against unchanged production before
+  resuming diagnosis or implementation.
+3. **Investigate independently.** Launch a fresh stateless read-only subagent to
+  examine the failing test and owning implementation. Give it verified incident
+  facts and file locations, but do not provide the parent agent's causal theory
+  or preferred fix. Require a root-cause report grounded in code and canonical
+  requirement IDs. The parent agent then examines the same controlling path and
+  reconciles disagreements with evidence.
+4. **Propose before editing.** State the exact failing mechanism, mathematical or
+  policy layer, smallest generic proposed solution, alternatives rejected, and
+  expected public effect. Do not edit production code yet.
+5. **Verify the proposal independently against the specification.** Launch a new
+  stateless read-only subagent with the verified incident facts, failing test,
+  proposed design, and canonical spec paths. Do not include another reviewer's
+  verdict. Require an explicit `PASS` or `FAIL`, a requirement matrix, conflicts,
+  probabilistic and multi-occupant analysis, sensor-fault and restart analysis,
+  and missing adversarial tests.
+6. **Iterate until conformant.** A `FAIL` blocks implementation. Redesign the
+  proposal and submit it to another fresh spec-review subagent. Repeat until the
+  proposal receives `PASS`. Do not make a nonconforming proposal conform by
+  silently adding a requirement that describes it. If the desired behavior
+  requires a genuine specification change, stop and obtain explicit user
+  agreement before amending the canonical specification.
+7. **Implement only the verified proposal.** Make the smallest generic change at
+  the controlling layer, then immediately run the exact incident regression.
+  Material deviation from the reviewed design returns to Gate 4.
+8. **Review the implementation independently.** Launch another fresh stateless
+  read-only subagent with the approved proposal, actual diff, regression, and
+  canonical specs. Require `PASS` or `FAIL`. A failure returns to Gate 4 or Gate
+  7 as directed by the finding; do not proceed to broad validation.
+9. **Validate adversarially and completely.** Add and run the required inverse,
+  stale, clear, stuck/flapping, disconnected, multi-occupant, out-of-order,
+  restart, threshold-boundary, and performance cases that apply, then run every
+  repository quality gate.
+
+Each subagent invocation must be fresh and context-isolated. Review subagents are
+read-only and must derive conclusions from repository evidence rather than a
+leading summary. Preserve their verdict and key requirement findings in the
+final report.
 
 ## Purpose
 
@@ -48,7 +110,11 @@ after the user agrees to the new design.
 
 ## Guardrails
 
-- Do not make a production edit before completing Stages 1 through 4.
+- Do not make a production edit before Gates 1 through 6 pass.
+- After Gate 2, treat the incident regression as immutable solution input. Never
+  weaken, delete, skip, xfail, retime, recalibrate, or reshape it to make a
+  proposed solution pass. Only an independently evidenced factual correction may
+  change it, and that correction resets the workflow to Gate 1.
 - Do not accept current code, tests, README text, or historical specs as proof
   that behavior is intended.
 - Keep live Home Assistant access read-only. Use only approved deployment access
@@ -62,7 +128,7 @@ after the user agrees to the new design.
 - Never release `keep_on` from uncertainty, elapsed time, local clear, or low
   marginal alone.
 
-## Stage 1: Establish the Incident
+## Incident Evidence Detail
 
 Record facts before drawing a causal conclusion:
 
@@ -83,7 +149,10 @@ Do not collect broad logs after the controlling event and policy decision are
 known. Prefer the smallest evidence set that can falsify the leading causal
 hypothesis.
 
-## Stage 2: Classify the Controlling Layer
+This evidence work belongs to Gate 1. Gate 2 must prove the exact-timestamp
+public regression fails for the reported reason before Gate 3 begins.
+
+## Controlling Layer Detail
 
 Choose one primary category and any contributing categories:
 
@@ -103,7 +172,7 @@ Step from wiring to the nearest code that directly computes the wrong result.
 For example, an entity platform usually projects state; it rarely owns an
 incorrect release decision.
 
-## Stage 3: Build the Requirement Matrix
+## Requirement Matrix Detail
 
 Create a compact matrix before proposing a fix:
 
@@ -120,7 +189,11 @@ If no requirement clearly decides the expected behavior, this is a design gap,
 not yet an implementation bug. Compare alternatives and amend the specification
 before editing production code.
 
-## Stage 4: Review Model Quality
+## Model Quality Detail
+
+This analysis belongs to Gate 4 and requires Gates 1 through 3 to be complete.
+Before production edits, its proposal must pass the independent specification
+review and redesign loop in Gates 5 and 6.
 
 ### 4.1 State one falsifiable causal hypothesis
 
@@ -187,7 +260,10 @@ Reject or redesign a proposal if it:
 - handles a predictor defect in consuming automation YAML;
 - changes calibration against only one room or one incident replay.
 
-## Stage 5: Preserve the Regression
+## Regression Preservation Detail
+
+This detail belongs to Gates 1 and 2 and therefore precedes production
+implementation diagnosis.
 
 Before the production edit:
 
@@ -205,7 +281,7 @@ If the regression passes before the proposed fix or fails for another reason,
 do not edit production behavior. Correct the reproduction or improve retained
 diagnostics.
 
-## Stage 6: Implement the Smallest Generic Change
+## Implementation Detail
 
 Make the smallest change at the controlling layer that satisfies the canonical
 requirements and generic scenario corpus.
@@ -221,7 +297,12 @@ requirements and generic scenario corpus.
 Immediately run the focused incident regression after the first production
 edit. Repair that same slice before widening scope.
 
-## Stage 7: Validate Adversarially
+Implementation is permitted only after a fresh context-isolated specification
+reviewer has returned `PASS` for the proposal. After the focused regression
+passes, a different fresh reviewer must compare the actual diff with the
+approved proposal and canonical requirements before Gate 9.
+
+## Adversarial Validation Detail
 
 Run the focused incident test, then nearby tests for the controlling layer. A
 model or policy change also requires tests for:
@@ -259,7 +340,7 @@ change pass. Run the full benchmark without `--events` only when the change
 touches event-path performance, a smoke or latency gate regresses, or release
 validation explicitly requires the 10,000-event wall-clock result.
 
-## Stage 8: Report the Decision
+## Decision Report Detail
 
 Use [the review template](./references/review-template.md). The final report must
 state:

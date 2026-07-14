@@ -34,10 +34,19 @@ def make_map() -> PredictiveMap:
                     "zone": "hall",
                     "role": "transition_gate",
                     "occupancy_behavior": "transient",
+                    "entities": {"motion": "binary_sensor.hall"},
                     "adjacent": ["office", "kitchen"],
                 },
-                "kitchen": {"zone": "kitchen", "adjacent": ["hall"]},
-                "garage": {"zone": "garage", "adjacent": []},
+                "kitchen": {
+                    "zone": "kitchen",
+                    "entities": {"motion": "binary_sensor.kitchen"},
+                    "adjacent": ["hall"],
+                },
+                "garage": {
+                    "zone": "garage",
+                    "entities": {"motion": "binary_sensor.garage"},
+                    "adjacent": [],
+                },
             }
         }
     )
@@ -111,6 +120,189 @@ def test_filter_emits_origin_preserving_multihop_movement_evidence() -> None:
         and evidence.target_zone == "kitchen"
         for evidence in arrived.movement_evidence
     )
+
+
+def test_filter_censored_graph_path_is_one_use_and_preserves_via_provenance() -> None:
+    occupancy_filter = JointOccupancyFilter(make_map(), 2, NOW)
+    occupancy_filter.restore_posterior(
+        normalize_hypotheses(
+            {
+                canonical_hypothesis(
+                    (PositionState("office"), PositionState("garage"))
+                ): 0.0
+            },
+            NOW,
+        )
+    )
+    occupancy_filter.observe(event("hall", NOW + timedelta(seconds=1)))
+    occupancy_filter.observe(event("office", NOW + timedelta(seconds=10)))
+
+    arrived = occupancy_filter.observe(
+        event("kitchen", NOW + timedelta(seconds=20))
+    )
+    censored = tuple(
+        evidence
+        for evidence in arrived.movement_evidence
+        if evidence.disposition == "censored_graph_path"
+    )
+
+    assert censored
+    assert all(
+        evidence.source_zone == "office"
+        and evidence.via_zone == "hall"
+        and evidence.via_node_id == "hall"
+        and evidence.target_zone == "kitchen"
+        for evidence in censored
+    )
+    assert occupancy_filter.consumed_censored_paths
+    assert probability_sum(arrived.current) == pytest.approx(1.0)
+    assert sum(arrived.count_marginals[zone][1] for zone in make_map().zones()) <= 2.0
+
+    occupancy_filter.observe(
+        event("kitchen", NOW + timedelta(seconds=21), state="off")
+    )
+    repeated = occupancy_filter.observe(
+        event("kitchen", NOW + timedelta(seconds=22))
+    )
+    assert not any(
+        evidence.disposition == "censored_graph_path"
+        for evidence in repeated.movement_evidence
+    )
+
+    departed = occupancy_filter.observe(
+        event("hall", NOW + timedelta(seconds=23), state="off")
+    )
+    departed = occupancy_filter.observe(event("hall", NOW + timedelta(seconds=24)))
+    assert any(
+        evidence.disposition == "graph_valid"
+        and evidence.source_zone == "kitchen"
+        and evidence.target_zone == "hall"
+        for evidence in departed.movement_evidence
+    )
+
+
+@pytest.mark.parametrize(
+    "gate_state,target_seconds",
+    [
+        ("off", 20),
+        ("invalidated", 20),
+        ("unavailable", 20),
+        ("on", 62),
+    ],
+)
+def test_filter_censored_graph_path_rejects_clear_or_late_gate(
+    gate_state: str,
+    target_seconds: int,
+) -> None:
+    occupancy_filter = JointOccupancyFilter(make_map(), 2, NOW)
+    occupancy_filter.observe(event("hall", NOW + timedelta(seconds=1)))
+    if gate_state == "off":
+        occupancy_filter.observe(event("hall", NOW + timedelta(seconds=2), "off"))
+    elif gate_state == "invalidated":
+        occupancy_filter.observations.invalidate_asserted_episode(
+            "binary_sensor.hall"
+        )
+    elif gate_state == "unavailable":
+        occupancy_filter.observe(
+            event("hall", NOW + timedelta(seconds=2), "unavailable")
+        )
+    occupancy_filter.observe(event("office", NOW + timedelta(seconds=10)))
+
+    arrived = occupancy_filter.observe(
+        event("kitchen", NOW + timedelta(seconds=target_seconds))
+    )
+
+    assert not any(
+        evidence.disposition == "censored_graph_path"
+        for evidence in arrived.movement_evidence
+    )
+
+
+def test_filter_censored_graph_path_survives_restart_and_consumption() -> None:
+    predictive_map = make_map()
+    original = JointOccupancyFilter(predictive_map, 1, NOW)
+    gate = event("hall", NOW + timedelta(seconds=1))
+    source = event("office", NOW + timedelta(seconds=10))
+    original.observe(gate)
+    original.observe(source)
+
+    restored = JointOccupancyFilter(predictive_map, 1, NOW)
+    restored.restore_posterior(original.posterior)
+    restored.restore_directional_contexts(
+        original.directional_contexts,
+        original.update_sequence,
+    )
+    restored.observations.restore_entity_states(original.observations.entity_states)
+    restored.restore_consumed_censored_paths(original.consumed_censored_paths)
+    restored.bootstrap((gate, source), cold_start=False)
+
+    arrived = restored.observe(event("kitchen", NOW + timedelta(seconds=20)))
+    assert any(
+        evidence.disposition == "censored_graph_path"
+        for evidence in arrived.movement_evidence
+    )
+
+    restarted = JointOccupancyFilter(predictive_map, 1, NOW)
+    restarted.restore_posterior(restored.posterior)
+    restarted.restore_directional_contexts(
+        restored.directional_contexts,
+        restored.update_sequence,
+    )
+    restarted.observations.restore_entity_states(restored.observations.entity_states)
+    restarted.restore_consumed_censored_paths(restored.consumed_censored_paths)
+    restarted.bootstrap(
+        (gate, source, event("kitchen", NOW + timedelta(seconds=20))),
+        cold_start=False,
+    )
+    restarted.observe(event("kitchen", NOW + timedelta(seconds=21), "off"))
+    repeated = restarted.observe(event("kitchen", NOW + timedelta(seconds=22)))
+    assert not any(
+        evidence.disposition == "censored_graph_path"
+        for evidence in repeated.movement_evidence
+    )
+
+
+def test_filter_censored_graph_path_selects_latest_eligible_gate() -> None:
+    predictive_map = PredictiveMap.from_mapping(
+        {
+            "nodes": {
+                "office": {
+                    "entities": {"motion": "binary_sensor.office"},
+                    "adjacent": ["hall_a", "hall_b"],
+                },
+                "hall_a": {
+                    "role": "transition_gate",
+                    "occupancy_behavior": "transient",
+                    "entities": {"motion": "binary_sensor.hall_a"},
+                    "adjacent": ["office", "kitchen"],
+                },
+                "hall_b": {
+                    "role": "transition_gate",
+                    "occupancy_behavior": "transient",
+                    "entities": {"motion": "binary_sensor.hall_b"},
+                    "adjacent": ["office", "kitchen"],
+                },
+                "kitchen": {
+                    "entities": {"motion": "binary_sensor.kitchen"},
+                    "adjacent": ["hall_a", "hall_b"],
+                },
+            }
+        }
+    )
+    occupancy_filter = JointOccupancyFilter(predictive_map, 1, NOW)
+    occupancy_filter.observe(event("hall_a", NOW + timedelta(seconds=1)))
+    occupancy_filter.observe(event("hall_b", NOW + timedelta(seconds=2)))
+    occupancy_filter.observe(event("office", NOW + timedelta(seconds=10)))
+
+    arrived = occupancy_filter.observe(
+        event("kitchen", NOW + timedelta(seconds=20))
+    )
+
+    assert {
+        evidence.via_zone
+        for evidence in arrived.movement_evidence
+        if evidence.disposition == "censored_graph_path"
+    } == {"hall_b"}
 
 
 def test_filter_bounds_directional_context_without_pruning_occupancy() -> None:
@@ -304,6 +496,8 @@ def test_filter_bootstrap_and_context_restore_reject_invalid_invariants() -> Non
     assert set(restored.directional_contexts) == {
         hypothesis.key for hypothesis in restored.posterior.hypotheses
     }
+    with pytest.raises(ValueError, match="identifiers must be non-empty"):
+        restored.restore_consumed_censored_paths((("", "source"),))
 
 
 def test_filter_discards_stale_motion_from_positive_corroboration() -> None:

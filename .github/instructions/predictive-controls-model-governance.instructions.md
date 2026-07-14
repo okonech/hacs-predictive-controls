@@ -14,11 +14,17 @@ Before changing behavior in a matched file:
 1. Read `docs/spec/README.md`, goals, governance, and the owning technical
    contract identified by the index.
 2. Use `.github/skills/predictive-controls-regression-review/SKILL.md` for every
-   reported error, regression, incident, threshold change, or model redesign.
+   report that something did not work properly, regression, incident, threshold
+   change, or model redesign. Follow its nine-gate Non-Negotiable Incident Order
+   exactly; later detail sections do not define a second sequence.
 3. Map expected behavior and the proposed change to canonical requirement IDs.
-4. Add a retained regression that fails at the public entity contract before
-   editing production behavior.
-5. Explain the probabilistic or policy meaning of the change and compare
+4. Add and run an exact-timestamp retained regression that fails at the public
+   entity contract before examining the production implementation.
+5. Use fresh context-isolated read-only subagents to investigate the failing
+   implementation, verify each proposed solution against the canonical spec,
+   and review the resulting implementation. A failed spec verdict blocks edits
+   and requires another proposal and another fresh review.
+6. Explain the probabilistic or policy meaning of the change and compare
    alternatives for model changes.
 
 Do not add room-specific inference, count timer evaluations as independent

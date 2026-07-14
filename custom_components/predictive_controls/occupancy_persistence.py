@@ -64,6 +64,7 @@ class RestoredOccupancyState:
     transition_counts: dict[str, dict[str, float]]
     route_counts: dict[tuple[str, ...], dict[str, float]]
     route_contexts: tuple[tuple[str, ...], ...]
+    consumed_censored_paths: tuple[tuple[str, str], ...]
     update_sequence: int
     map_compatible: bool
     restore_status: str
@@ -105,6 +106,7 @@ def serialize_occupancy_state(
     policy_audit: tuple[PolicyAuditEntry, ...] = (),
     route_counts: Mapping[tuple[str, ...], Mapping[str, float]] | None = None,
     route_contexts: tuple[tuple[str, ...], ...] = (),
+    consumed_censored_paths: tuple[tuple[str, str], ...] = (),
 ) -> dict[str, object]:
     """Serialize the complete restart-safe inference state."""
 
@@ -244,6 +246,10 @@ def serialize_occupancy_state(
             for prefix, targets in sorted((route_counts or {}).items())
         ],
         "route_contexts": [list(history) for history in sorted(route_contexts)],
+        "consumed_censored_paths": [
+            [gate_episode_id, source_edge_id]
+            for gate_episode_id, source_edge_id in sorted(consumed_censored_paths)
+        ],
     }
 
 
@@ -291,7 +297,7 @@ def restore_occupancy_state(
     """Validate and atomically reconstruct restart-safe inference state."""
 
     schema_version = payload.get("schema_version")
-    if schema_version not in {2, 3, OCCUPANCY_STORAGE_VERSION}:
+    if schema_version not in {2, 3, 4, OCCUPANCY_STORAGE_VERSION}:
         raise ValueError("unsupported occupancy storage schema")
     valid_zones = set(predictive_map.zones())
     policy_states = _restore_policy(
@@ -308,9 +314,7 @@ def restore_occupancy_state(
     map_fingerprint_matches = schema_version >= 3 and payload.get(
         "map_fingerprint"
     ) == map_fingerprint(predictive_map)
-    map_compatible = (
-        schema_version == OCCUPANCY_STORAGE_VERSION and map_fingerprint_matches
-    )
+    map_compatible = schema_version >= 4 and map_fingerprint_matches
     if not map_compatible:
         posterior = cold_start_posterior(
             predictive_map.zones(),
@@ -341,6 +345,7 @@ def restore_occupancy_state(
             transition_counts=transition_counts,
             route_counts=route_counts,
             route_contexts=(),
+            consumed_censored_paths=(),
             update_sequence=0,
             map_compatible=False,
             restore_status=(
@@ -451,6 +456,9 @@ def restore_occupancy_state(
         payload.get("route_contexts"),
         predictive_map,
     )
+    consumed_censored_paths = _restore_consumed_censored_paths(
+        payload.get("consumed_censored_paths", []),
+    )
     policy_audit = (
         ()
         if schema_version < 3
@@ -467,6 +475,7 @@ def restore_occupancy_state(
         transition_counts=transition_counts,
         route_counts=route_counts,
         route_contexts=route_contexts,
+        consumed_censored_paths=consumed_censored_paths,
         update_sequence=update_sequence,
         map_compatible=map_compatible,
         restore_status="restored",
@@ -899,6 +908,8 @@ def _restore_audit_movement_evidence(
         target = raw_item.get("target_zone")
         source_node_id = raw_item.get("source_node_id")
         target_node_id = raw_item.get("target_node_id")
+        via_zone = raw_item.get("via_zone")
+        via_node_id = raw_item.get("via_node_id")
         evidence_ids = raw_item.get("evidence_ids")
         disposition = raw_item.get("disposition")
         if (
@@ -915,10 +926,17 @@ def _restore_audit_movement_evidence(
             or target not in valid_zones
             or not (source_node_id is None or isinstance(source_node_id, str))
             or not isinstance(target_node_id, str)
+            or not (via_zone is None or via_zone in valid_zones)
+            or not (via_node_id is None or isinstance(via_node_id, str))
             or not isinstance(evidence_ids, list)
             or not all(isinstance(item, str) for item in evidence_ids)
             or disposition
-            not in {"graph_valid", "missed_movement", "missed_timing"}
+            not in {
+                "graph_valid",
+                "missed_movement",
+                "missed_timing",
+                "censored_graph_path",
+            }
         ):
             raise ValueError("stored policy audit movement evidence is invalid")
         restored.append(
@@ -935,6 +953,8 @@ def _restore_audit_movement_evidence(
                 target_node_id=target_node_id,
                 evidence_ids=tuple(evidence_ids),
                 disposition=disposition,
+                via_zone=via_zone,
+                via_node_id=via_node_id,
             )
         )
     return tuple(restored)
@@ -1085,6 +1105,7 @@ def _restore_directional_contexts(
                     "graph_valid",
                     "missed_movement",
                     "missed_timing",
+                    "censored_graph_path",
                 }
             ):
                 raise ValueError("stored directional context fields are invalid")
@@ -1132,6 +1153,23 @@ def _restore_directional_contexts(
         ):
             raise ValueError("stored directional context mass is invalid")
     return restored
+
+
+def _restore_consumed_censored_paths(
+    raw_paths: object,
+) -> tuple[tuple[str, str], ...]:
+    if not isinstance(raw_paths, list):
+        raise ValueError("stored consumed censored paths must be a list")
+    paths: list[tuple[str, str]] = []
+    for raw_path in raw_paths:
+        if (
+            not isinstance(raw_path, list)
+            or len(raw_path) != 2
+            or not all(isinstance(item, str) and item for item in raw_path)
+        ):
+            raise ValueError("stored consumed censored path is invalid")
+        paths.append((raw_path[0], raw_path[1]))
+    return tuple(sorted(set(paths)))
 
 
 def _restore_pending_departures(

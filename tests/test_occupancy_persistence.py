@@ -21,6 +21,7 @@ from custom_components.predictive_controls.model import PredictiveMap
 from custom_components.predictive_controls.observation_model import EntityEvidence
 from custom_components.predictive_controls.occupancy_graph import ZoneGraph
 from custom_components.predictive_controls.occupancy_persistence import (
+    _restore_consumed_censored_paths,
     _restore_policy_audit,
     _restore_route_contexts,
     _restore_route_counts,
@@ -161,6 +162,7 @@ def test_restart_scenario_round_trips_complete_inference_state() -> None:
             ("office", "hall"): {"kitchen": 3.5},
         },
         route_contexts=(("office", "hall"),),
+        consumed_censored_paths=(("binary_sensor.hall@gate", "office@source"),),
     )
 
     restored = restore_occupancy_state(payload, predictive_map, 1, NOW)
@@ -196,10 +198,42 @@ def test_restart_scenario_round_trips_complete_inference_state() -> None:
         ("office", "hall"): {"kitchen": 3.5},
     }
     assert restored.route_contexts == (("office", "hall"),)
+    assert restored.consumed_censored_paths == (
+        ("binary_sensor.hall@gate", "office@source"),
+    )
     assert restored.map_compatible
     assert restored.restore_status == "restored"
     assert restored.update_sequence == 2
     assert payload["map_fingerprint"] == map_fingerprint(predictive_map)
+
+
+def test_schema_four_restores_with_empty_censored_consumption_state() -> None:
+    predictive_map = make_map()
+    occupancy_filter = JointOccupancyFilter(predictive_map, 1, NOW)
+    payload = serialize_occupancy_state(
+        predictive_map,
+        occupancy_filter.posterior,
+        AutomationPolicy(ZoneGraph.from_map(predictive_map)).states,
+        (),
+        occupancy_filter.observations.entity_states,
+        {},
+        directional_contexts=occupancy_filter.directional_contexts,
+    )
+    payload["schema_version"] = 4
+    payload.pop("consumed_censored_paths")
+
+    restored = restore_occupancy_state(payload, predictive_map, 1, NOW)
+
+    assert restored.map_compatible
+    assert restored.consumed_censored_paths == ()
+
+
+@pytest.mark.parametrize("raw", ({}, [["only-one"]], [["", "source"]]))
+def test_consumed_censored_path_restore_rejects_malformed_values(
+    raw: object,
+) -> None:
+    with pytest.raises(ValueError, match="consumed censored path"):
+        _restore_consumed_censored_paths(raw)
 
 
 def test_route_storage_defaults_filters_and_rejects_malformed_values() -> None:

@@ -631,7 +631,7 @@ def test_integration_setup_unload_and_reload(
 
     entry = Entry()
     assert asyncio.run(integration.async_setup_entry(hass, entry))
-    assert stores[0].version == 4
+    assert stores[0].version == 5
     assert stores[0].key == "predictive_controls_entry_transitions"
     assert ("restore", legacy_payload) in calls
     with pytest.raises(NotImplementedError):

@@ -168,6 +168,8 @@ def _expanded_context_payload(context: PolicyAuditContext) -> dict[str, object]:
                 ),
                 "source_node_id": evidence.source_node_id,
                 "target_node_id": evidence.target_node_id,
+                "via_zone": evidence.via_zone,
+                "via_node_id": evidence.via_node_id,
                 "evidence_ids": list(evidence.evidence_ids),
                 "disposition": evidence.disposition,
             }

@@ -22,6 +22,26 @@ before occupancy successors merge.
   presumptively valid movement. Policy SHOULD accept the destination activation
   unless contradictory count, local, timing, or path evidence makes that
   assignment materially less plausible.
+- **MOVE-015:** A fresh target-positive observation MAY create one
+  `censored_graph_path` movement candidate from source $S$ through transient
+  gate $G$ to target $T$ when $S$, $G$, and $T$ are distinct, both physical
+  graph edges exist, and $G$ cannot emit a second positive edge because its raw
+  positive episode remains open. The gate episode MUST start before the latest
+  valid positive source edge, the target MUST follow that source edge, and both
+  intervals MUST fit the sum of configured edge timings, using the existing
+  per-edge default when timing is not configured. The candidate moves at most
+  one anonymous occupant from $S$ to $T$ with the normal event-level adjacent
+  movement prior based on $S$; it records $S$ as source and $G$ as explicit
+  `via` provenance. The open gate is structural route-availability evidence,
+  not another observation likelihood. Generating a candidate MUST atomically
+  consume the gate-episode/source-positive-edge pair so flaps or alternate
+  targets cannot reuse it; bounded consumption state MUST survive compatible
+  restart and clear when its evidence is no longer live. Policy MAY treat this
+  disposition as incoming activation support using the previous marginal of
+  $S$, but release, asserted-evidence invalidation, departure accumulation,
+  prediction, prelighting, and transition or route learning MUST remain limited
+  to ordinary `graph_valid` movement. Invalidated, cleared, replaced, stale,
+  disconnected, out-of-order, or multi-intermediate evidence MUST NOT qualify.
 
 An active sustained observation can establish that the occupant remained
 localized through the present. Transition timing consumes that explicit

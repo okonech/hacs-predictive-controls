@@ -9,6 +9,7 @@ from custom_components.predictive_controls.confidence import ZoneState
 from custom_components.predictive_controls.events import OccupancyEvent
 from custom_components.predictive_controls.markov import Prediction
 from custom_components.predictive_controls.occupancy_state import (
+    MovementEvidence,
     ObservationProvenance,
     PackedPolicyAuditContext,
     PolicyAuditEntry,
@@ -288,6 +289,21 @@ def test_runtime_status_payload_serializes_retained_policy_audit() -> None:
     )
     diagnostics = replace(
         make_diagnostics(),
+        joint_movement_evidence=(
+            MovementEvidence(
+                path_key=("office", "office_motion", "kitchen_motion"),
+                origin_zone="office",
+                source_zone="office",
+                target_zone="kitchen",
+                coherent_probability=0.75,
+                source_node_id="office_motion",
+                target_node_id="kitchen_motion",
+                evidence_ids=("office:on", "hall@episode", "kitchen:on"),
+                disposition="censored_graph_path",
+                via_zone="hall",
+                via_node_id="hall_motion",
+            ),
+        ),
         joint_last_provenance=ObservationProvenance(
             event_id="office-motion",
             evidence_episode_id="office-motion:1",
@@ -386,6 +402,21 @@ def test_runtime_status_payload_serializes_retained_policy_audit() -> None:
         "oldest_decision_at": "2026-06-07T12:00:00+00:00",
         "newest_decision_at": "2026-06-07T12:00:00+00:00",
     }
+    assert joint["movement_evidence"] == [
+        {
+            "path_key": ["office", "office_motion", "kitchen_motion"],
+            "origin_zone": "office",
+            "source_zone": "office",
+            "target_zone": "kitchen",
+            "coherent_probability": 0.75,
+            "source_node_id": "office_motion",
+            "target_node_id": "kitchen_motion",
+            "via_zone": "hall",
+            "via_node_id": "hall_motion",
+            "evidence_ids": ["office:on", "hall@episode", "kitchen:on"],
+            "disposition": "censored_graph_path",
+        }
+    ]
 
 
 def test_runtime_status_payload_serializes_reliability_review() -> None:
