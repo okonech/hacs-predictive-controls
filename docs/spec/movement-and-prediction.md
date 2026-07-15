@@ -2,18 +2,24 @@
 
 ## Sequential Movement
 
-Sequential graph-valid observations with compatible order, incoming context,
-and edge timing are the primary high-confidence movement path. Movement evidence
-retains origin, source, target, nodes, evidence IDs, probability, and disposition
-before occupancy successors merge.
+Sequential graph-valid observations with compatible order, latent predecessor
+assignment, and edge timing are the primary high-confidence movement path.
+Movement assignment retains origin, source, target, nodes, endpoint IDs,
+probability, and disposition inside the augmented Bayesian state before it is
+marginalized into the forward occupancy message. Physical-node observation
+episodes have semi-Markov bounded validity, and graph assignments may remain
+unresolved across a finite causal interval before finalization.
 
-- **MOVE-001:** Release and learning MUST use path-specific coherent probability,
-  not an aggregate of unrelated zone marginals. Learning retains the complete
-  route origin. Release MAY aggregate mutually exclusive route alternatives
-  that agree on the same immediate graph-valid source-to-target segment, but it
-  MUST NOT combine different source segments or graph-invalid dispositions.
-- **MOVE-002:** Graph departure MAY invalidate sustained origin evidence only
-  after the configured coherent movement gate passes.
+- **MOVE-001:** Release and learning MUST use probability summed from the
+  augmented joint mass satisfying the required path or support event, not an
+  aggregate of unrelated zone marginals or independently selected maxima.
+  Learning retains the complete route origin. Mutually exclusive alternatives
+  may aggregate only when they satisfy the same policy event; graph-invalid
+  dispositions never qualify as graph support.
+- **MOVE-002:** Graph departure MAY invalidate superseded historical origin
+  evidence only after the configured coherent movement gate passes. It MUST NOT
+  invalidate current valid sustained room-positive evidence to force automatic
+  final-occupant release.
 - **MOVE-003:** When two occupants share an origin, one departure leaves one
   occupant there and MUST NOT clear ownership.
 - **MOVE-004:** Another occupant's event MUST NOT advance or release the context
@@ -22,30 +28,105 @@ before occupancy successors merge.
   presumptively valid movement. Policy SHOULD accept the destination activation
   unless contradictory count, local, timing, or path evidence makes that
   assignment materially less plausible.
-- **MOVE-015:** A fresh target-positive observation MAY create one
-  `censored_graph_path` movement candidate from source $S$ through transient
-  gate $G$ to target $T$ when $S$, $G$, and $T$ are distinct, both physical
-  graph edges exist, and $G$ cannot emit a second positive edge because its raw
-  positive episode remains open. The gate episode MUST start before the latest
-  valid positive source edge, the target MUST follow that source edge, and both
-  intervals MUST fit the sum of configured edge timings, using the existing
-  per-edge default when timing is not configured. The candidate moves at most
-  one anonymous occupant from $S$ to $T$ with the normal event-level adjacent
-  movement prior based on $S$; it records $S$ as source and $G$ as explicit
-  `via` provenance. The open gate is structural route-availability evidence,
-  not another observation likelihood. Generating a candidate MUST atomically
-  consume the gate-episode/source-positive-edge pair so flaps or alternate
-  targets cannot reuse it; bounded consumption state MUST survive compatible
-  restart and clear when its evidence is no longer live. Policy MAY treat this
-  disposition as incoming activation support using the previous marginal of
-  $S$, but release, asserted-evidence invalidation, departure accumulation,
-  prediction, prelighting, and transition or route learning MUST remain limited
-  to ordinary `graph_valid` movement. Invalidated, cleared, replaced, stale,
-  disconnected, out-of-order, or multi-intermediate evidence MUST NOT qualify.
+- **MOVE-015:** A fresh target-positive observation MAY create a
+  `censored_graph_path` candidate from source $S$ through asserted
+  transient gate $G$ to target $T$ when $S$, $G$, and $T$ are distinct, both
+  physical graph edges exist, and $G$ cannot emit another positive edge because
+  its observation episode remains open. Source, gate, and target episode
+  intervals MUST have compatible order and fit the sum of configured edge
+  timings, using the shared per-edge default when timing is absent. The open gate
+  is structural route-availability evidence, not another observation
+  likelihood.
 
-An active sustained observation can establish that the occupant remained
-localized through the present. Transition timing consumes that explicit
-observation-validity interval; it does not rewrite the previous motion event.
+  One fresh target event moves at most one anonymous occupant. The same open gate
+  interval MAY support more than one crossing, up to the authoritative occupant
+  count, only when each crossing has a distinct compatible target event and a
+  feasible source-count assignment. Consumption is idempotent per
+  `(source episode, gate episode, target event)` assignment; the same target
+  event MUST NOT move two occupants. Ambiguous assignments remain alternatives
+  and MUST NOT create person identity.
+
+  Source-count feasibility is evaluated per predecessor configuration, not from
+  a zone marginal threshold. Assigning $k$ crossings from one source requires at
+  least $k$ occupants in that source in the predecessor configuration, consumes
+  $k$ distinct target events, and creates successors that decrement and
+  increment the corresponding anonymous zone counts exactly once per event.
+  Therefore two occupants in one source plus one gate interval and one target
+  event supports at most one crossing; two compatible target events may support
+  two crossings. When different sources compete for one target event, they are
+  mutually exclusive alternatives rather than simultaneous movements.
+
+  Policy MAY use a finalized interval-censored assignment as admissible arrival
+  or outside-support evidence under the same posterior event as ordinary graph
+  movement. Unresolved assignments MUST NOT release ownership. Prediction,
+  prelighting, transition learning, and route learning remain limited to
+  directly observed `graph_valid` movement.
+  Invalidated, stale, disconnected, out-of-order, or graph-incompatible evidence
+  MUST NOT qualify.
+
+## Bounded Causal Association
+
+The filter retains the exact unresolved factor graph of anonymous predecessor
+and endpoint-assignment variables while observations can still be causally
+connected. This is bounded fixed-lag data association over an event-indexed
+state model, not a dense time-sliced history and not persistent labeled
+tracking.
+
+Each candidate $C$ stores a semantic deadline:
+
+$$
+D(C)=\sup\{t:\text{an endpoint at event time }t\text{ can satisfy every episode
+validity and graph-timing constraint of }C\}.
+$$
+
+The candidate is created only when this feasible set is nonempty. Every profile
+and route bound is finite, so $D(C)$ is finite and computable by interval
+constraint propagation when the candidate is created or compatibly extended.
+Unrelated activity cannot extend it.
+
+The deployment declares one finite maximum accepted delivery lateness
+$L_{late}$. Trusted receive time $r$ and normalized source event timestamps MUST
+share the same validated UTC clock domain. At receive time $r$, the monotone
+event-time watermark is $W(r)=r-L_{late}$. An input at or before the finalized
+watermark is stale and is ignored diagnostically. An input newer than the
+watermark may be inserted into the retained graph and causes deterministic
+forward-message recomputation. A candidate finalizes exactly when $W(r)>D(C)$.
+A wall-clock callback may advance the watermark and evaluate finalization, but
+contributes no observation or movement evidence.
+
+- **MOVE-016:** A causal assignment remains revisable only before its stored
+  semantic deadline and while it is newer than the finalized watermark. Event
+  count, unrelated sensor traffic, inactivity, and room-specific timers MUST NOT
+  shorten or extend that interval.
+- **MOVE-017:** Accepted in-lag evidence MAY reweight unresolved anonymous
+  assignments and confirm or reject a prior interpretation. Activation MAY use
+  the forward decision immediately and is never retracted. Release waits for
+  every assignment and support variable on which it depends to finalize, so a
+  later smoothing update cannot retract an emitted release edge.
+- **MOVE-018:** Competing graph-valid source assignments into one target event
+  preserve ownership for every affected origin until the bounded association is
+  resolved. A stronger path MUST NOT release a different origin while a
+  graph-valid alternative backed by current local evidence can explain the same
+  target event.
+- **MOVE-019:** Finalization marginalizes expired assignment variables into the
+  forward occupancy message and MUST preserve occupancy probability exactly. It
+  MUST NOT release ownership or convert ambiguous mass into a precise track. A
+  finite finalized support certificate may remain only while its joint
+  probability and evidence validity remain available for policy or learning.
+- **MOVE-020:** The supported workload MUST declare numeric maximum accepted
+  event rate $R_{max}$, instantaneous burst $B_{max}$, active physical-node
+  episodes, maximum semantic route duration $D_{max}$, and $L_{late}$. The number
+  of accepted endpoints whose assignments can coexist is bounded by
+  $E_{max}=B_{max}+\lceil R_{max}(D_{max}+L_{late})\rceil$ after episode grouping;
+  diagnostics and benchmarks MUST report the tighter observed graph and joint-
+  assignment-state maxima. If input exceeds the envelope, processing MAY queue
+  and exceed the latency target, but inference MUST retain exact occupancy mass,
+  preserve existing `keep_on`, and withhold release and learning until the exact
+  association update completes. Overload MUST be explicit in diagnostics.
+
+An active sustained observation can support localization through its explicit
+validity interval. Transition timing conditions on that interval; it does not
+rewrite a previous event or create a synthetic endpoint.
 
 ## Anonymous Track Diagnostics
 
@@ -99,14 +180,15 @@ transition learning.
   graph continuation.
 - **PRED-004:** Multiple forward candidates are ranked only by configured or
   learned probabilities normalized over those candidates.
-- **PRED-005:** Contextless occupancy mass does not predict.
+- **PRED-005:** Occupancy mass without a qualifying finalized directional
+  assignment does not predict.
 - **PRED-006:** Simultaneous supported contexts retain independent leases that
   expire and cancel independently.
 - **PRED-007:** `prelight_plausible` is a bounded lease projection. It never feeds
   occupancy, movement, activation, or keep-on.
-- **PRED-008:** Learning requires high-probability path-specific graph movement.
-  It MUST NOT learn from prediction, contextless mass, missed movement, or
-  arbitrary temporal pairing of interleaved occupants.
+- **PRED-008:** Learning requires high-probability finalized path-specific graph
+  assignment. It MUST NOT learn from prediction, contextless mass, missed
+  movement, or arbitrary temporal pairing of interleaved occupants.
 - **PRED-009:** Shared transition statistics are allowed. Person-specific
   prediction requires an independent identity source and is out of scope.
 
@@ -125,12 +207,12 @@ can influence later predictions.
 - **PRED-012:** At a branch, the predictor uses the longest sufficiently
   supported matching route prefix, then backs off deterministically to shorter
   prefixes and finally shared first-order counts.
-- **PRED-013:** Learned route probability provides a small, bounded transition
-  prior boost among graph-valid candidates. With fresh compatible observations,
-  it MAY increase relative path and movement confidence. It MUST NOT alter a
-  sensor likelihood, create a graph-invalid candidate, override strong
-  contradictory live evidence, release `keep_on`, or independently set
-  `activation_plausible`.
+- **PRED-013:** Finalized route statistics MAY parameterize a small, bounded
+  prior adjustment among graph-valid assignment alternatives. That shared
+  transition parameter is upstream model state, not feedback from a prediction
+  lease. It requires fresh compatible observations and MUST NOT alter a sensor
+  likelihood, create a graph-invalid candidate, override strong contradictory
+  evidence, release `keep_on`, or independently set `activation_plausible`.
 - **PRED-014:** The route model MAY create `prelight_plausible` before raw
   destination motion when posterior path support and learned continuation
   probability pass their gates.

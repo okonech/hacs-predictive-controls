@@ -232,7 +232,9 @@ plausible approaches. Evaluate each against:
 
 1. Bayesian or probabilistic interpretation.
 2. Correlated evidence and double-counting risk.
-3. Zero-, one-, and two-occupant behavior.
+3. Every supported authoritative occupant count from zero through five,
+  including same-zone multiplicity and maximum-count performance. Use two
+  occupants as the primary calibration and adversarial replay profile.
 4. Sequential graph movement and missed-event recovery.
 5. Stuck, flapping, stale, unknown, and unavailable sensors.
 6. Out-of-order events and restart.
