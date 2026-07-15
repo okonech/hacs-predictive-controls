@@ -29,7 +29,7 @@ Before changing behavior in a matched file:
 
 Do not add room-specific inference, count timer evaluations as independent
 evidence, hard-delete valid relocation hypotheses to force an outcome, feed
-prediction into occupancy, release `keep_on` from uncertainty alone, or move
+prediction into occupancy, clear `active` from uncertainty alone, or move
 predictor defects into consuming Home Assistant automations.
 
 If desired behavior conflicts with the canonical specification, amend and agree

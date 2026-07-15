@@ -181,7 +181,7 @@ out of scope.
   recent accepted clear event time plus `stable_clear_window`, unless a
   reassertion in the same episode supersedes it. Stable clear finalization or
   availability loss changes evidence validity only; it MUST NOT move occupancy
-  or release `keep_on` by itself. A wall-clock callback MAY advance the
+  or clear `active` by itself. A wall-clock callback MAY advance the
   finalization frontier and re-evaluate already satisfied policy gates without
   adding evidence.
 - **EVID-019:** A clear observation contributes a calibrated weak absence

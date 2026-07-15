@@ -28,9 +28,10 @@ supported count.
 3. Graph movement is represented by bounded fixed-lag anonymous assignments.
    Asserted transition intervals may bridge missed edges, including distinct
    crossings by multiple occupants, without becoming repeated observations.
-4. Activation thresholds the forward probability of a supported arrival.
-   Release thresholds the finalized probability that the origin is empty and
-   every occupant is distinctly supported elsewhere.
+4. Acquisition thresholds the forward probability of a supported arrival and
+   sets the durable `active` policy state. Release thresholds the finalized
+   probability that the origin is empty and every occupant is distinctly
+   supported elsewhere, then clears `active`.
 5. Resolved departure, strict relocation, and count-accounted exclusion are
    support mechanisms for the same release event. Low marginal, local clear,
    elapsed time, unavailable state, unlocated mass, and prediction never suffice
@@ -79,9 +80,12 @@ map + count + sensor episodes -> occupancy + movement assignment -> prediction
 
 The normal Home Assistant contract is:
 
-1. `activation_plausible -> on` authorizes a normal turn-on.
-2. `keep_on -> off` authorizes a normal turn-off.
-3. `prelight_plausible -> on` optionally authorizes low-impact prelighting.
+1. `active -> on` turns normal outputs on.
+2. `active -> off` turns normal outputs off.
+3. `prelight -> on` optionally authorizes low-impact predictive lighting.
+
+The optional disabled-by-default `arrival` event exposes distinct accepted
+fresh episodes for advanced consumers. Ordinary automations do not need it.
 
 ## Conflict Rule
 

@@ -121,7 +121,7 @@ contributes no observation or movement evidence.
   diagnostics and benchmarks MUST report the tighter observed graph and joint-
   assignment-state maxima. If input exceeds the envelope, processing MAY queue
   and exceed the latency target, but inference MUST retain exact occupancy mass,
-  preserve existing `keep_on`, and withhold release and learning until the exact
+  preserve existing `active`, and withhold release and learning until the exact
   association update completes. Overload MUST be explicit in diagnostics.
 
 An active sustained observation can support localization through its explicit
@@ -184,8 +184,10 @@ transition learning.
   assignment does not predict.
 - **PRED-006:** Simultaneous supported contexts retain independent leases that
   expire and cancel independently.
-- **PRED-007:** `prelight_plausible` is a bounded lease projection. It never feeds
-  occupancy, movement, activation, or keep-on.
+- **PRED-007:** `prelight` is a bounded lease projection. The lease itself never
+  feeds occupancy, movement, `active`, policy, or route learning. Later
+  finalized graph-valid observed movement remains eligible for learning whether
+  or not `prelight` was on.
 - **PRED-008:** Learning requires high-probability finalized path-specific graph
   assignment. It MUST NOT learn from prediction, contextless mass, missed
   movement, or arbitrary temporal pairing of interleaved occupants.
@@ -212,8 +214,8 @@ can influence later predictions.
   transition parameter is upstream model state, not feedback from a prediction
   lease. It requires fresh compatible observations and MUST NOT alter a sensor
   likelihood, create a graph-invalid candidate, override strong contradictory
-  evidence, release `keep_on`, or independently set `activation_plausible`.
-- **PRED-014:** The route model MAY create `prelight_plausible` before raw
+  evidence, clear `active`, or independently set `active`.
+- **PRED-014:** The route model MAY create `prelight` before raw
   destination motion when posterior path support and learned continuation
   probability pass their gates.
 - **PRED-015:** Forward and return sequences are learned from observed movement

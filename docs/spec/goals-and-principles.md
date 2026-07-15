@@ -58,7 +58,7 @@ instead of reproducing model logic.
 ## Product Goals
 
 - **GOAL-001, false-off safety:** Ambiguous evidence MUST retain the last trusted
-  `keep_on` state.
+  `active` state.
 - **GOAL-002, strict activation:** New turn-ons MUST require fresh local evidence
   plus a supported path, unlocated mass, recovery state, or strict relocation.
   A fresh graph-backed arrival SHOULD activate by default unless specific
@@ -85,7 +85,8 @@ instead of reproducing model logic.
   posterior event probability, named gates, and a machine-readable reason.
 - **GOAL-010, determinism and performance:** Equal inputs MUST produce equal
   results with zero supported-state pruning. A valid raw detection SHOULD
-  produce its in-memory public activation decision within 50 ms and MUST do so
+  produce its in-memory public `active` acquisition decision within 50 ms and
+  MUST do so
   within 100 ms under the supported workload, including the maximum supported
   occupant count on the reference topology.
 - **GOAL-011, generic behavior:** Production logic MUST use roles, signal types,
@@ -96,7 +97,7 @@ instead of reproducing model logic.
 - **GOAL-013, eventual evidence-backed release:** When no valid local positive
   evidence remains and finalized augmented posterior mass places zero occupants
   in a held room while injectively supporting every configured occupant outside
-  it, policy MUST eventually clear `keep_on`. Elapsed time, local clear, low
+  it, policy MUST eventually clear `active`. Elapsed time, local clear, low
   marginal, unavailable state, unlocated mass, or prediction alone remains
   insufficient.
 - **GOAL-014, correlated-fault resistance:** Rapid toggles or aliases from one

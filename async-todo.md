@@ -22,9 +22,11 @@ Required implementation sequence:
 	that strong segment. Expected behavior is to preserve the unresolved causal
 	episode while local positive evidence remains, then emit `keep_on -> off`
 	only after the clear is valid and linked posterior/count evidence confirms
-	final departure.
+	final departure. At target cutover, retain the factual legacy assertion and
+	add the corresponding `active -> off` public edge.
 2. Preserve the 2026-07-14 Alex-office competing-source incident and its
-	continued-local-evidence public `keep_on` regression.
+	continued-local-evidence public `keep_on` regression. At target cutover, add
+	the corresponding assertion that `active` remains on.
 3. Before production behavior edits, prototype the compact indexed occupancy
 	array, complete precomputed move operators, exact small-model oracle, and
 	fixed-lag assignment graph. Run the reference map at $N=2$ and $N=5$, declare
@@ -59,3 +61,8 @@ Required implementation sequence:
 	overload, audit, persistence, serialize/restore, and startup measurements.
 11. Run every scenario family in `docs/spec/change-governance.md`, full branch
 	coverage, static checks, frontend tests, and performance gates before release.
+12. Implement `ENT-001` through `ENT-010`: add target `active`, `prelight`,
+	`home_active`, and problem entities; optional disabled arrival/probability
+	diagnostics; dual-project legacy aliases for at least one full release; migrate
+	repository-owned automations; and treat legacy entity removal as a separately
+	reviewed breaking change.

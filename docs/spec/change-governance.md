@@ -13,8 +13,10 @@ repository skill at
   controlling layer.
 - **GOV-003:** Preserve a diagnosed incident with the smallest permanent test
   containing material event order, timings, states, probabilities, and gates.
-- **GOV-004:** The regression MUST assert `activation_plausible`, `keep_on`, or
-  `prelight_plausible`; internal assertions are supplementary.
+- **GOV-004:** The regression MUST assert public `active` or `prelight` state, or
+  an `arrival` event when that optional contract controls the behavior. Internal
+  assertions are supplementary. During compatibility migration, a regression
+  MAY additionally assert the corresponding legacy projection.
 - **GOV-005:** Confirm the regression fails for the diagnosed reason before the
   production edit. If it cannot reproduce, improve diagnostics instead of
   guessing.
@@ -49,13 +51,13 @@ The retained suite MUST cover these orthogonal behavior families:
   aware emission and never subtracts historical positive evidence from a later
   occupancy state.
 2. **False-negative safety:** local clear, silence, low marginal, and periodic
-  evaluation alone produce no `keep_on -> off` edge; quiet occupants remain
+  evaluation alone produce no `active -> off` edge; quiet occupants remain
   protected without wall-time diffusion.
 3. **Current-positive safety:** a valid sustained room-positive assertion
   protects a long-held room from graph departure, count-accounted exclusion,
   another occupant's shared-corridor route, and interleaved paths.
 4. **Stuck-on tradeoff:** a continuously asserted sustained room sensor blocks
-  automatic release and produces actionable health diagnostics until
+  automatic `active` release and produces actionable health diagnostics until
   authoritative count/away, explicit reset, or device recovery.
 5. **Ordinary graph movement:** directly observed adjacent arrival activates and
   final departure releases when source, destination, final-origin, local
@@ -92,8 +94,10 @@ The retained suite MUST cover these orthogonal behavior families:
   marginals, count sequence, and policy hysteresis round-trip deterministically
   without synthetic edges or probability loss.
 11. **Prediction separation:** independent leases coexist and cancel
-   independently; repeated routes improve only compatible graph-valid
-   predictions and never independently activate, move, or release occupancy.
+  independently; repeated routes improve only compatible graph-valid
+  predictions and never independently set or clear `active`, move occupancy, or
+  become route-learning evidence. Finalized observed movement remains eligible
+  for learning regardless of prior `prelight` state.
 12. **Latency and bounds:** the reference workload is the 16-zone, 17-node,
   23-entity map with the existing deterministic 10,000-accepted-update,
   one-millisecond-spacing replay plus separate correlated-burst, maximum-lag,

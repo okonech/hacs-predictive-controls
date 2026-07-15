@@ -1,13 +1,19 @@
 # Predictive Controls
 
+> **Entity contract migration:** Release `0.1.20` still exposes the legacy
+> `activation_plausible`, `keep_on`, and `prelight_plausible` entities. The
+> canonical target under [`docs/spec`](docs/spec/README.md) replaces the default
+> room contract with one durable `active` desired state plus optional `prelight`.
+> The target implementation is pending; legacy and target projections will
+> coexist for at least one full released version during cutover.
+
 Predictive Controls is a Home Assistant custom integration that turns a graph of
 motion/presence sensors into **zone-level occupancy inference** that ordinary
 automations can consume. It answers questions raw motion sensors cannot on their
 own:
 
-- *Is this zone still occupied even though motion just cleared?* — `keep_on`
-- *Is a fresh raw detection plausible enough to turn something on?* — `activation_plausible`
-- *Which zone is a person most likely to enter next?* — `prelight_plausible`
+- *Should normal outputs for this zone currently be on?* — target `active`
+- *Which zone is a person most likely to enter next?* — target `prelight`
 - *How many people are inside, and where?* — anonymous multi-occupant tracking
 
 It models the home as anonymous people moving over a sensor adjacency graph,
@@ -27,9 +33,10 @@ model.
 - **Core idea:** each event updates graph-valid joint location hypotheses. A
   low-prior missed-movement path remains possible, but isolated evidence cannot
   silently relocate an already-accounted-for occupant.
-- **Output:** per-zone `activation_plausible`, `keep_on`, and
-  `prelight_plausible` entities plus diagnostic confidence/path/prediction
-  entities and whole-home aggregates.
+- **Target output:** per-zone `active` and optional `prelight`, whole-home
+  `home_active`, an actionable problem entity, and disabled-by-default arrival
+  events and probability diagnostics. Release `0.1.20` uses the legacy names
+  described below.
 - **Learning:** Markov edge probabilities for next-zone prediction.
 
 ## Installation
@@ -133,113 +140,80 @@ Physical adjacency is undirected and must be declared reciprocally. Optional
 physical edge; a missing override uses the default and never borrows the reverse
 direction's value.
 
-For each zone, the integration exposes:
+## Target Entity Contract
 
-- an activation-plausible binary sensor for deciding whether a fresh raw local
-  detection is safe enough to turn outputs on;
-- a keep-on binary sensor for deciding whether outputs should stay on even
-  after raw motion clears;
-- a prelight-plausible binary sensor for soft pre-lighting before a person
-  arrives, with probability and threshold attributes;
-- diagnostic confidence and entry-path sensors, with status, timing, source,
-  and reason attributes for troubleshooting.
+The target default per-zone surface has two binary sensors, not three:
 
-`activation_plausible` is intentionally stricter than posterior occupancy. A
-positive event must raise occupied probability to at least `0.60`, increase it
-by at least `0.20`, and have graph support, independent corroboration, prior
-unlocated mass, or a trusted recovery. Coherent adjacent movement support of at
-least `0.40` satisfies the graph-support gate. Prediction alone never makes
-activation plausible.
+| Entity                          | Meaning                                                                                                               |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `binary_sensor.<zone>_active`   | Durable normal-output desired state. A supported fresh acquisition turns it on; supported final release turns it off. |
+| `binary_sensor.<zone>_prelight` | Optional bounded prediction lease for low-impact path lighting.                                                       |
 
-The three automation signals are independent:
+The default whole-home entities are:
 
-- `activation_plausible` is a short pulse authorizing a fresh local turn-on;
-- `keep_on` is a conservative latch released by sufficiently strong
-  departure/relocation evidence, an authoritative reset/count of zero, or a
-  provisional low-confidence fallback;
-- `prelight_plausible` is a time-bounded prediction lease and is never occupancy
-  evidence.
+| Entity                                      | Meaning                                                                           |
+| ------------------------------------------- | --------------------------------------------------------------------------------- |
+| `binary_sensor.home_active`                 | Pure OR of per-zone `active` policy states; off is not proof of physical vacancy. |
+| `binary_sensor.predictive_controls_problem` | Actionable current integration fault; diagnostic only and never policy input.     |
 
-These entities are intended as an inference layer between raw motion sensors and
-lighting automations. Node-level prediction, separate status sensors,
-prediction-probability sensors, and motion-plausible entities are kept in the
-panel/status diagnostics instead of being exported as default HA entities.
+`active` is policy intent, not raw motion, a direct occupancy marginal, or the
+actual light state. Manually switching a light off never changes `active` and is
+respected until a later `active` state edge. Advanced consumers that deliberately
+want later accepted motion to reassert a manually disabled output may enable the
+optional `event.<zone>_arrival` and consume its `refreshed` event type.
 
-The automation-facing aggregate entities are:
+Arrival events and these probability sensors are disabled by default:
 
-- `binary_sensor.home_keep_on` for whole-home occupied/vacant logic;
-- `sensor.activation_plausible_zones` and `sensor.keep_on_zones`, each with the
-  relevant zones in attributes.
+- `sensor.<zone>_occupancy_probability`;
+- `sensor.<zone>_arrival_supported_probability`;
+- `sensor.<zone>_release_safe_probability`; and
+- `sensor.authoritative_occupant_count`.
 
-The diagnostic aggregate entities are:
+Detailed paths, competing assignments, evidence IDs, thresholds, and reasons
+remain in bounded panel, status, and policy-audit diagnostics.
 
-- `sensor.diagnostic_entry_path_plausible_zones` for fresh adjacent path hints;
-- `sensor.diagnostic_predicted_next_zone` with per-zone prediction
-  probabilities in attributes.
+### Current `0.1.20` Compatibility Entities
 
-Room automations should normally turn on from zone `activation_plausible`, turn
-off when zone `keep_on` clears, and optionally soft pre-light from zone
-`prelight_plausible`. Raw entities remain inputs and diagnostics, not the
-recommended automation contract.
+The released implementation still provides:
 
-`keep_on` releases only after path-specific evidence supports the final
-occupant's graph departure, strict relocation after missed movement,
-authoritative count or away state, or explicit reset. Elapsed time, low
-confidence, local clear, and unrelated activity do not release ownership.
+- `binary_sensor.<zone>_activation_plausible`, a short fresh-arrival lease;
+- `binary_sensor.<zone>_keep_on`, the current ownership latch;
+- `binary_sensor.<zone>_prelight_plausible`, the current prediction lease;
+- `binary_sensor.home_keep_on`;
+- per-zone diagnostic confidence and entry-path entities; and
+- aggregate activation, keep-on, entry-path, and prediction sensors.
 
-## Entities
+At target cutover, `keep_on` aliases `active`, `prelight_plausible` aliases
+`prelight`, and `home_keep_on` aliases `home_active`; `activation_plausible`
+retains its short accepted-arrival lease for compatibility. Existing registry
+entries remain usable for at least one full released version. Legacy removal is
+a separately reviewed breaking change.
 
-For every configured zone (`<zone>` is the zone id):
+## Using It in Automations
 
-| Entity                                                 | Value   | Meaning                                                                                               |
-| ------------------------------------------------------ | ------- | ----------------------------------------------------------------------------------------------------- |
-| `binary_sensor.<zone>_activation_plausible`            | on/off  | Fresh raw local detection is plausible enough to turn outputs on                                      |
-| `binary_sensor.<zone>_keep_on`                         | on/off  | Conservative occupancy-policy latch; a clear sensor alone does not turn it off                        |
-| `binary_sensor.<zone>_prelight_plausible`              | on/off  | Zone is predicted next *above threshold* (use this for gated pre-lighting)                            |
-| `sensor.<zone>_diagnostic_confidence`                  | 0–100 % | Diagnostic occupancy confidence, with `status`, `reason`, `occupancy_behavior`, and timing attributes |
-| `binary_sensor.<zone>_diagnostic_entry_path_plausible` | on/off  | Diagnostic fresh adjacent/path evidence into the zone, without prediction mixed in                    |
-
-Whole-home aggregates:
-
-| Entity                                         | Value   | Meaning                                                                         |
-| ---------------------------------------------- | ------- | ------------------------------------------------------------------------------- |
-| `binary_sensor.home_keep_on`                   | on/off  | Any zone currently wants outputs kept on                                        |
-| `sensor.activation_plausible_zones`            | count   | Activation-plausible zones listed in the `activation_plausible_zones` attribute |
-| `sensor.keep_on_zones`                         | count   | Keep-on zones listed in the `keep_on_zones` attribute                           |
-| `sensor.diagnostic_entry_path_plausible_zones` | count   | Diagnostic entry-path zones listed in attribute                                 |
-| `sensor.diagnostic_predicted_next_zone`        | zone id | Diagnostic arg-max predicted zone, with `zone_probabilities` attribute          |
-
-> `sensor.diagnostic_predicted_next_zone` names the most likely zone *even when its
-> probability is below the threshold*. For pre-lighting decisions, trigger on the
-> per-zone `binary_sensor.<zone>_prelight_plausible`, which respects the threshold.
-
-## Using it in automations
-
-The recommended room pattern uses only the three stable policy outputs: turn on
-from **activation-plausible**, turn off when **keep-on** clears, and optionally
-soft pre-light from **prelight-plausible**.
+After target cutover, one state entity controls the normal light lifecycle:
 
 ```yaml
 triggers:
   - trigger: state
-    entity_id: binary_sensor.living_room_activation_plausible
+    entity_id: binary_sensor.living_room_active
     to: "on"
-    id: occupancy_detected
+    id: active
   - trigger: state
-    entity_id: binary_sensor.living_room_keep_on
+    entity_id: binary_sensor.living_room_active
     to: "off"
-    id: occupancy_cleared
+    id: inactive
   - trigger: state
-    entity_id: binary_sensor.living_room_prelight_plausible
+    entity_id: binary_sensor.living_room_prelight
     to: "on"
     id: prelight
 actions:
   - choose:
-      - conditions: [{ condition: trigger, id: occupancy_detected }]
+      - conditions: [{ condition: trigger, id: active }]
         sequence:
           - action: light.turn_on
             target: { entity_id: light.living_room }
-      - conditions: [{ condition: trigger, id: occupancy_cleared }]
+      - conditions: [{ condition: trigger, id: inactive }]
         sequence:
           - action: light.turn_off
             target: { entity_id: light.living_room }
@@ -252,8 +226,8 @@ mode: restart
 ```
 
 Remove the `prelight` trigger and branch when predictive lighting is not wanted.
-`activation_plausible` already incorporates the fresh local event and its graph
-support; `keep_on` provides conservative false-off protection.
+The `active` latch combines strict acquisition and conservative false-off
+protection without making the automation reconstruct the policy lifecycle.
 
 ## How It Works
 
@@ -335,8 +309,10 @@ provides a capped branch-prior boost, ages over time, and learns outbound and
 return paths independently. Predictions exclude the incoming zone, remain
 independent for simultaneous path keys, and expire after their own lease. A
 forced graph continuation needs no history. Predictions are published through
-`prelight_plausible` and `sensor.diagnostic_predicted_next_zone` but never alter
-the occupancy posterior, activation, or `keep_on`.
+`prelight_plausible` and `sensor.diagnostic_predicted_next_zone` in release
+`0.1.20`; the target default projection is `prelight`. Neither projection alters
+the occupancy posterior, acquisition, `active`, or route learning. Later
+finalized observed movement may still train the route model.
 
 ### Restart behavior
 
@@ -391,7 +367,7 @@ Start with graph and sensor semantics, not policy thresholds:
 - `observation_model.py` — calibrated replacement likelihoods and provenance.
 - `transition_model.py` / `joint_filter.py` — graph propagation and Bayesian
   joint inference.
-- `automation_policy.py` — activation leases and conservative keep-on latches.
+- `automation_policy.py` — acquisition leases and conservative ownership latches.
 - `prediction.py` / `markov.py` — path-keyed leases and posterior-consistent
   transition learning.
 - `occupancy_persistence.py` — versioned atomic serialization and reconciliation.
@@ -432,7 +408,7 @@ timestamps so diagnostics state their actual coverage.
 
 `occupancy_diagnostics.reliability` provides a compact review summary without
 decompressing retained contexts. It deduplicates policy rows by sensor trigger,
-groups repeated positive captures rejected while `keep_on` remained off, and
+groups repeated positive captures rejected while ownership remained off, and
 reports repeated pulses of at most 30 seconds whose positive edge failed the
 occupied gate. These are investigation signals, not automatic declarations of
 sensor failure. The Occupancy tab also projects the most probable exact joint
@@ -451,8 +427,10 @@ For every diagnosed live incident, add a permanent regression containing the
 observed event order, timing, posterior/gate values, and expected public
 automation output. Establish that the test fails for the original behavior,
 then make the smallest generic predictor change that passes it. Prefer
-assertions on `activation_plausible`, `keep_on`, or `prelight_plausible` over
-room-specific automation logic.
+assertions on target `active` or `prelight` state, or the optional `arrival`
+event when it controls the behavior. Migration-era regressions may additionally
+assert factual legacy `activation_plausible`, `keep_on`, or
+`prelight_plausible` projections.
 
 ```bash
 python -m venv .venv

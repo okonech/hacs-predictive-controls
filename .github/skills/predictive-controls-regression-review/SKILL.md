@@ -1,6 +1,6 @@
 ---
 name: predictive-controls-regression-review
-description: 'Use for every report that Predictive Controls did not work properly, including a regression, incident, reported error, false activation, false shutoff, wrong keep_on state, missed activation, incorrect prediction, occupancy probability defect, movement-track defect, policy threshold change, inference redesign, or incident-derived fix. Requires an exact-timestamp failing public regression before implementation diagnosis, fresh context-isolated subagents for investigation and iterative specification verification, and a post-implementation conformance review.'
+description: 'Use for every report that Predictive Controls did not work properly, including a regression, incident, reported error, false active edge, false shutoff, missed acquisition, incorrect prelight or arrival event, occupancy probability defect, movement-track defect, policy threshold change, inference redesign, or incident-derived fix. Requires an exact-timestamp failing public regression before implementation diagnosis, fresh context-isolated subagents for investigation and iterative specification verification, and a post-implementation conformance review.'
 argument-hint: 'Describe the incident, regression, wrong prediction, or proposed model/policy change'
 ---
 
@@ -20,8 +20,10 @@ for individual gates and are not a second workflow.
   utilities, and neighboring tests is allowed at this gate; diagnosing
   production implementation is not.
 2. **Prove the regression.** Run only the new test against unchanged production
-  code. It MUST fail on the reported `activation_plausible`, `keep_on`, or
-  `prelight_plausible` behavior for the diagnosed reason. If it passes or fails
+  code. It MUST fail on target `active` or `prelight` state, or an `arrival`
+  event when that optional contract controls the behavior. During compatibility
+  migration, it MAY additionally fail on the corresponding legacy projection.
+  If it passes or fails
   for another reason, repair the reproduction before continuing.
   Once proved, freeze the regression for the remainder of the solution. Do not
   change its events, timestamps, topology, evidence strength, initial state,
@@ -87,7 +89,7 @@ Then load only the owning technical contract:
   `docs/spec/occupancy-and-evidence.md`;
 - tracks, relocation, prediction, or learning:
   `docs/spec/movement-and-prediction.md`;
-- activation, keep-on, release, public entities, or diagnostics:
+- acquisition, active ownership, release, public entities, or diagnostics:
   `docs/spec/automation-policy-and-observability.md`.
 
 If the requested behavior conflicts with the canonical specification, stop the
@@ -98,8 +100,8 @@ after the user agrees to the new design.
 
 - A light turned on, failed to turn on, turned off, or failed to turn off at the
   wrong time because of Predictive Controls output.
-- `activation_plausible`, `keep_on`, or `prelight_plausible` exposed an
-  unexpected state or edge.
+- `active` or `prelight` exposed an unexpected state or edge, or optional
+  `arrival` emitted incorrectly. Migration-era legacy projections also qualify.
 - Occupancy posterior, movement evidence, directional context, prediction,
   learning, persistence, or diagnostics appear wrong.
 - A sensor flap, stuck sensor, missing motion event, interleaved occupant path,
@@ -125,7 +127,7 @@ after the user agrees to the new design.
   inference or policy code.
 - Never treat prediction as occupancy evidence.
 - Never treat periodic reevaluation of one sensor state as independent evidence.
-- Never release `keep_on` from uncertainty, elapsed time, local clear, or low
+- Never clear `active` from uncertainty, elapsed time, local clear, or low
   marginal alone.
 
 ## Incident Evidence Detail
@@ -165,7 +167,7 @@ Choose one primary category and any contributing categories:
 | `POLICY` | Did correct inference produce the wrong activation, latch, release, or recovery decision? |
 | `PERSISTENCE` | Did restart, restore, migration, bootstrap, or map compatibility change the result? |
 | `MAP` | Is a node, binding, role, occupancy behavior, adjacency, or timing declaration wrong? |
-| `AUTOMATION` | Did a consumer violate the three-entity contract or execute the wrong branch? |
+| `AUTOMATION` | Did a consumer violate the `active`/`prelight` contract, misuse the optional arrival event, or execute the wrong branch? |
 | `EXTERNAL` | Did Home Assistant delivery, hardware state, timestamping, or unavailable data cause the symptom? |
 
 Step from wiring to the nearest code that directly computes the wrong result.
@@ -178,7 +180,7 @@ Create a compact matrix before proposing a fix:
 
 | Item | Required content |
 | --- | --- |
-| Public contract | Wrong or missing `activation_plausible`, `keep_on`, or `prelight_plausible` edge |
+| Public contract | Wrong or missing target `active`/`prelight` state or optional `arrival` event; include a legacy projection only when migration compatibility is material |
 | Governing goals | Relevant `GOAL-*` IDs |
 | Model rules | Relevant `MODEL-*`, `EVID-*`, `MOVE-*`, or `PRED-*` IDs |
 | Policy rules | Relevant `POL-*` IDs |
@@ -255,9 +257,9 @@ Reject or redesign a proposal if it:
   during timer-based duration evaluation;
 - deletes a valid low-prior hypothesis to force a desired posterior;
 - allows one unrelated remote event to invalidate local asserted evidence;
-- uses a timer or low confidence alone to release `keep_on`;
+- uses a timer or low confidence alone to clear `active`;
 - lets policy mutate occupancy probability;
-- lets prediction affect occupancy, movement, activation, or keep-on;
+- lets prediction affect occupancy, movement, `active`, or route learning;
 - breaks exact count, normalization, zero pruning, or context mass preservation;
 - handles a predictor defect in consuming automation YAML;
 - changes calibration against only one room or one incident replay.
