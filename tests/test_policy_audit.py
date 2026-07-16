@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+import custom_components.predictive_controls.policy_audit as policy_audit_module
 from custom_components.predictive_controls.occupancy_state import (
     MovementEvidence,
     ObservationProvenance,
@@ -225,6 +226,61 @@ def test_target_policy_v2_preencoded_packer_compacts_equal_lists() -> None:
     assert compact["first"] == {"__exact_shared_list_ref__": "list_000000"}
     assert compact["second"] == compact["first"]
     assert validate_target_policy_audit_context(packed) == payload
+
+
+def test_target_policy_v2_validates_each_canonical_large_list_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shared: list[object] = [
+        [index, {"value": index}] for index in range(1_000)
+    ]
+    distinct = [*shared, [1_000, {"value": 1_000}]]
+    validation_count = 0
+    validation_depth = 0
+    reject_reserved_keys = policy_audit_module._reject_reserved_keys
+
+    def count_validation(value: object) -> None:
+        nonlocal validation_count, validation_depth
+        if validation_depth == 0:
+            validation_count += 1
+        validation_depth += 1
+        try:
+            reject_reserved_keys(value)
+        finally:
+            validation_depth -= 1
+
+    monkeypatch.setattr(
+        policy_audit_module,
+        "_reject_reserved_keys",
+        count_validation,
+    )
+
+    pack_preencoded_policy_audit_payload(
+        {
+            "schema": "exact-policy-audit-v2",
+            "first": shared,
+            "alias": shared,
+            "equal": list(shared),
+            "distinct": distinct,
+        }
+    )
+
+    assert validation_count == 2
+
+
+def test_target_policy_v2_validates_distinct_reserved_large_list() -> None:
+    clean: list[object] = [[index] for index in range(2_000)]
+    invalid: list[object] = [*clean, {"__exact_shared_list_ref__": "reserved"}]
+
+    with pytest.raises(ValueError, match="shared lists are invalid"):
+        pack_preencoded_policy_audit_payload(
+            {
+                "schema": "exact-policy-audit-v2",
+                "clean": clean,
+                "clean_alias": clean,
+                "invalid": invalid,
+            }
+        )
 
 
 def test_target_policy_v2_packers_preserve_nonshared_nested_values() -> None:

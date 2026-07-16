@@ -220,6 +220,7 @@ def _compact_shared_lists(body: dict[str, object]) -> dict[str, object]:
     occurrences: dict[bytes, int] = {}
     first_occurrence: list[bytes] = []
     canonical_lists: dict[int, bytes] = {}
+    validated_lists: set[bytes] = set()
 
     def canonical_list(value: list[object]) -> bytes:
         identity = id(value)
@@ -233,8 +234,11 @@ def _compact_shared_lists(body: dict[str, object]) -> dict[str, object]:
         if isinstance(value, list):
             encoded = canonical_list(value)
             if len(encoded) >= MIN_SHARED_LIST_BYTES:
-                if any(isinstance(item, list | dict) for item in value):
+                if encoded not in validated_lists and any(
+                    isinstance(item, list | dict) for item in value
+                ):
                     _reject_reserved_keys(value)
+                    validated_lists.add(encoded)
                 if encoded not in occurrences:
                     first_occurrence.append(encoded)
                     occurrences[encoded] = 0
