@@ -6,24 +6,18 @@ import math
 from collections import defaultdict, deque
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, cast
 
-from .automation_policy import (
-    POLICY_AUDIT_MAX_CONTEXT_BYTES,
-    POLICY_AUDIT_MAX_ENTRIES,
-    POLICY_AUDIT_RETENTION,
-    PendingDeparture,
-)
-from .const import STORAGE_VERSION
 from .model import PredictiveMap
-from .observation_model import EntityEvidence
 from .occupancy_state import (
     DirectionalContext,
+    EntityEvidence,
     HypothesisKey,
     MovementEvidence,
     ObservationProvenance,
     PackedPolicyAuditContext,
+    PendingDeparture,
     PendingDepartureAudit,
     PolicyAuditContext,
     PolicyAuditEntry,
@@ -49,7 +43,10 @@ from .policy_audit import (
     stored_policy_audit_context_payload,
 )
 
-OCCUPANCY_STORAGE_VERSION = STORAGE_VERSION
+OCCUPANCY_STORAGE_VERSION = 5
+POLICY_AUDIT_RETENTION = timedelta(hours=12)
+POLICY_AUDIT_MAX_ENTRIES = 8192
+POLICY_AUDIT_MAX_CONTEXT_BYTES = 12 * 1024 * 1024
 
 
 @dataclass(frozen=True)

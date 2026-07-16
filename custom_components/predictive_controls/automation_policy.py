@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from collections import deque
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import datetime, timedelta
 
 from .occupancy_graph import ZoneGraph
@@ -20,6 +20,9 @@ from .occupancy_state import (
     ZonePolicyState,
     competing_current_update_source_nodes,
     zone_marginals,
+)
+from .occupancy_state import (
+    PendingDeparture as PendingDeparture,
 )
 from .policy_audit import (
     pack_policy_audit_context,
@@ -39,21 +42,6 @@ PROVISIONAL_RECOVERY_OCCUPIED_THRESHOLD = 0.40
 POLICY_AUDIT_RETENTION = timedelta(hours=12)
 POLICY_AUDIT_MAX_ENTRIES = 8192
 POLICY_AUDIT_MAX_CONTEXT_BYTES = 12 * 1024 * 1024
-
-
-@dataclass(frozen=True)
-class PendingDeparture:
-    """Accumulated path evidence carrying occupancy away from one origin."""
-
-    origin: str
-    current: str
-    probability: float
-    nonadjacent: bool
-    evidence_ids: tuple[str, ...]
-    disposition: str = "graph_valid"
-    segment_probability: float | None = None
-    destination_movement_probability: float | None = None
-    source_episode_ids: tuple[str, ...] = ()
 
 
 class AutomationPolicy:

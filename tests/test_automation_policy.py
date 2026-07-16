@@ -1162,3 +1162,6 @@ def posterior_for_marginals(
         {key: math.log(value) for key, value in weights.items()},
         now,
     )
+
+
+

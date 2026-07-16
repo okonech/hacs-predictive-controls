@@ -5,6 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from custom_components.predictive_controls.inference.types import (
+    MovementDisposition,
+    SupportEventAtom,
+)
 from custom_components.predictive_controls.markov import MarkovChain
 from custom_components.predictive_controls.model import PredictiveMap
 from custom_components.predictive_controls.occupancy_state import (
@@ -38,6 +42,30 @@ def make_map() -> PredictiveMap:
                 "bath": {"zone": "bath", "adjacent": ["landing"]},
             }
         }
+    )
+
+
+def finalized_support(
+    source_node: str,
+    target_node: str,
+    *,
+    support_id: str = "assignment:hall:direct",
+    endpoint_id: str = "hall@direct",
+    disposition: MovementDisposition = "graph_valid",
+    learning_eligible: bool = True,
+) -> SupportEventAtom:
+    predictive_map = make_map()
+    return SupportEventAtom(
+        support_id,
+        disposition,
+        predictive_map.nodes[source_node].occupancy_zone,
+        predictive_map.nodes[target_node].occupancy_zone,
+        (source_node, target_node),
+        (endpoint_id,),
+        (),
+        NOW,
+        NOW + timedelta(seconds=30),
+        learning_eligible,
     )
 
 
@@ -94,6 +122,52 @@ def test_prediction_scenario_learning_requires_consistent_high_mass_node_edge() 
 
     learned = manager.learn(make_update(("office", "hall"), 0.9, "hall"))
     assert learned == (("office", "hall"),)
+    assert manager.chain.counts["office"]["hall"] == pytest.approx(0.9)
+
+
+def test_finalized_support_creates_forward_prediction_leases() -> None:
+    manager = PredictionManager(make_map())
+
+    leases = manager.apply_finalized_supports(
+        ((finalized_support("office", "hall"), 0.8),),
+        NOW,
+    )
+
+    assert {lease.target_zone: lease.probability for lease in leases} == {
+        "kitchen": 0.4,
+        "living": 0.4,
+    }
+    assert all(lease.target_zone != "office" for lease in leases)
+
+
+def test_finalized_support_learning_requires_unique_high_mass_graph_edge() -> None:
+    manager = PredictionManager(make_map())
+    direct = finalized_support("office", "hall")
+    competing = finalized_support(
+        "kitchen",
+        "hall",
+        support_id="assignment:hall:competing",
+    )
+    missed = finalized_support(
+        "office",
+        "hall",
+        support_id="assignment:hall:missed",
+        endpoint_id="hall@missed",
+        disposition="missed_movement",
+        learning_eligible=False,
+    )
+
+    assert manager.learn_finalized_supports(((direct, 0.79),)) == ()
+    assert manager.learn_finalized_supports(((missed, 1.0),)) == ()
+    assert (
+        manager.learn_finalized_supports(
+            ((direct, 0.9), (competing, 0.9)),
+        )
+        == ()
+    )
+    assert manager.learn_finalized_supports(((direct, 0.9),)) == (
+        ("office", "hall"),
+    )
     assert manager.chain.counts["office"]["hall"] == pytest.approx(0.9)
 
 

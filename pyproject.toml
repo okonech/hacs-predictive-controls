@@ -1,7 +1,7 @@
 [project]
 name = "hacs-predictive-controls"
-version = "0.1.20"
-description = "Home Assistant custom integration for Markov-chain predictive controls"
+version = "0.2.0"
+description = "Home Assistant exact anonymous occupancy and predictive controls"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -50,6 +50,7 @@ module = [
   "custom_components.predictive_controls.binary_sensor",
   "custom_components.predictive_controls.config_flow",
   "custom_components.predictive_controls.diagnostics",
+  "custom_components.predictive_controls.event",
   "custom_components.predictive_controls.panel",
   "custom_components.predictive_controls.runtime",
   "custom_components.predictive_controls.sensor",
@@ -63,3 +64,7 @@ disable_error_code = [
   "untyped-decorator",
   "unused-ignore",
 ]
+
+[[tool.mypy.overrides]]
+module = "benchmarks.occupancy_performance"
+follow_imports = "skip"

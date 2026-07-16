@@ -12,12 +12,11 @@ them.
 
 Predictive Controls is an exact event-indexed anonymous Bayesian state-space
 model with semi-Markov physical-sensor episodes and bounded fixed-lag movement
-association for authoritative count $N$, with $0 \le N \le 5$:
+association for authoritative count $N$, with $0 \le N \le 2$:
 
-The primary operational profile is $N=2$. Calibration, optimization, incident
-replay, and routine performance measurement SHOULD emphasize two occupants,
-while correctness and hard performance bounds remain mandatory for every
-supported count.
+The primary and maximum operational profile is $N=2$. Calibration,
+optimization, incident replay, and routine performance measurement emphasize
+two occupants, while correctness remains mandatory for every supported count.
 
 1. Physical-node edge sequences form correlated observation episodes. Their
    event and duration emissions are integrated once; flaps, aliases, duplicate

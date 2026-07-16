@@ -10,12 +10,16 @@ if TYPE_CHECKING:
 
 from .const import (
     CONF_ACTIONS_YAML,
+    CONF_ACTIVATION_RISK_THRESHOLD,
     CONF_EXPECTED_OCCUPANTS,
     CONF_EXPECTED_OCCUPANTS_ENTITY,
     CONF_MAP_YAML,
+    CONF_RELEASE_RISK_THRESHOLD,
     CONF_TRANSITION_WINDOW,
+    DEFAULT_ACTIVATION_RISK_THRESHOLD,
     DEFAULT_EXPECTED_OCCUPANTS,
     DEFAULT_EXPECTED_OCCUPANTS_ENTITY,
+    DEFAULT_RELEASE_RISK_THRESHOLD,
     DEFAULT_TRANSITION_WINDOW,
     DOMAIN,
     STATIC_PATH_REGISTERED,
@@ -31,7 +35,7 @@ from .yaml_config import (
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORM_NAMES = ["sensor", "binary_sensor"]
+PLATFORM_NAMES = ["sensor", "binary_sensor", "event"]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -65,6 +69,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     expected_occupants_entity = str(
         options.get(CONF_EXPECTED_OCCUPANTS_ENTITY, DEFAULT_EXPECTED_OCCUPANTS_ENTITY)
     ).strip()
+    activation_risk_threshold = float(
+        options.get(
+            CONF_ACTIVATION_RISK_THRESHOLD,
+            DEFAULT_ACTIVATION_RISK_THRESHOLD,
+        )
+    )
+    release_risk_threshold = float(
+        options.get(CONF_RELEASE_RISK_THRESHOLD, DEFAULT_RELEASE_RISK_THRESHOLD)
+    )
     transition_store = PredictiveControlsStore(
         hass,
         STORAGE_VERSION,
@@ -81,6 +94,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         expected_occupants_entity=expected_occupants_entity,
         transition_store=transition_store,
         transition_counts=stored_transitions.get("transition_counts"),
+        activation_risk_threshold=activation_risk_threshold,
+        release_risk_threshold=release_risk_threshold,
     )
     runtime.restore_stored_state(stored_transitions, datetime.now().astimezone())
     runtime.start()

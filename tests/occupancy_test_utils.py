@@ -87,6 +87,13 @@ def assert_zone_timeline(
 
 def assert_normalized(tracker: ZoneConfidenceEngine) -> None:
     hypotheses = tracker.diagnostics.joint_posterior
+    if not hypotheses:
+        assert math.isclose(
+            tracker.diagnostics.joint_normalization,
+            1.0,
+            abs_tol=1e-12,
+        )
+        return
     assert math.isclose(
         math.fsum(math.exp(item.log_probability) for item in hypotheses),
         1.0,

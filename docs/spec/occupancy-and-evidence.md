@@ -4,7 +4,7 @@
 
 At accepted event index $k$, the hidden occupancy state is a count vector
 $X_k=(n_0,\ldots,n_Z)$ over configured zones plus `unlocated`, where
-$\sum_z n_z=N_k$ and the authoritative count $N_k\in\{0,1,2,3,4,5\}$. The state
+$\sum_z n_z=N_k$ and the authoritative count $N_k\in\{0,1,2\}$. The state
 contains multiplicity only, never person IDs, timestamps, event IDs, path IDs,
 sensors, confidence, or policy state. Later requirements use symbolic $N$;
 behavior MUST NOT be implemented as separate count-specific models.
@@ -16,7 +16,7 @@ $$
 $$
 
 For the 16-zone reference topology, the maximum supported count requires
-$\binom{21}{5}=20{,}349$ exact occupancy configurations. An implementation may
+$\binom{18}{2}=153$ exact occupancy configurations. An implementation may
 use a compact indexed numeric array, a count vector, canonical repeated
 positions, or an equivalent exact representation. It MUST NOT prune supported
 occupancy probability or silently approximate the posterior to meet the

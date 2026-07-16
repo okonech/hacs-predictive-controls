@@ -1,9 +1,53 @@
 # Predictive Controls Specification Migration Plan
 
-**Status:** Implementation handoff
+**Status:** Target implementation complete; release validation pending
 **Target:** The normative model under `docs/spec/`
-**Current release line:** `0.1.20`, storage schema 5
+**Current release line:** `0.2.0`, storage schema 6
 **Migration posture:** Exactness and public safety before compatibility or speed
+
+## Implementation Progress
+
+This ledger tracks implementation against the phases below. A phase is marked
+complete only when its production deliverables are present; repository-wide
+validation remains a separate final gate.
+
+- [x] **Phase 0 - Freeze public behavior and incident inputs.** Retained public
+   scenario families and exact-timestamp incident inputs are established.
+- [x] **Phase 1 - Investigate exact N=5 feasibility.** Compact count-vector
+   state, complete operators, and exact oracle parity were demonstrated. N=5
+   product support was later abandoned; the supported maximum is N=2.
+- [x] **Phase 2 - Add replacement engine port and differential harness.** The
+   neutral engine protocol, legacy adapter, target engine, oracle, and
+   differential runner exist.
+- [x] **Phase 3 - Implement physical-node observation episodes.** Event-indexed
+   node episodes, duration emissions, stable clear, aliases, and neutral
+   unavailable handling are implemented.
+- [x] **Phase 4 - Implement fixed-lag anonymous movement association.** Exact
+   unresolved factors, endpoint injectivity, interval constraints, replay,
+   watermark finalization, and overload diagnostics are implemented.
+- [x] **Phase 5 - Implement authoritative count kernels.** Exchangeable exact
+   count transitions support every authoritative count from zero through two.
+- [x] **Phase 6 - Replace policy gates with posterior events.** Exact
+   ArrivalSupported and finalized ReleaseSafe drive the target policy latch;
+   finalized support drives prediction and route learning.
+- [x] **Phase 7 - Introduce target persistence and deterministic restore.** Store
+   schema 6 persists the complete exact state and bounded target policy audit;
+   exact restore is atomic, and schema 5 migrates conservatively through neutral
+   target bootstrap without invented assignments or synthetic policy edges.
+- [x] **Phase 8 - Cut over the tracker facade.** Exact inference now owns
+   occupancy, policy, prediction, learned routes, and configured action
+   evaluation. Target entities, optional arrival/probability surfaces, bounded
+   audit, status, and compatibility projections all consume exact diagnostics.
+- [x] **Phase 9 - Enable counts 3 through 5 end to end.** Config flow,
+   WebSocket, panel, runtime controls, exact inference, status diagnostics, and
+   the optional authoritative-count sensor consistently support only zero
+   through five and retain the last valid count while an input is invalid.
+- [x] **Phase 10 - Remove the legacy production core and release the target
+   contract.** Authoritative runtime paths load only exact inference; schema-5
+   parsing and the release-0.1.20 replay comparator remain isolated for their
+   documented windows. Release documentation is updated, and an independent
+   implementation-conformance review found no target-contract blocker. Broad
+   quality, final benchmark, and external rollout evidence remain separate gates.
 
 This document tells an implementation agent how to migrate the current
 Predictive Controls engine to the normative specification. It is an execution
@@ -28,13 +72,14 @@ before diagnosing or editing the production behavior that caused it. Use fresh,
 context-isolated reviewers where the skill requires them.
 
 Do not change Home Assistant automations to compensate for an inference defect.
-Release `0.1.20` currently exposes the legacy consumer contract:
+Release `0.1.20` exposed the legacy consumer contract:
 
 1. `activation_plausible -> on` authorizes normal activation;
 2. `keep_on -> off` authorizes normal release; and
 3. `prelight_plausible -> on` optionally authorizes prediction-based prelighting.
 
-The target default contract defined by `ENT-001` through `ENT-010` is:
+Release `0.2.0` implements the target default contract defined by `ENT-001`
+through `ENT-010`:
 
 1. `active -> on` turns normal outputs on;
 2. `active -> off` turns normal outputs off; and
@@ -65,7 +110,7 @@ The migration is complete only when production implements all of the following:
 - the `active`/`prelight` default entity contract, bounded optional diagnostics,
   and simple automation consumption;
 - no probability pruning or silent approximate mode; and
-- measured compliance with the approved $N=2$ and $N=5$ workload gates.
+- measured compliance with the approved $N=2$ workload gates.
 
 ## Current Implementation Baseline
 
@@ -84,8 +129,8 @@ occupants. Important ownership boundaries are:
 | Prediction and route learning         | `prediction.py`, `route_model.py`, `markov.py`                                            | Preserve downstream-only behavior; consume only finalized graph-valid assignments.                          |
 | Persistence                           | `occupancy_persistence.py`, `storage.py`, `const.py`                                      | Introduce a new atomic schema; schema 5 cannot represent the target graph.                                  |
 | Public diagnostics                    | `status.py`, `diagnostics.py`, `websocket.py`, panel                                      | Add new diagnostics without breaking existing public entity IDs.                                            |
-| Occupant count validation             | `config_flow.py`, `websocket.py`, `joint_filter.py`, `occupancy_tracker.py`, `runtime.py` | Keep the public limit at 2 until the new core passes its $N=5 release gate.                                 |
-| Performance                           | `benchmarks/occupancy_performance.py`                                                     | Generalize to both counts and add factor-graph, persistence, and overload metrics.                          |
+| Occupant count validation             | `config_flow.py`, `websocket.py`, `joint_filter.py`, `occupancy_tracker.py`, `runtime.py` | Enforce the approved product maximum of two occupants at every public boundary.                             |
+| Performance                           | `benchmarks/occupancy_performance.py`                                                     | Gate N=2 across factor-graph, persistence, overload, and adversarial trace metrics.                         |
 
 The primary integration seam is `OccupancyTracker`. Runtime observations already
 flow through `observe`, count changes through `reconcile_expected_occupants`,
@@ -550,7 +595,8 @@ Use four complementary levels. None substitutes for another.
 
 ### Performance tests
 
-Run the 16-zone/17-node/23-entity reference map separately at $N=2$ and $N=5$.
+Run the 16-zone/17-node/23-entity reference map at the maximum supported count
+$N=2$.
 Include the deterministic 10,000-update one-millisecond replay plus correlated
 burst, maximum-lag, out-of-order, all-episodes-active, and overload traces.
 Report every metric required by governance scenario 12.
@@ -570,9 +616,9 @@ npm run test:frontend
   --output /tmp/predictive-controls-performance.json
 ```
 
-The benchmark command must be extended during Phase 1 to accept occupant count,
-trace profile, and target output. Final release validation must run the complete
-10,000-update $N=2$ and $N=5$ profiles, not only the 100-event CI smoke command.
+The benchmark command accepts occupant count, trace profile, and target output.
+Final release validation must run the complete 10,000-update $N=2$ profile, not
+only the 100-event CI smoke command.
 
 The Python test command enforces whole-package 100% branch coverage. Do not lower
 coverage, remove retained regressions, or relax exactness/performance gates to
@@ -603,13 +649,13 @@ The migration is complete when all of these are true:
 - The canonical specification has no known implementation discrepancy.
 - Both retained production incidents pass at the public contract.
 - All optimized operators match the exact oracle.
-- Every occupancy configuration for $N=0\ldots5$ remains represented with zero
+- Every occupancy configuration for supported $N=0\ldots2$ remains represented with zero
   pruned probability.
 - Observation episodes, count kernels, fixed-lag assignments, policy-event
   probabilities, prediction separation, and deterministic restore satisfy their
   named requirements.
-- The $N=2$ primary profile and $N=5$ maximum profile pass approved latency,
-  memory, graph, persistence, startup, and overload gates.
+- The $N=2$ primary and maximum profile passes approved latency, memory, graph,
+  persistence, startup, and overload gates.
 - All Python tests pass with 100% branch coverage; Ruff, mypy, and frontend tests
   pass.
 - The final independent conformance review returns `PASS`.

@@ -228,7 +228,10 @@ def test_schema_four_restores_with_empty_censored_consumption_state() -> None:
     assert restored.consumed_censored_paths == ()
 
 
-@pytest.mark.parametrize("raw", ({}, [["only-one"]], [["", "source"]]))
+@pytest.mark.parametrize(
+    "raw",
+    ({}, ["not-a-list"], [["only-one"]], [["", "source"]]),
+)
 def test_consumed_censored_path_restore_rejects_malformed_values(
     raw: object,
 ) -> None:
@@ -488,6 +491,14 @@ def _contextual_policy_audit_entry() -> tuple[dict[str, object], set[str]]:
             entry["context"] = context
             return entry, set(predictive_map.zones())
     raise AssertionError("test fixture did not produce movement evidence")
+
+
+def test_policy_audit_restore_accepts_valid_movement_evidence() -> None:
+    raw_entry, valid_zones = _contextual_policy_audit_entry()
+
+    restored = _restore_policy_audit([raw_entry], valid_zones, NOW)
+
+    assert restored[0].context is not None
 
 
 def _replace_nested(

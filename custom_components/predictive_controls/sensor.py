@@ -18,6 +18,7 @@ async def async_setup_entry(
 ) -> None:
     runtime: PredictiveControlsRuntime = hass.data[DOMAIN][entry.entry_id]
     entities: list[SensorEntity] = [
+        AuthoritativeOccupantCountSensor(runtime, entry.entry_id),
         DiagnosticPredictedNextZoneSensor(runtime, entry.entry_id),
         DiagnosticEntryPathPlausibleZonesSensor(runtime, entry.entry_id),
         ActivationPlausibleZonesSensor(runtime, entry.entry_id),
@@ -27,11 +28,24 @@ async def async_setup_entry(
         ZoneDiagnosticConfidenceSensor(runtime, entry.entry_id, zone)
         for zone in runtime.map.zones()
     )
+    entities.extend(
+        ZoneOccupancyProbabilitySensor(runtime, entry.entry_id, zone)
+        for zone in runtime.map.zones()
+    )
+    entities.extend(
+        ZoneArrivalSupportedProbabilitySensor(runtime, entry.entry_id, zone)
+        for zone in runtime.map.zones()
+    )
+    entities.extend(
+        ZoneReleaseSafeProbabilitySensor(runtime, entry.entry_id, zone)
+        for zone in runtime.map.zones()
+    )
     async_add_entities(entities)
 
 
 class RuntimeSensor(SensorEntity):
     _attr_should_poll = False
+    _attr_entity_registry_enabled_default = False
 
     def __init__(self, runtime: PredictiveControlsRuntime, entry_id: str) -> None:
         self.runtime = runtime
@@ -45,6 +59,31 @@ class RuntimeSensor(SensorEntity):
     @callback
     def _handle_update(self) -> None:
         self.async_write_ha_state()
+
+
+class AuthoritativeOccupantCountSensor(RuntimeSensor):
+    def __init__(self, runtime: PredictiveControlsRuntime, entry_id: str) -> None:
+        super().__init__(runtime, entry_id)
+        self._attr_name = "Authoritative Occupant Count"
+        self._attr_unique_id = f"{entry_id}_authoritative_occupant_count"
+
+    @property
+    def available(self) -> bool:
+        return self.runtime.authoritative_count_available
+
+    @property
+    def native_value(self) -> int | None:
+        return self.runtime.expected_occupants if self.available else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        return {
+            "source": self.runtime.expected_occupants_entity
+            or "configured_expected_occupants",
+            "requested_count": (
+                self.runtime.confidence.requested_expected_occupants
+            ),
+        }
 
 
 class DiagnosticPredictedNextZoneSensor(RuntimeSensor):
@@ -169,6 +208,115 @@ class ZoneDiagnosticConfidenceSensor(RuntimeSensor):
             else None,
             "last_node_id": state.last_node_id,
             "reason": state.reason,
+        }
+
+
+class ZoneProbabilitySensor(RuntimeSensor):
+    def __init__(
+        self,
+        runtime: PredictiveControlsRuntime,
+        entry_id: str,
+        zone: str,
+        key: str,
+        name: str,
+    ) -> None:
+        super().__init__(runtime, entry_id)
+        self.zone = zone
+        self._attr_name = f"{zone.replace('_', ' ').title()} {name}"
+        self._attr_unique_id = f"{entry_id}_{zone}_{key}"
+        self._attr_native_unit_of_measurement = "%"
+
+
+class ZoneOccupancyProbabilitySensor(ZoneProbabilitySensor):
+    def __init__(
+        self, runtime: PredictiveControlsRuntime, entry_id: str, zone: str
+    ) -> None:
+        super().__init__(
+            runtime,
+            entry_id,
+            zone,
+            "occupancy_probability",
+            "Occupancy Probability",
+        )
+
+    @property
+    def native_value(self) -> float:
+        probability = self.runtime.confidence.diagnostics.joint_occupied_marginals.get(
+            self.zone,
+            0.0,
+        )
+        return round(probability * 100, 1)
+
+
+class ZoneArrivalSupportedProbabilitySensor(ZoneProbabilitySensor):
+    def __init__(
+        self, runtime: PredictiveControlsRuntime, entry_id: str, zone: str
+    ) -> None:
+        super().__init__(
+            runtime,
+            entry_id,
+            zone,
+            "arrival_supported_probability",
+            "Arrival Supported Probability",
+        )
+
+    @property
+    def available(self) -> bool:
+        return (
+            self.zone
+            in self.runtime.confidence.diagnostics.joint_arrival_supported_probabilities
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        probability = self.runtime.confidence.diagnostics
+        if not self.available:
+            return None
+        return round(
+            probability.joint_arrival_supported_probabilities[self.zone] * 100,
+            1,
+        )
+
+
+class ZoneReleaseSafeProbabilitySensor(ZoneProbabilitySensor):
+    def __init__(
+        self, runtime: PredictiveControlsRuntime, entry_id: str, zone: str
+    ) -> None:
+        super().__init__(
+            runtime,
+            entry_id,
+            zone,
+            "release_safe_probability",
+            "Release Safe Probability",
+        )
+
+    @property
+    def available(self) -> bool:
+        diagnostics = self.runtime.confidence.diagnostics
+        policy_state = diagnostics.joint_policy_states.get(self.zone)
+        return bool(
+            diagnostics.joint_release_safe_available
+            and policy_state is not None
+            and policy_state.keep_on
+            and self.zone in diagnostics.joint_release_safe_probabilities
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        diagnostics = self.runtime.confidence.diagnostics
+        if not self.available:
+            return None
+        return round(
+            diagnostics.joint_release_safe_probabilities[self.zone] * 100,
+            1,
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        return {
+            "finalization_available": (
+                self.runtime.confidence.diagnostics.joint_release_safe_available
+            )
         }
 
 

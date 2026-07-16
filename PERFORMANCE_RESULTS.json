@@ -1,23 +1,23 @@
 {
   "bootstrap": {
-    "cold_inference_ms": 23.890584,
-    "cold_runtime_start_ms": 24.096962,
+    "cold_inference_ms": 23.547721,
+    "cold_runtime_start_ms": 23.166454,
     "entity_count": 23,
-    "restored_inference_ms": 9.277006,
-    "restored_runtime_start_ms": 9.101458
+    "restored_inference_ms": 9.078425,
+    "restored_runtime_start_ms": 8.848178
   },
   "candidate_expansion_ceiling": 2601,
   "core": {
     "candidate_expansions_max": 425,
     "configuration_count": 153,
-    "context_compactions": 3543825,
+    "context_compactions": 2659009,
     "context_count_max": 609,
     "event_count": 10000,
-    "max_ms": 25.512178,
-    "p50_ms": 10.707573,
-    "p95_ms": 12.047301,
-    "p99_ms": 15.968715,
-    "policy_audit_context_compressed_bytes": 6517959,
+    "max_ms": 30.570836,
+    "p50_ms": 5.669068,
+    "p95_ms": 15.319328,
+    "p99_ms": 18.055232,
+    "policy_audit_context_compressed_bytes": 4589261,
     "policy_audit_entry_count": 8192,
     "pruned_probability": 0.0
   },
@@ -26,6 +26,138 @@
     "platform": "Linux-7.1.3-arch1-1-x86_64-with-glibc2.43",
     "processor": "",
     "python": "3.12.13"
+  },
+  "episode_target": {
+    "2": {
+      "active_episode_max": 17,
+      "bootstrap_ms": 0.618515,
+      "configuration_count": 153,
+      "configuration_operations_per_update": 153,
+      "event_count": 10000,
+      "gates": {
+        "active_episode_bound": true,
+        "bootstrap_memory": true,
+        "configuration_count": true,
+        "hard_callback": true,
+        "normalization": true,
+        "preferred_callback": true,
+        "restart_determinism": true,
+        "startup": true,
+        "zero_pruning": true
+      },
+      "max_ms": 0.438506,
+      "normalization": 1.0,
+      "occupants": 2,
+      "p50_ms": 0.286547,
+      "p95_ms": 0.306937,
+      "p99_ms": 0.314167,
+      "passed": true,
+      "physical_node_count": 17,
+      "pruned_probability": 0.0,
+      "restore_ms": 1.00904,
+      "serialize_ms": 0.215458,
+      "serialized_bytes": 17952,
+      "startup_ms": 0.467075,
+      "tracemalloc_peak_bytes": 62131
+    },
+    "5": {
+      "active_episode_max": 17,
+      "bootstrap_ms": 25.465826,
+      "configuration_count": 20349,
+      "configuration_operations_per_update": 20349,
+      "event_count": 10000,
+      "gates": {
+        "active_episode_bound": true,
+        "bootstrap_memory": true,
+        "configuration_count": true,
+        "hard_callback": true,
+        "normalization": true,
+        "preferred_callback": true,
+        "restart_determinism": true,
+        "startup": true,
+        "zero_pruning": true
+      },
+      "max_ms": 46.81223,
+      "normalization": 1.0,
+      "occupants": 5,
+      "p50_ms": 28.446978,
+      "p95_ms": 30.380761,
+      "p99_ms": 31.324542,
+      "passed": true,
+      "physical_node_count": 17,
+      "pruned_probability": 0.0,
+      "restore_ms": 67.368982,
+      "serialize_ms": 0.364106,
+      "serialized_bytes": 219912,
+      "startup_ms": 41.35318,
+      "tracemalloc_peak_bytes": 8736459
+    }
+  },
+  "exact_target": {
+    "2": {
+      "bootstrap_peak_bytes": 320792,
+      "candidate_operations_per_update": 2448,
+      "configuration_count": 153,
+      "event_count": 10000,
+      "gates": {
+        "bootstrap_memory": true,
+        "configuration_count": true,
+        "hard_callback": true,
+        "normalization": true,
+        "operator_storage": true,
+        "persistence": true,
+        "preferred_callback": true,
+        "startup": true,
+        "zero_pruning": true
+      },
+      "max_ms": 0.582135,
+      "normalization": 1.0,
+      "occupants": 2,
+      "operator_build_ms": 7.56126,
+      "operator_storage_bytes": 208080,
+      "p50_ms": 0.124979,
+      "p95_ms": 0.132079,
+      "p99_ms": 0.145168,
+      "passed": true,
+      "posterior_storage_bytes": 1224,
+      "restore_ms": 0.02091,
+      "serialize_ms": 0.01056,
+      "serialized_bytes": 1224,
+      "state_space_ms": 0.343657,
+      "trace_profile": "deterministic"
+    },
+    "5": {
+      "bootstrap_peak_bytes": 32666724,
+      "candidate_operations_per_update": 325584,
+      "configuration_count": 20349,
+      "event_count": 10000,
+      "gates": {
+        "bootstrap_memory": true,
+        "configuration_count": true,
+        "hard_callback": true,
+        "normalization": true,
+        "operator_storage": true,
+        "persistence": true,
+        "preferred_callback": true,
+        "startup": true,
+        "zero_pruning": true
+      },
+      "max_ms": 28.27914,
+      "normalization": 1.0,
+      "occupants": 5,
+      "operator_build_ms": 1781.396547,
+      "operator_storage_bytes": 27674640,
+      "p50_ms": 21.011117,
+      "p95_ms": 21.846958,
+      "p99_ms": 22.81215,
+      "passed": true,
+      "posterior_storage_bytes": 162792,
+      "restore_ms": 2.226599,
+      "serialize_ms": 0.663024,
+      "serialized_bytes": 162792,
+      "state_space_ms": 53.271929,
+      "trace_profile": "deterministic"
+    }
   },
   "gates": {
     "PERF-001": true,
@@ -37,7 +169,7 @@
     "PERF-007": true,
     "PERF-008": true
   },
-  "generated_at": "2026-07-13T12:54:04.677038-04:00",
+  "generated_at": "2026-07-15T06:20:25.898742-04:00",
   "map": {
     "entities": 23,
     "nodes": 17,
@@ -46,22 +178,37 @@
     "zones": 16
   },
   "memory": {
-    "process_peak_rss_kib": 80028,
-    "tracemalloc_current_bytes": 12932416,
-    "tracemalloc_peak_bytes": 13569608
+    "process_peak_rss_kib": 77384,
+    "tracemalloc_current_bytes": 11866841,
+    "tracemalloc_peak_bytes": 12472258
   },
   "passed": true,
+  "target_ceilings": {
+    "bootstrap_peak_bytes": 134217728,
+    "callback_hard_ms": 100.0,
+    "callback_preferred_ms": 50.0,
+    "operator_storage_bytes": 33554432,
+    "serialized_posterior_bytes": 200000,
+    "startup_ms": 2500.0
+  },
   "runtime": {
     "event_count": 10000,
-    "max_ms": 45.067862,
-    "p50_ms": 10.758282,
-    "p95_ms": 13.118321,
-    "p99_ms": 24.994504,
+    "max_ms": 47.985754,
+    "p50_ms": 5.763816,
+    "p95_ms": 15.768203,
+    "p99_ms": 26.744692,
     "performance_budget_exceeded_count": 0
   },
   "targets": {
     "core_percentiles_below_30_ms": true,
     "runtime_tail_below_30_ms": true
   },
-  "targets_met": true
+  "targets_met": true,
+  "workload_envelope": {
+    "max_accepted_lateness_seconds": 2.0,
+    "max_active_episodes": 17,
+    "max_burst_events": 23,
+    "max_event_rate_hz": 10.0,
+    "max_route_duration_seconds": 120.0
+  }
 }

@@ -1,11 +1,10 @@
 # Predictive Controls
 
-> **Entity contract migration:** Release `0.1.20` still exposes the legacy
-> `activation_plausible`, `keep_on`, and `prelight_plausible` entities. The
-> canonical target under [`docs/spec`](docs/spec/README.md) replaces the default
-> room contract with one durable `active` desired state plus optional `prelight`.
-> The target implementation is pending; legacy and target projections will
-> coexist for at least one full released version during cutover.
+> **Entity contract migration:** Release `0.2.0` implements the canonical
+> [`docs/spec`](docs/spec/README.md) contract with one durable per-zone `active`
+> desired state plus optional `prelight`. The `activation_plausible`, `keep_on`,
+> and `prelight_plausible` entity IDs remain compatibility projections for this
+> release and will be removed only through a separately reviewed breaking change.
 
 Predictive Controls is a Home Assistant custom integration that turns a graph of
 motion/presence sensors into **zone-level occupancy inference** that ordinary
@@ -30,13 +29,13 @@ model.
 
 - **Input:** binary sensors (PIR, mmWave presence/target, radar) grouped into
   *nodes*, and nodes grouped into *zones* on an *adjacency graph*.
-- **Core idea:** each event updates graph-valid joint location hypotheses. A
-  low-prior missed-movement path remains possible, but isolated evidence cannot
-  silently relocate an already-accounted-for occupant.
+- **Core idea:** each physical-node episode updates a complete exact posterior
+  over anonymous zone-count configurations and bounded fixed-lag movement
+  assignments. No supported configuration is pruned.
 - **Target output:** per-zone `active` and optional `prelight`, whole-home
   `home_active`, an actionable problem entity, and disabled-by-default arrival
-  events and probability diagnostics. Release `0.1.20` uses the legacy names
-  described below.
+  events and probability diagnostics. Legacy names remain aliases during the
+  compatibility release described below.
 - **Learning:** Markov edge probabilities for next-zone prediction.
 
 ## Installation
@@ -59,8 +58,8 @@ The sidebar panel includes:
 - a drag-and-drop board for placing predictive nodes;
 - an occupancy tab that visualizes configured zones by floor with live
   confidence, status, and current anonymous posterior tracks;
-- a reliability tab that ranks repeated policy-rejected motion captures and
-  repeated short low-confidence pulses over retained audit coverage;
+- a reliability tab that presents retained compatibility-audit patterns when
+  schema-5 audit history is available;
 - a connect mode for creating adjacency edges between nodes;
 - a node inspector for labels, entity bindings, initial weights, and edge removal;
 - an actions tab for generic Home Assistant service-call YAML;
@@ -172,9 +171,9 @@ Arrival events and these probability sensors are disabled by default:
 Detailed paths, competing assignments, evidence IDs, thresholds, and reasons
 remain in bounded panel, status, and policy-audit diagnostics.
 
-### Current `0.1.20` Compatibility Entities
+### `0.2.0` Compatibility Entities
 
-The released implementation still provides:
+The integration also provides:
 
 - `binary_sensor.<zone>_activation_plausible`, a short fresh-arrival lease;
 - `binary_sensor.<zone>_keep_on`, the current ownership latch;
@@ -183,7 +182,7 @@ The released implementation still provides:
 - per-zone diagnostic confidence and entry-path entities; and
 - aggregate activation, keep-on, entry-path, and prediction sensors.
 
-At target cutover, `keep_on` aliases `active`, `prelight_plausible` aliases
+`keep_on` aliases `active`, `prelight_plausible` aliases
 `prelight`, and `home_keep_on` aliases `home_active`; `activation_plausible`
 retains its short accepted-arrival lease for compatibility. Existing registry
 entries remain usable for at least one full released version. Legacy removal is
@@ -191,7 +190,7 @@ a separately reviewed breaking change.
 
 ## Using It in Automations
 
-After target cutover, one state entity controls the normal light lifecycle:
+One state entity controls the normal light lifecycle:
 
 ```yaml
 triggers:
@@ -248,25 +247,28 @@ of occupied zones best explains the recent sensor evidence*.
 
 ### Joint posterior lifecycle
 
-Every hypothesis contains exactly `expected_occupants` anonymous positions.
-Positions are canonicalized, so swapping hypothetical identities does not
-create duplicate physical explanations. The supported state space is fixed at
-17 configurations for one occupant and 153 for two occupants on the repository
-map. For every sensor event the filter:
+Every hypothesis is an exchangeable count vector containing exactly
+`expected_occupants` anonymous positions across zones plus `unlocated`.
+Swapping hypothetical identities does not create duplicate physical
+explanations. The repository reference map has 17 configurations at one
+occupant, 153 at two, and 20,349 at five. For every physical-node episode the
+engine:
 
-1. leaves clears and duplicate states in place, while a positive event generates
-  stay plus one-occupant movement into only the observed zone;
-2. replaces that entity's previous likelihood contribution, so duplicate
-   same-state events cannot compound their own evidence;
-3. merges equivalent configurations in log space, normalizes, and derives
-  per-zone occupied/count marginals and path-specific movement evidence;
-4. updates policy latches and prediction leases without feeding either result
-   back into occupancy probability.
+1. updates calibrated episode emissions and incremental asserted-duration
+  survival likelihood without treating timer reevaluation as new evidence;
+2. propagates complete count-vector mass through exact precomputed movement and
+  authoritative count-transition operators;
+3. resolves bounded fixed-lag endpoint assignments, including interval-censored
+  crossings, in deterministic event-time order;
+4. computes occupied/count marginals plus `ArrivalSupported` and `ReleaseSafe`
+  augmented-event probabilities; and
+5. updates policy latches and prediction leases without feeding either result
+  back into occupancy probability.
 
 There is no ambient diffusion and no supported-count occupancy pruning. Every
-valid one- or two-occupant configuration remains represented, impossible states
-have exact zero mass, and bounded directional contexts preserve their parent
-occupancy mass when compacted.
+valid configuration for counts zero through two remains represented,
+impossible states have exact zero mass, and posterior plus augmented-event mass
+normalizes within `1e-12`.
 
 ### Movement and uncertainty
 
@@ -280,7 +282,8 @@ identity.
 ### Counting people (`expected_occupants`)
 
 Set `expected_occupants` (a fixed number, or bind it to an entity) to enable
-multi-occupant reasoning. This release supports zero, one, or two occupants:
+multi-occupant reasoning. This release supports every authoritative count from
+zero through two:
 
 - Every posterior configuration contains exactly N positions, including
   `unlocated` positions when the evidence does not identify a room.
@@ -292,12 +295,12 @@ multi-occupant reasoning. This release supports zero, one, or two occupants:
 
 `expected_occupants: 0` is authoritative nobody-home. It clears activation,
 keep-on, and prediction outputs; it no longer means unbounded tracking.
-Static counts above two are rejected. If a dynamic count entity reports above
-two, the integration publishes an explicit unsupported-count diagnostic,
-retains established `keep_on` latches, clears activation and prediction, and
+Static counts above five are rejected. If a dynamic count entity reports above
+five, the integration publishes an explicit unsupported-count diagnostic,
+retains established `active` latches, clears arrival and prediction leases, and
 suspends occupancy transitions instead of entering an approximate filter.
-Returning to one or two performs an atomic bootstrap from current entity states
-without emitting activation.
+Returning to a supported count performs an atomic bootstrap from current entity
+states without emitting activation or arrival events.
 
 ### Prediction (pre-lighting)
 
@@ -309,18 +312,21 @@ provides a capped branch-prior boost, ages over time, and learns outbound and
 return paths independently. Predictions exclude the incoming zone, remain
 independent for simultaneous path keys, and expire after their own lease. A
 forced graph continuation needs no history. Predictions are published through
-`prelight_plausible` and `sensor.diagnostic_predicted_next_zone` in release
-`0.1.20`; the target default projection is `prelight`. Neither projection alters
-the occupancy posterior, acquisition, `active`, or route learning. Later
+`prelight`, its compatibility `prelight_plausible` alias, and
+`sensor.diagnostic_predicted_next_zone`. Neither projection alters the occupancy
+posterior, acquisition, `active`, or route learning. Later
 finalized observed movement may still train the route model.
 
 ### Restart behavior
 
-The existing Home Assistant Store persists the normalized posterior, map
-fingerprint, authoritative count, policy latches/evidence IDs, unexpired leases,
-entity evidence needed for bootstrap deduplication, and shared transition
-counts plus bounded route statistics and live anonymous route contexts. Restore
-is validated atomically before current HA states are replayed.
+Home Assistant Store schema 6 persists the exact forward posterior, unresolved
+factor graph, endpoint tokens, event-time deadlines and watermark, physical-node
+episodes, support-event marginals, authoritative count sequence, policy
+hysteresis/audit, prediction leases, and learned transition and route state.
+Restore is deterministic and validated atomically before current HA states are
+replayed. Schema-5 data is read only by the compatibility migrator: it preserves
+sanitized ownership and learned counts but never fabricates target posterior or
+movement evidence.
 Bootstrap observations reconcile state without emitting activation or prediction
 pulses. Expired leases are dropped; removed map zones become `unlocated` rather
 than being guessed. Invalid schema, count, datetime, or probability data is
@@ -333,13 +339,12 @@ The hard callback ceiling is 100 ms; an over-budget update completes its state
 change atomically but suppresses activation and predictive actions. Routine core
 and runtime tail latency should remain at or below 30 ms.
 
-The 0.1.20 release-candidate benchmark uses the checked-in 16-zone, 17-node,
-23-entity reference map with two occupants and 10,000 deterministic events. On
-CPython 3.12.13 it measured a 25.512 ms core maximum, 24.995 ms runtime p99,
-and 45.068 ms runtime maximum, retained all 153 exact configurations, and
-pruned zero occupancy probability. See `PERFORMANCE_RESULTS.json` for the
-complete environment, percentiles, bootstrap timings, work bounds, and memory
-measurements.
+The `0.2.0` benchmark uses the checked-in 16-zone, 17-node, 23-entity reference
+map at the maximum supported count of two occupants over 10,000 deterministic
+updates. The checked-in artifact covers all 153 configurations with zero
+pruning, exact normalization, deterministic restart, fixed-lag workload,
+startup, persistence, operator storage, and memory measurements. See
+`PERFORMANCE_RESULTS.json` for the measured environment and gate results.
 
 Automated gates do not replace real sensor validation. The required seven-day
 Home Assistant observation has not yet been collected; see
@@ -363,15 +368,13 @@ Start with graph and sensor semantics, not policy thresholds:
 ### Code layout
 
 - `occupancy_graph.py` — zone graph: neighbors, movement corridors, distances.
-- `occupancy_state.py` — immutable canonical hypotheses and probability helpers.
-- `observation_model.py` — calibrated replacement likelihoods and provenance.
-- `transition_model.py` / `joint_filter.py` — graph propagation and Bayesian
-  joint inference.
-- `automation_policy.py` — acquisition leases and conservative ownership latches.
+- `inference/` — exact count-vector state space, physical-node episodes,
+  fixed-lag assignment, operators, augmented-event policy, and persistence.
+- `occupancy_state.py` — shared immutable compatibility records.
 - `prediction.py` / `markov.py` — path-keyed leases and posterior-consistent
   transition learning.
-- `occupancy_persistence.py` — versioned atomic serialization and reconciliation.
-- `occupancy_tracker.py` — compatibility facade over the joint stack.
+- `occupancy_persistence.py` — schema-5 compatibility reader.
+- `occupancy_tracker.py` — stable facade over the exact engine.
 - `automation_summary.py` — the stable automation-facing contract.
 - `confidence.py` — compatibility facade over the tracker.
 
@@ -393,25 +396,19 @@ logger:
 
 Diagnostics are available from the integration entry and include loaded nodes,
 entity bindings, current probabilities, and transition counts. The
-`occupancy_diagnostics.joint.policy_audit` retains up to 12 hours of policy
-decisions across restarts, capped at 8,192 decision entries and 12 MiB of
-compressed observation context. Each observation context remains complete but
-is transported and persisted as a `zlib-json-v1` envelope: base64-decode its
-`data` field, then zlib-decompress the canonical JSON. It contains provenance,
-pre/post occupied marginals, count marginals, active positive evidence, movement
-alternatives, and pending departures. Decision records retain gate values and
-each affected latch's before/after state. Accepted, replacement, duplicate,
-stale, and rejected observations all schedule a coalesced Store write. The
-adjacent `policy_audit_retention` object reports configured time and size bounds,
-current compressed-context bytes, entry count, and oldest/newest retained
-timestamps so diagnostics state their actual coverage.
+`occupancy_diagnostics.joint.policy_audit` retains up to 12 hours of target
+policy decisions across restarts, capped at 8,192 entries and 12 MiB. Each entry
+records the `ArrivalSupported` or `ReleaseSafe` decision, threshold inputs,
+accepted/rejected result, immutable evidence IDs, and `active` latch transition.
+Accepted, duplicate, stale, finalized, and rejected observations all schedule a
+coalesced Store write. The adjacent `policy_audit_retention` object reports the
+configured time and size bounds, current bytes, entry count, and oldest/newest
+retained timestamps so diagnostics state their actual coverage.
 
-`occupancy_diagnostics.reliability` provides a compact review summary without
-decompressing retained contexts. It deduplicates policy rows by sensor trigger,
-groups repeated positive captures rejected while ownership remained off, and
-reports repeated pulses of at most 30 seconds whose positive edge failed the
-occupied gate. These are investigation signals, not automatic declarations of
-sensor failure. The Occupancy tab also projects the most probable exact joint
+`occupancy_diagnostics.reliability` can summarize migrated schema-5 audit rows
+by sensor trigger during the compatibility window. Target-native audit remains
+available directly and does not fabricate an entity attribution when fixed-lag
+association is unresolved. The Occupancy tab also projects the most probable exact joint
 configuration as current anonymous tracks; track labels do not claim persistent
 person identity.
 

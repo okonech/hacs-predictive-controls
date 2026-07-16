@@ -80,6 +80,24 @@ competing-assignment mass keeps $a_z$ below the risk threshold.
 - **POL-006:** Exceeding the preferred 50 ms target is diagnostic. Exceeding the
   100 ms hard budget MUST be recorded and MUST NOT turn an otherwise valid
   acquisition into a rejection.
+- **POL-020:** `ArrivalSupported` is available only for the distinct fresh
+  physical endpoint created by the current accepted positive input. One
+  observation callback carries one input event and therefore has either one
+  current fresh target endpoint or none. The endpoint identifies an observation
+  episode, not an occupant. Its $a_z$ MUST marginalize every count-feasible
+  anonymous assignment alternative for that endpoint, including competing
+  sources; assignment ambiguity changes the probability and does not make the
+  physical target identity ambiguous.
+
+  An accepted in-lag input uses its own endpoint after deterministic replay even
+  when later event-time endpoints are retained in the same graph. Separate
+  accepted inputs, including distinct same-zone physical-node episodes, receive
+  separate acquisition evaluations while all endpoints remain in the joint
+  model. A duplicate, stale, alias or reassertion inside the same episode,
+  clear, availability update, count control, bootstrap, restore, timer or
+  watermark finalization has no current fresh target, MUST expose no $a_z$, and
+  MUST NOT authorize or refresh acquisition. Absence of a current $a_z$ does not
+  alter durable `active` ownership or `ReleaseSafe` evaluation.
 
 ## Active Ownership
 
@@ -112,6 +130,22 @@ categorical overrides.
   sensor storm cannot create an unbounded Store file. Complete context MAY use
   a lossless compressed representation in memory, persistence, and transport,
   but restore MUST validate and reconstruct the same context atomically.
+
+  New exact contexts use `exact-policy-audit-v2`. Their
+  `arrival_supported` record contains the threshold and two mappings with
+  identical zone keys: exact probabilities and target endpoint IDs. Every
+  target ID MUST resolve to one endpoint factor for that zone in the retained
+  encoded chain, and semantic validation MUST reconstruct $a_z$ from exactly
+  that endpoint. Missing, extra, duplicated, wrong-zone, or unknown target IDs
+  invalidate the complete restore atomically. An empty pair of mappings is the
+  canonical record for a decision without a current fresh target.
+
+  Signed `exact-policy-audit-v1` contexts remain valid historical records and
+  restore through their original deterministic latest-per-zone reconstruction
+  rule. That legacy rule is used only to validate v1 history; it MUST NOT select
+  targets for v2 contexts or live policy. Storage-envelope encoding, exact
+  number representation, integrity hashing, and decompression bounds remain
+  unchanged across the context versions.
 - **POL-014:** Reliability diagnostics MAY aggregate unique positive trigger
   events that policy rejected while `active` remained off, plus repeated short
   pulses whose positive edge failed the occupied gate. The aggregate MUST state
@@ -214,7 +248,7 @@ what evidence is missing.
      and an exact update remains incomplete; clear after exact work drains and
      processing returns inside the envelope;
   2. `invalid_authoritative_count` while the latest count input cannot produce
-     an accepted integer from zero through five and count-driven inference is
+      an accepted integer from zero through two and count-driven inference is
      suspended; clear on the next valid accepted count; and
   3. `restore_rejected` after target state is atomically rejected; clear after
      successful safe bootstrap and a valid target-state save.

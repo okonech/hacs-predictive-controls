@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.2.0 release candidate
+
+### Changed
+
+- Replaced production occupancy inference with the exact event-indexed anonymous
+	count-vector model for every supported authoritative count from zero through
+	two.
+	Complete same-zone multiplicity is retained with zero probability pruning.
+- Replaced removable current-state factors and capped directional contexts with
+	physical-node episodes, incremental duration survival, and deterministic
+	bounded fixed-lag movement/data association.
+- Replaced legacy acquisition/release gate conjunctions with posterior-event
+	`ArrivalSupported` and `ReleaseSafe` probabilities, asymmetric policy
+	thresholds, durable `active`, and optional `prelight`.
+- Made exact inference the sole production authority. The release-0.1.20 engine
+	remains isolated as a replay comparator for retained tests and is not imported
+	by runtime, tracker, status, entities, actions, or persistence dispatch.
+- Upgraded Home Assistant Store persistence to version 6 with exact augmented
+	state, deterministic unresolved-work restore, and bounded target policy audit.
+	Schema-5 input has a one-way compatibility reader that preserves sanitized
+	ownership and learned counts without translating legacy evidence into target
+	posterior support.
+- Extended static configuration, authoritative count entities, WebSocket
+	settings, the panel, inference, diagnostics, and persistence to counts zero
+	through two. Well-formed values above two enter the explicit unsupported-count
+	state and are never approximated or coerced into a supported posterior.
+- Made `active`, optional `prelight`, `home_active`, and the problem entity the
+	default automation surface. Existing `activation_plausible`, `keep_on`,
+	`prelight_plausible`, and `home_keep_on` IDs remain compatibility projections
+	for the documented `ENT-010` release window.
+
+### Added
+
+- Added disabled-by-default per-zone occupancy, `ArrivalSupported`, and
+	`ReleaseSafe` probability sensors plus the authoritative occupant-count sensor.
+- Added disabled-by-default idempotent per-zone arrival events with immutable
+	physical-node episode IDs and `acquired`/`refreshed` event types.
+- Added target policy-audit persistence and diagnostics containing accepted and
+	rejected decisions, threshold values, evidence IDs, and latch transitions.
+- Added exact operator/oracle, count-transition, episode, fixed-lag,
+	persistence/replay, policy, and supported-count regression coverage. Low-level
+	state-space stress tests retain generalized coverage above the product limit.
+
+### Performance
+
+- The checked-in 16-zone, 17-node, 23-entity benchmark covers 10,000 deterministic
+	updates at the maximum supported count of two occupants (153 configurations),
+	with exact normalization, zero pruning, deterministic restart, and measured
+	startup, persistence, operator storage, and memory limits.
+
+### Rollout status
+
+Production migration implementation is complete. Independent conformance, all
+repository quality gates, the final release benchmark, and the seven-day Home
+Assistant target-contract observation remain release blockers until recorded.
+
 ## 0.1.20 release candidate
 
 ### Added

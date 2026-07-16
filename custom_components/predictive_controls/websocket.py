@@ -8,16 +8,21 @@ from homeassistant.core import HomeAssistant, callback
 
 from .const import (
     CONF_ACTIONS_YAML,
+    CONF_ACTIVATION_RISK_THRESHOLD,
     CONF_EXPECTED_OCCUPANTS,
     CONF_EXPECTED_OCCUPANTS_ENTITY,
     CONF_MAP_YAML,
     CONF_PREDICTION_THRESHOLD,
+    CONF_RELEASE_RISK_THRESHOLD,
     CONF_TRANSITION_WINDOW,
+    DEFAULT_ACTIVATION_RISK_THRESHOLD,
     DEFAULT_EXPECTED_OCCUPANTS,
     DEFAULT_EXPECTED_OCCUPANTS_ENTITY,
     DEFAULT_PREDICTION_THRESHOLD,
+    DEFAULT_RELEASE_RISK_THRESHOLD,
     DEFAULT_TRANSITION_WINDOW,
     DOMAIN,
+    PRODUCT_MAX_OCCUPANTS,
 )
 from .entity_catalog import serialize_candidates
 from .entity_registry import async_cleanup_stale_entities
@@ -72,6 +77,14 @@ def _entry_payload(entry: Any) -> dict[str, Any]:
         "prediction_threshold": options.get(
             CONF_PREDICTION_THRESHOLD, DEFAULT_PREDICTION_THRESHOLD
         ),
+        "activation_risk_threshold": options.get(
+            CONF_ACTIVATION_RISK_THRESHOLD,
+            DEFAULT_ACTIVATION_RISK_THRESHOLD,
+        ),
+        "release_risk_threshold": options.get(
+            CONF_RELEASE_RISK_THRESHOLD,
+            DEFAULT_RELEASE_RISK_THRESHOLD,
+        ),
         "expected_occupants": options.get(
             CONF_EXPECTED_OCCUPANTS, DEFAULT_EXPECTED_OCCUPANTS
         ),
@@ -110,6 +123,14 @@ async def websocket_config(
         vol.Required("actions_yaml"): str,
         vol.Required("transition_window_seconds"): int,
         vol.Required("prediction_threshold"): float,
+        vol.Optional(
+            "activation_risk_threshold",
+            default=DEFAULT_ACTIVATION_RISK_THRESHOLD,
+        ): float,
+        vol.Optional(
+            "release_risk_threshold",
+            default=DEFAULT_RELEASE_RISK_THRESHOLD,
+        ): float,
         vol.Optional("expected_occupants", default=DEFAULT_EXPECTED_OCCUPANTS): int,
         vol.Optional(
             "expected_occupants_entity",
@@ -132,11 +153,27 @@ async def websocket_save_config(
         threshold = float(msg["prediction_threshold"])
         if not 0 <= threshold <= 1:
             raise ValueError("prediction_threshold must be between 0 and 1")
+        activation_threshold = float(
+            msg.get(
+                "activation_risk_threshold",
+                DEFAULT_ACTIVATION_RISK_THRESHOLD,
+            )
+        )
+        if not 0 <= activation_threshold <= 1:
+            raise ValueError("activation_risk_threshold must be between 0 and 1")
+        release_threshold = float(
+            msg.get(
+                "release_risk_threshold",
+                DEFAULT_RELEASE_RISK_THRESHOLD,
+            )
+        )
+        if not 0 <= release_threshold <= 1:
+            raise ValueError("release_risk_threshold must be between 0 and 1")
         transition_window = int(msg["transition_window_seconds"])
         if transition_window < 1:
             raise ValueError("transition_window_seconds must be positive")
         expected_occupants = int(msg["expected_occupants"])
-        if not 0 <= expected_occupants <= 2:
+        if not 0 <= expected_occupants <= PRODUCT_MAX_OCCUPANTS:
             raise ValueError("expected_occupants must be between zero and two")
         expected_occupants_entity = str(msg["expected_occupants_entity"]).strip()
         if expected_occupants_entity and "." not in expected_occupants_entity:
@@ -152,6 +189,8 @@ async def websocket_save_config(
             CONF_ACTIONS_YAML: msg["actions_yaml"],
             CONF_TRANSITION_WINDOW: transition_window,
             CONF_PREDICTION_THRESHOLD: threshold,
+            CONF_ACTIVATION_RISK_THRESHOLD: activation_threshold,
+            CONF_RELEASE_RISK_THRESHOLD: release_threshold,
             CONF_EXPECTED_OCCUPANTS: expected_occupants,
             CONF_EXPECTED_OCCUPANTS_ENTITY: expected_occupants_entity,
         },

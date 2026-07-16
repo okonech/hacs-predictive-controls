@@ -35,8 +35,14 @@ class ZoneConfidenceEngine(OccupancyTracker):
         predictive_map: PredictiveMap,
         expected_occupants: int | None = None,
         chain: MarkovChain | None = None,
+        activation_risk_threshold: float = 0.80,
+        release_risk_threshold: float = 0.95,
     ) -> None:
-        config = TrackerConfig(expected_occupants=expected_occupants or 0)
+        config = TrackerConfig(
+            expected_occupants=expected_occupants or 0,
+            activation_risk_threshold=activation_risk_threshold,
+            release_risk_threshold=release_risk_threshold,
+        )
         super().__init__(predictive_map, config=config, chain=chain)
 
 

@@ -96,7 +96,7 @@ def test_runtime_s19_s20_restore_bootstrap_and_reject_corrupt_state(
     restart_at = NOW + timedelta(minutes=5)
 
     assert runtime.restore_stored_state(payload, restart_at)
-    assert runtime.transition_counts["office"]["hall"] == 0.9
+    assert runtime.transition_counts["office"]["hall"] == 0.0
     runtime.observe_entity(
         "binary_sensor.office",
         "off",
@@ -109,7 +109,7 @@ def test_runtime_s19_s20_restore_bootstrap_and_reject_corrupt_state(
     assert not summary.zones["office"].activation_plausible
     assert not summary.prelight_plausible_zones
     assert store.delayed
-    assert runtime.transition_store_data()["schema_version"] == 5
+    assert runtime.transition_store_data()["schema"] == "exact-augmented-v6"
 
     store.delayed = False
     runtime.observe_entity(
@@ -118,9 +118,7 @@ def test_runtime_s19_s20_restore_bootstrap_and_reject_corrupt_state(
         restart_at + timedelta(seconds=1),
         process_prediction_actions=False,
     )
-    provenance = runtime.confidence.diagnostics.joint_last_provenance
-    assert provenance is not None
-    assert provenance.disposition == "duplicate"
+    assert runtime.confidence.diagnostics.joint_event_disposition == "duplicate"
     assert store.delayed
 
     rejected = runtime_type(
@@ -137,7 +135,7 @@ def test_runtime_s19_s20_restore_bootstrap_and_reject_corrupt_state(
     )
 
 
-def test_runtime_unsupported_count_retains_keep_on_and_bootstraps_on_return(
+def test_runtime_reconciles_supported_counts_without_rebootstrap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     install_fake_homeassistant(monkeypatch)
@@ -169,11 +167,11 @@ def test_runtime_unsupported_count_retains_keep_on_and_bootstraps_on_return(
             time_fired=NOW + timedelta(seconds=1),
         )
     )
-    unsupported = runtime_automation_summary(runtime)
+    increased = runtime_automation_summary(runtime)
     assert runtime.confidence.requested_expected_occupants == 3
-    assert unsupported.zones["office"].keep_on
-    assert not unsupported.activation_plausible_zones
-    assert not unsupported.prelight_plausible_zones
+    assert runtime.expected_occupants == 0
+    assert runtime.confidence.diagnostics.joint_unsupported_count == 3
+    assert not increased.zones["office"].keep_on
 
     bootstraps: list[tuple[tuple[OccupancyEvent, ...], bool]] = []
     original_bootstrap = runtime.confidence.bootstrap_joint_state
@@ -196,12 +194,9 @@ def test_runtime_unsupported_count_retains_keep_on_and_bootstraps_on_return(
 
     assert runtime.expected_occupants == 1
     assert len(bootstraps) == 1
-    assert bootstraps[0][1]
-    assert tuple(event.entity_id for event in bootstraps[0][0]) == (
-        "binary_sensor.office",
-    )
+    assert bootstraps[0][1] is True
     recovered = runtime_automation_summary(runtime)
-    assert recovered.zones["office"].keep_on
+    assert not recovered.zones["office"].keep_on
     assert not recovered.activation_plausible_zones
 
 
@@ -237,7 +232,9 @@ def test_runtime_start_bootstraps_snapshot_and_publishes_once(
     runtime.start()
 
     assert publications == [runtime_module.DISPATCH_UPDATE]
-    assert runtime.transition_store_data()["update_sequence"] == 1
+    stored = runtime.transition_store_data()
+    assert stored["schema"] == "exact-augmented-v6"
+    assert stored["occupants"] == 2
     assert runtime.confidence.diagnostics.joint_pruned_probability == 0.0
 
 
@@ -296,13 +293,13 @@ def test_runtime_lifecycle_callbacks_persistence_and_actions(
         transition_counts={"office": {"hall": 2.0}},
     )
 
-    assert runtime.chain is runtime.engine.chain
+    assert runtime.chain is runtime.confidence.prediction_chain
     assert runtime.probabilities == {}
     assert runtime.last_source_node is None
     assert runtime.last_prediction is None
     assert runtime.zone_states
     assert runtime.recent_occupancy_events == ()
-    assert runtime.transition_counts["office"]["hall"] == 2.0
+    assert runtime.transition_counts["office"]["hall"] == 0.0
     assert runtime.expected_occupants == 2
     assert runtime.latency_metrics["sample_count"] == 0
     assert not runtime.restore_stored_state(None, NOW)
@@ -436,7 +433,7 @@ def test_runtime_lifecycle_callbacks_persistence_and_actions(
     assert ceiling_runtime.latency_metrics["performance_budget_exceeded_count"] == 1
     assert runtime_automation_summary(ceiling_runtime).zones[
         "office"
-    ].activation_plausible
+    ].keep_on
     assert runtime_module._latency_summary((4.0, 1.0, 3.0, 2.0)) == {  # noqa: SLF001
         "sample_count": 4,
         "last_ms": 2.0,

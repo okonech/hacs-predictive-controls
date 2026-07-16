@@ -3,19 +3,17 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from .automation_policy import AutomationPolicy
+from .const import PRODUCT_MAX_OCCUPANTS
 from .events import OccupancyEvent
-from .joint_filter import JointOccupancyFilter
+from .inference.engine import ExactInferenceEngine
+from .inference.policy import PosteriorEventPolicy, PosteriorPolicyAuditEntry
+from .inference.port import EngineDiagnostics
 from .markov import MarkovChain
 from .model import PredictiveMap
 from .occupancy_graph import ZoneGraph
-from .occupancy_persistence import (
-    RestoredOccupancyState,
-    serialize_occupancy_state,
-)
 from .occupancy_scoring import status_for_confidence
 from .occupancy_state import (
     DirectionalContext,
@@ -29,6 +27,12 @@ from .occupancy_state import (
     ZonePolicyState,
 )
 from .prediction import PredictionManager
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(UTC)
 
 
 @dataclass(frozen=True)
@@ -73,6 +77,8 @@ class TrackerConfig:
     entry_plausibility_window: timedelta = timedelta(seconds=30)
     activation_plausibility_window: timedelta = timedelta(seconds=5)
     trail_window: timedelta = timedelta(minutes=3)
+    activation_risk_threshold: float = 0.80
+    release_risk_threshold: float = 0.95
 
     @property
     def occupant_limit(self) -> int | None:
@@ -157,8 +163,18 @@ class TrackerDiagnostics:
     joint_policy_states: dict[str, ZonePolicyState] = field(default_factory=dict)
     joint_policy_decisions: tuple[PolicyDecision, ...] = ()
     joint_policy_audit: tuple[PolicyAuditEntry, ...] = ()
+    joint_target_policy_audit: tuple[PosteriorPolicyAuditEntry, ...] = ()
+    joint_arrival_supported_probabilities: dict[str, float] = field(
+        default_factory=dict
+    )
+    joint_release_safe_available: bool = False
+    joint_release_safe_probabilities: dict[str, float] = field(default_factory=dict)
     joint_prediction_leases: tuple[PredictionLease, ...] = ()
     joint_prediction_hints: dict[str, float] = field(default_factory=dict)
+    joint_event_disposition: str | None = None
+    joint_route_transition_counts: dict[str, dict[str, float]] = field(
+        default_factory=dict
+    )
     joint_route_diagnostics: dict[str, object] = field(default_factory=dict)
     joint_route_statistics: dict[tuple[str, ...], dict[str, float]] = field(
         default_factory=dict
@@ -170,6 +186,7 @@ class TrackerDiagnostics:
         tuple[DirectionalContext, ...],
     ] = field(default_factory=dict)
     joint_posterior_entropy: float = 0.0
+    joint_normalization: float = 1.0
     joint_pruned_probability: float = 0.0
     joint_performance: dict[str, float | int] = field(default_factory=dict)
     joint_restore_status: str = "not_attempted"
@@ -193,11 +210,11 @@ class OccupancyTracker:
         self._requested_expected_occupants = requested_config.expected_occupants
         self._last_supported_expected_occupants = min(
             requested_config.expected_occupants,
-            2,
+            PRODUCT_MAX_OCCUPANTS,
         )
         self._unsupported_count = (
             requested_config.expected_occupants
-            if requested_config.expected_occupants > 2
+            if requested_config.expected_occupants > PRODUCT_MAX_OCCUPANTS
             else None
         )
         self.config = (
@@ -215,11 +232,34 @@ class OccupancyTracker:
             for zone in predictive_map.zones()
         }
         self._recent_events: list[OccupancyEvent] = []
-        self._joint_filter: JointOccupancyFilter | None = None
-        self._joint_policy = AutomationPolicy(self.graph)
-        self._joint_predictions = PredictionManager(predictive_map, chain)
+        policy = PosteriorEventPolicy(
+            predictive_map.zones(),
+            activation_threshold=requested_config.activation_risk_threshold,
+            release_threshold=requested_config.release_risk_threshold,
+        )
+        self._engine = ExactInferenceEngine(
+            predictive_map,
+            self.config.expected_occupants,
+            policy=policy,
+        )
+        self._engine_diagnostics = self._engine.diagnostics
         self._joint_restore_status = "not_attempted"
         self._joint_restore_reason: str | None = None
+
+    @property
+    def _joint_policy(self) -> PosteriorEventPolicy:
+        policy = self._engine.policy
+        if policy is None:
+            raise RuntimeError("Target policy is unavailable")
+        return policy
+
+    @property
+    def _joint_predictions(self) -> PredictionManager:
+        return self._engine.predictions
+
+    @property
+    def prediction_chain(self) -> MarkovChain:
+        return self._joint_predictions.chain
 
     @property
     def states(self) -> dict[str, ZoneState]:
@@ -227,24 +267,15 @@ class OccupancyTracker:
 
     @property
     def joint_states(self) -> dict[str, ZoneState]:
-        if self._joint_filter is None:
-            return self._base_states.copy()
-        last_update = self._joint_filter.last_update
-        provenance = None if last_update is None else last_update.provenance
-        occupied_marginals = self._joint_filter.occupied_marginals
+        diagnostics = self._engine_diagnostics
         return {
-            zone: self._project_zone_state(
-                zone,
-                base,
-                provenance,
-                occupied_marginals.get(zone, 0.0),
-            )
-            for zone, base in self._base_states.items()
+            zone: self._zone_state_from_diagnostics(zone, diagnostics)
+            for zone in self._base_states
         }
 
     @property
     def joint_prediction_probabilities(self) -> dict[str, float]:
-        return self._joint_predictions.probabilities
+        return dict(self._engine_diagnostics.prediction_probabilities)
 
     @property
     def requested_expected_occupants(self) -> int:
@@ -256,47 +287,41 @@ class OccupancyTracker:
 
     @property
     def tracks(self) -> tuple[AnonymousTrack, ...]:
-        joint_filter = self._joint_filter
-        if joint_filter is None or not joint_filter.posterior.hypotheses:
-            return ()
-
-        positions = joint_filter.posterior.hypotheses[0].key.positions
-        count_marginals = joint_filter.count_marginals
-        asserted_evidence = joint_filter.asserted_positive_evidence(
-            joint_filter.posterior.updated_at
-        )
-        occurrences: dict[str, int] = {}
+        diagnostics = self._engine_diagnostics
         tracks: list[AnonymousTrack] = []
-        for position in positions:
-            zone = position.zone
-            if zone is None:
-                continue
-            occurrence = occurrences.get(zone, 0) + 1
-            occurrences[zone] = occurrence
-            probabilities = count_marginals.get(zone, ())
-            confidence = math.fsum(probabilities[occurrence:])
-            evidence = asserted_evidence.get(zone, ())
-            tracks.append(
-                AnonymousTrack(
-                    track_id=f"track_{len(tracks) + 1}",
-                    zone=zone,
-                    confidence=confidence,
-                    active=bool(evidence),
-                    last_evidence_at=max(
-                        (item.changed_at for item in evidence),
-                        default=position.entered_at,
-                    ),
-                    source_entities=tuple(item.entity_id for item in evidence),
+        current_zones: set[str] = set()
+        for state in diagnostics.episode_states:
+            zone = getattr(state, "zone", None)
+            if isinstance(zone, str) and getattr(state, "current_positive", False):
+                current_zones.add(zone)
+        for zone, count in diagnostics.most_likely_counts.items():
+            probabilities = diagnostics.count_marginals.get(zone, ())
+            for occurrence in range(1, count + 1):
+                tracks.append(
+                    AnonymousTrack(
+                        track_id=f"track_{len(tracks) + 1}",
+                        zone=zone,
+                        confidence=math.fsum(probabilities[occurrence:]),
+                        active=zone in current_zones,
+                        last_evidence_at=diagnostics.updated_at,
+                        source_entities=tuple(
+                            sorted(
+                                {
+                                    event.entity_id
+                                    for event in self._recent_events
+                                    if event.zone == zone
+                                }
+                            )
+                        ),
+                    )
                 )
-            )
         return tuple(tracks)
 
     @property
     def diagnostics(self) -> TrackerDiagnostics:
-        joint_filter = self._joint_filter
-        last_update = None if joint_filter is None else joint_filter.last_update
+        engine = self._engine_diagnostics
         return TrackerDiagnostics(
-            expected_occupants=self.config.expected_occupants,
+            expected_occupants=engine.expected_occupants,
             tracks=self.tracks,
             protected_tracks=(),
             protected_corridor=(),
@@ -304,44 +329,47 @@ class OccupancyTracker:
             inferred_departures=(),
             prediction_hints={},
             dwell_seconds={},
-            joint_posterior=()
-            if joint_filter is None
-            else joint_filter.posterior.hypotheses,
-            joint_occupied_marginals={}
-            if joint_filter is None
-            else joint_filter.occupied_marginals,
-            joint_count_marginals={}
-            if joint_filter is None
-            else joint_filter.count_marginals,
-            joint_policy_states=self._joint_policy.states,
-            joint_policy_decisions=self._joint_policy.last_decisions,
-            joint_policy_audit=self._joint_policy.policy_audit,
-            joint_prediction_leases=self._joint_predictions.leases,
-            joint_prediction_hints=self._joint_predictions.probabilities,
-            joint_route_diagnostics=self._joint_predictions.route_diagnostics,
-            joint_route_statistics=self._joint_predictions.route_counts,
-            joint_last_provenance=None
-            if last_update is None
-            else last_update.provenance,
-            joint_movement_evidence=()
-            if last_update is None
-            else last_update.movement_evidence,
-            joint_directional_contexts={}
-            if joint_filter is None
-            else joint_filter.directional_contexts,
-            joint_posterior_entropy=0.0
-            if joint_filter is None
-            else -math.fsum(
-                math.exp(hypothesis.log_probability) * hypothesis.log_probability
-                for hypothesis in joint_filter.posterior.hypotheses
-                if hypothesis.log_probability != -math.inf
+            joint_posterior=(),
+            joint_occupied_marginals=dict(engine.occupied_marginals),
+            joint_count_marginals=dict(engine.count_marginals),
+            joint_policy_states=dict(engine.policy_states),
+            joint_policy_decisions=engine.policy_decisions,
+            joint_policy_audit=(),
+            joint_target_policy_audit=engine.policy_audit,
+            joint_arrival_supported_probabilities=dict(
+                engine.arrival_supported_probabilities
             ),
-            joint_pruned_probability=0.0
-            if joint_filter is None
-            else joint_filter.posterior.pruned_probability,
-            joint_performance={}
-            if joint_filter is None
-            else joint_filter.performance_metrics,
+            joint_release_safe_available=engine.release_safe_available,
+            joint_release_safe_probabilities=dict(
+                engine.release_safe_probabilities
+            ),
+            joint_prediction_leases=engine.prediction_leases,
+            joint_prediction_hints=dict(engine.prediction_probabilities),
+            joint_event_disposition=engine.event_disposition,
+            joint_route_transition_counts={
+                source: dict(targets)
+                for source, targets in engine.route_transition_counts.items()
+            },
+            joint_route_diagnostics=dict(engine.route_diagnostics),
+            joint_route_statistics={
+                prefix: dict(targets)
+                for prefix, targets in engine.route_statistics.items()
+            },
+            joint_last_provenance=None,
+            joint_movement_evidence=(),
+            joint_directional_contexts={},
+            joint_posterior_entropy=0.0,
+            joint_normalization=engine.normalization,
+            joint_pruned_probability=engine.pruned_probability,
+            joint_performance={
+                "factor_step_count": engine.factor_step_count,
+                "last_operation_count": engine.factor_step_count,
+                "last_candidate_expansions": engine.factor_step_count,
+                "last_context_compactions": 0,
+                "unresolved_assignment_count": engine.unresolved_assignment_count,
+                "retained_input_count": engine.retained_input_count,
+                "overloaded": int(engine.overloaded),
+            },
             joint_restore_status=self._joint_restore_status,
             joint_restore_reason=self._joint_restore_reason,
             joint_requested_occupants=self._requested_expected_occupants,
@@ -349,17 +377,7 @@ class OccupancyTracker:
         )
 
     def state_for_zone(self, zone: str) -> ZoneState:
-        base = self._base_states.get(zone, ZoneState(zone=zone))
-        if self._joint_filter is None or zone not in self._base_states:
-            return base
-        last_update = self._joint_filter.last_update
-        provenance = None if last_update is None else last_update.provenance
-        return self._project_zone_state(
-            zone,
-            base,
-            provenance,
-            self._joint_filter.occupied_marginals.get(zone, 0.0),
-        )
+        return self.joint_states.get(zone, ZoneState(zone=zone))
 
     def observe(
         self,
@@ -367,36 +385,31 @@ class OccupancyTracker:
         *,
         emit_activation: bool = True,
     ) -> ZoneUpdate:
-        previous = self.state_for_zone(event.zone)
-        self._observe_joint(event, emit_activation=emit_activation)
+        event = replace(event, event_at=_as_utc(event.event_at))
+        previous = self._zone_state_from_diagnostics(
+            event.zone,
+            self._engine_diagnostics,
+        )
+        current_diagnostics = self._observe_joint(
+            event,
+            emit_activation=emit_activation,
+        )
         self._recent_events = [*self._recent_events[-24:], event]
-        return ZoneUpdate(event, previous, self.state_for_zone(event.zone))
+        return ZoneUpdate(
+            event,
+            previous,
+            self._zone_state_from_diagnostics(event.zone, current_diagnostics),
+        )
 
     def refresh_active(self, now: datetime) -> tuple[ZoneUpdate, ...]:
-        self._joint_policy.expire(now)
-        self._joint_predictions.expire(now)
+        self._engine.finalize(_as_utc(now))
+        self._engine_diagnostics = self._engine.diagnostics
         return ()
 
     def expire_transient_state(self, now: datetime) -> bool:
-        evidence_changed = (
-            False
-            if self._joint_filter is None
-            else self._joint_filter.reinforce_asserted_evidence(
-                now,
-                advance_context_validity=False,
-            )
-        )
-        policy_changed = self._joint_policy.expire(
-            now,
-            None
-            if self._joint_filter is None
-            else self._joint_filter.occupied_marginals,
-            None
-            if self._joint_filter is None
-            else self._joint_filter.asserted_positive_evidence(now),
-        )
-        prediction_changed = self._joint_predictions.expire(now)
-        return evidence_changed or policy_changed or prediction_changed
+        changed = self._engine.finalize(_as_utc(now))
+        self._engine_diagnostics = self._engine.diagnostics
+        return changed
 
     def reconcile_expected_occupants(
         self,
@@ -404,7 +417,8 @@ class OccupancyTracker:
         now: datetime,
         evidence_id: str = "occupant_count_change",
     ) -> None:
-        if expected_occupants > 2:
+        now = _as_utc(now)
+        if expected_occupants > PRODUCT_MAX_OCCUPANTS:
             self.reject_unsupported_count(expected_occupants, now, evidence_id)
             return
         if expected_occupants < 0:
@@ -413,28 +427,16 @@ class OccupancyTracker:
         previous_supported = self._last_supported_expected_occupants
         self._requested_expected_occupants = expected_occupants
         self._unsupported_count = None
-        previous = (
-            self._joint_filter.expected_occupants
-            if self._joint_filter is not None
-            else self.config.expected_occupants
-        )
         self.config = replace(self.config, expected_occupants=expected_occupants)
-        if self._joint_filter is None:
-            self._joint_filter = JointOccupancyFilter(
-                self._map,
-                expected_occupants,
-                now,
-            )
-        else:
-            self._joint_filter.set_expected_occupants(expected_occupants, now)
-        if not recovering_from_unsupported or expected_occupants < previous_supported:
-            self._joint_policy.reconcile_count(
-                expected_occupants,
-                now,
-                evidence_id,
-                self._joint_filter.occupied_marginals,
-            )
-        self._joint_predictions.reconcile_count(previous, expected_occupants)
+        self._engine_diagnostics = self._engine.reconcile_count(
+            expected_occupants,
+            now,
+            evidence_id,
+            reconcile_policy=(
+                not recovering_from_unsupported
+                or expected_occupants < previous_supported
+            ),
+        )
         self._last_supported_expected_occupants = expected_occupants
 
     def reject_unsupported_count(
@@ -445,28 +447,21 @@ class OccupancyTracker:
     ) -> None:
         """Enter a clear public state without constructing an unsupported filter."""
 
-        if expected_occupants <= 2:
+        if expected_occupants <= PRODUCT_MAX_OCCUPANTS:
             raise ValueError("unsupported occupant count must be above two")
-        previous = self.config.expected_occupants
+        now = _as_utc(now)
         self._requested_expected_occupants = expected_occupants
         self._unsupported_count = expected_occupants
         self.config = replace(self.config, expected_occupants=0)
-        if self._joint_filter is not None:
-            self._joint_filter.set_expected_occupants(0, now)
-        self._joint_policy.enter_unsupported_count(
+        self._engine_diagnostics = self._engine.enter_unsupported_count(
             expected_occupants,
-            evidence_id,
             now,
+            evidence_id,
         )
-        self._joint_predictions.reconcile_count(previous, 0)
 
     def ensure_joint_state(self, now: datetime) -> None:
-        if self._joint_filter is None:
-            self._joint_filter = JointOccupancyFilter(
-                self._map,
-                self.config.expected_occupants,
-                now,
-            )
+        self._engine.ensure(_as_utc(now))
+        self._engine_diagnostics = self._engine.diagnostics
 
     def bootstrap_joint_state(
         self,
@@ -474,71 +469,42 @@ class OccupancyTracker:
         *,
         cold_start: bool,
     ) -> None:
-        now = max(
-            (event.event_at for event in events),
-            default=datetime.now().astimezone(),
+        normalized = tuple(
+            replace(event, event_at=_as_utc(event.event_at)) for event in events
         )
-        self.ensure_joint_state(now)
-        assert self._joint_filter is not None
-        updates = self._joint_filter.bootstrap(events, cold_start=cold_start)
-        for update in updates:
-            self._joint_policy.apply(
-                update,
-                emit_activation=False,
-            )
+        self._engine_diagnostics = self._engine.bootstrap(
+            normalized,
+            cold_start=cold_start,
+        )
 
     def occupancy_store_data(
         self,
         now: datetime,
         transition_counts: Mapping[str, Mapping[str, float]],
     ) -> dict[str, object]:
-        self.ensure_joint_state(now)
-        assert self._joint_filter is not None
-        return serialize_occupancy_state(
-            self._map,
-            self._joint_filter.posterior,
-            self._joint_policy.states,
-            self._joint_predictions.leases,
-            self._joint_filter.observations.entity_states,
-            transition_counts,
-            directional_contexts=self._joint_filter.directional_contexts,
-            pending_departures=self._joint_policy.pending_departures,
-            update_sequence=self._joint_filter.update_sequence,
-            policy_audit=self._joint_policy.policy_audit,
-            route_counts=self._joint_predictions.route_counts,
-            route_contexts=self._joint_predictions.route_contexts,
-            consumed_censored_paths=(
-                self._joint_filter.consumed_censored_paths
-            ),
-        )
+        payload = self._engine.serialize(_as_utc(now), transition_counts)
+        if not isinstance(payload, dict):
+            raise TypeError("Runtime inference persistence must be a mapping")
+        return payload
 
-    def restore_joint_state(self, restored: RestoredOccupancyState) -> None:
-        self._joint_filter = JointOccupancyFilter(
-            self._map,
-            self.config.expected_occupants,
-            restored.posterior.updated_at,
+    def restore_joint_state(self, restored: object) -> None:
+        self._engine_diagnostics = self._engine.restore(restored)
+        self._joint_restore_status = getattr(restored, "restore_status", "restored")
+        self._joint_restore_reason = None
+
+    def migrate_legacy_joint_state(
+        self,
+        policy_states: Mapping[str, ZonePolicyState],
+        transition_counts: Mapping[str, Mapping[str, object]],
+        route_counts: Mapping[tuple[str, ...], Mapping[str, float]],
+    ) -> None:
+        self._engine.migrate_legacy_state(
+            policy_states,
+            transition_counts,
+            route_counts,
         )
-        self._joint_filter.restore_posterior(restored.posterior)
-        self._joint_filter.restore_directional_contexts(
-            restored.directional_contexts,
-            restored.update_sequence,
-        )
-        self._joint_filter.observations.restore_entity_states(restored.entity_states)
-        self._joint_filter.restore_consumed_censored_paths(
-            restored.consumed_censored_paths
-        )
-        self._joint_policy.restore_states(restored.policy_states)
-        self._joint_policy.restore_policy_audit(restored.policy_audit)
-        self._joint_policy.restore_pending_departures(restored.pending_departures)
-        self._joint_predictions.restore_leases(
-            restored.prediction_leases,
-            restored.posterior.updated_at,
-        )
-        self._joint_predictions.restore_route_state(
-            restored.route_counts,
-            restored.route_contexts,
-        )
-        self._joint_restore_status = restored.restore_status
+        self._engine_diagnostics = self._engine.diagnostics
+        self._joint_restore_status = "legacy_v5_migrated"
         self._joint_restore_reason = None
 
     def reject_joint_restore(self, reason: str) -> None:
@@ -550,52 +516,37 @@ class OccupancyTracker:
         event: OccupancyEvent,
         *,
         emit_activation: bool,
-    ) -> None:
-        self.ensure_joint_state(event.event_at)
-        assert self._joint_filter is not None
-        update = self._joint_filter.observe(event)
-        self._joint_policy.apply(
-            update,
+    ) -> EngineDiagnostics:
+        self._engine_diagnostics = self._engine.observe(
+            event,
             emit_activation=emit_activation,
         )
-        if emit_activation:
-            self._joint_predictions.apply(update)
-            self._joint_predictions.learn(update)
+        return self._engine_diagnostics
 
-    def _project_zone_state(
+    def _zone_state_from_diagnostics(
         self,
         zone: str,
-        base: ZoneState,
-        provenance: ObservationProvenance | None,
-        confidence: float,
+        diagnostics: EngineDiagnostics,
     ) -> ZoneState:
-        assert self._joint_filter is not None
-        latest_zone_node_id = next(
-            (
-                event.node_id
-                for event in reversed(self._recent_events)
-                if event.zone == zone
-            ),
-            base.last_node_id,
-        )
-        explanation: dict[str, Any] = {
-            "type": "joint_posterior",
-            "occupied_marginal": confidence,
-            "pruned_probability": self._joint_filter.posterior.pruned_probability,
-        }
-        if provenance is not None:
-            explanation["last_event_id"] = provenance.event_id
-            explanation["last_disposition"] = provenance.disposition
-        return replace(
-            base,
+        base = self._base_states.get(zone)
+        if base is None:
+            return ZoneState(zone=zone)
+        confidence = diagnostics.occupied_marginals.get(zone, 0.0)
+        policy_state = diagnostics.policy_states.get(zone, ZonePolicyState())
+        return ZoneState(
+            zone=zone,
             confidence=confidence,
             status=status_for_confidence(confidence),
-            updated_at=self._joint_filter.posterior.updated_at,
-            last_node_id=(
-                provenance.node_id
-                if provenance is not None and provenance.zone == zone
-                else latest_zone_node_id
+            occupancy_behavior=base.occupancy_behavior,
+            active_since=(
+                policy_state.last_trusted_at if policy_state.keep_on else None
             ),
-            reason=self._joint_policy.states[zone].reason,
-            explanation=explanation,
+            last_evidence_at=diagnostics.updated_at,
+            updated_at=diagnostics.updated_at,
+            reason=policy_state.reason,
+            explanation={
+                "type": "exact_posterior",
+                "occupied_marginal": confidence,
+            },
         )
+

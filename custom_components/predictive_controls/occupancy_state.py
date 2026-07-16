@@ -49,6 +49,33 @@ class Posterior:
 
 
 @dataclass(frozen=True)
+class EntityEvidence:
+    """Latest likelihood contribution retained for one physical entity."""
+
+    state: str
+    log_likelihood_by_count: tuple[float, ...]
+    changed_at: datetime
+    episode_started_at: datetime
+    duration_log_odds: float = 0.0
+    departure_observed: bool = False
+
+
+@dataclass(frozen=True)
+class PendingDeparture:
+    """Accumulated path evidence carrying occupancy away from one origin."""
+
+    origin: str
+    current: str
+    probability: float
+    nonadjacent: bool
+    evidence_ids: tuple[str, ...]
+    disposition: str = "graph_valid"
+    segment_probability: float | None = None
+    destination_movement_probability: float | None = None
+    source_episode_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class ObservationProvenance:
     """Machine-readable evidence contribution for one sensor update."""
 
@@ -256,6 +283,7 @@ class ReleaseCause(StrEnum):
     AUTHORITATIVE_AWAY = "authoritative_away"
     EXPLICIT_RESET = "explicit_reset"
     PROVISIONAL_FALSE_OFF = "provisional_false_off"
+    RELEASE_SAFE = "release_safe"
 
 
 @dataclass(frozen=True)

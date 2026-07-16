@@ -1,15 +1,20 @@
-# Seven-Day Shadow Validation
+# Seven-Day Target Validation
 
 ## Status
 
-**Not yet collected.** Automated tests and synthetic benchmarks cannot establish real sensor ordering, entity flapping, Home Assistant event-loop contention, or household movement accuracy. The existing checklist is the external rollout gate for the legacy `0.1.20` contract. Target-contract cutover adds the `active`/`prelight` checks below.
+**Not yet collected.** Automated tests and synthetic benchmarks cannot establish
+real sensor ordering, entity flapping, Home Assistant event-loop contention, or
+household movement accuracy. This checklist is the external rollout gate for the
+`0.2.0` `active`/`prelight` target contract; legacy aliases are checked only as
+compatibility projections.
 
 ## Preconditions
 
-- Run the exact 0.1.20 release-candidate code and record its commit SHA.
+- Run the exact `0.2.0` release-candidate code and record its commit SHA.
 - Keep the map, expected-occupant source, and automation configuration unchanged for the observation window unless a change is logged as a restart of the window.
-- For `0.1.20`, use the factual legacy contract: `activation_plausible -> on`, `keep_on -> off`, and optional `prelight_plausible -> prelight`.
-- At target cutover, record `active -> on`, `active -> off`, and optional `prelight -> on`; verify compatibility aliases in parallel for the full compatibility release.
+- Record `active -> on`, `active -> off`, optional `prelight -> on`, and optional
+	`arrival` events. Verify compatibility aliases in parallel for the full
+	compatibility release.
 - Ensure diagnostics can be downloaded from the Home Assistant integration entry.
 - Record a backup of the integration storage before starting.
 
@@ -17,8 +22,8 @@
 
 For at least seven consecutive days, keep a timestamped incident log containing:
 
-- every observed false `keep_on -> off` while a zone remains occupied;
-- every unsupported `activation_plausible -> on` without credible local, path, unlocated, corroborating, or recovery evidence;
+- every observed false `active -> off` while a zone remains occupied;
+- every unsupported `active -> on` without sufficient `ArrivalSupported` mass;
 - every missed activation for a credible arrival;
 - every stale `keep_on` that persists after a confirmed departure;
 - every incorrect or disruptive prelight;
@@ -35,7 +40,8 @@ Download diagnostics at the start and end of the window even when no incident oc
 ## Daily checks
 
 1. Confirm `occupancy_diagnostics.joint.pruned_probability` remains `0.0`.
-2. Confirm `occupancy_diagnostics.joint.unsupported_count` is null unless the authoritative count is actually above two.
+2. Confirm `occupancy_diagnostics.joint.unsupported_count` is null unless the
+	authoritative count is actually above five.
 3. Confirm `latency.performance_budget_exceeded_count` has not increased.
 4. Confirm `latency.max_ms <= 100` and note any routine p95/p99 above 30 ms.
 5. Review policy decisions for unexplained releases or activations.
@@ -45,15 +51,13 @@ Download diagnostics at the start and end of the window even when no incident oc
 
 The window passes only when all of the following are true:
 
-- no false `keep_on` clear;
+- no false `active` clear;
 - no unsupported activation;
 - no occupancy probability pruning;
 - no runtime callback above 100 ms;
-- restart and reload preserve established `keep_on` without synthetic activation;
+- restart and reload preserve established `active` without synthetic activation;
 - supported count recovery bootstraps current entity states without activation;
 - every reported difference has a recorded explanation and disposition.
-
-Target cutover additionally requires:
 
 - no unsupported `active -> on` edge;
 - no false or stale `active -> off` edge;
@@ -82,10 +86,10 @@ Complete this table after the external run. Do not prefill results.
 | End time                     |        |
 | Map fingerprint              |        |
 | Expected-occupant source     |        |
-| False keep-on clears         |        |
-| Unsupported activations      |        |
+| False active clears          |        |
+| Unsupported active edges     |        |
 | Missed credible activations  |        |
-| Stale keep-on incidents      |        |
+| Stale active incidents       |        |
 | Prelight incidents           |        |
 | Unsupported active-on edges  |        |
 | False/stale active-off edges |        |

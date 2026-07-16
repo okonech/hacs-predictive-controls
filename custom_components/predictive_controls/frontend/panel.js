@@ -1102,7 +1102,9 @@ class PredictiveControlsPanel extends HTMLElement {
       <main class="single-panel settings">
         <label>Transition window seconds<input data-setting="transition_window_seconds" type="number" min="1" value="${this._config.transition_window_seconds}" /></label>
         <label>Prediction threshold<input data-setting="prediction_threshold" type="number" min="0" max="1" step="0.01" value="${this._config.prediction_threshold}" /></label>
-        <label>Expected occupants<input data-setting="expected_occupants" type="number" min="0" step="1" value="${this._config.expected_occupants || 0}" /></label>
+        <label>Activation risk threshold<input data-setting="activation_risk_threshold" type="number" min="0" max="1" step="0.01" value="${this._config.activation_risk_threshold ?? 0.8}" /></label>
+        <label>Release risk threshold<input data-setting="release_risk_threshold" type="number" min="0" max="1" step="0.01" value="${this._config.release_risk_threshold ?? 0.95}" /></label>
+        <label>Expected occupants<input data-setting="expected_occupants" type="number" min="0" max="2" step="1" value="${this._config.expected_occupants || 0}" /></label>
         <label>Expected occupants entity<input data-setting="expected_occupants_entity" type="text" value="${escapeHtml(this._config.expected_occupants_entity || "")}" /></label>
         <section class="maintenance-section">
           <h3>Entities</h3>
@@ -1320,6 +1322,8 @@ class PredictiveControlsPanel extends HTMLElement {
         actions_yaml: this._config.actions_yaml,
         transition_window_seconds: Number(this._config.transition_window_seconds),
         prediction_threshold: Number(this._config.prediction_threshold),
+        activation_risk_threshold: Number(this._config.activation_risk_threshold ?? 0.8),
+        release_risk_threshold: Number(this._config.release_risk_threshold ?? 0.95),
         expected_occupants: Number(this._config.expected_occupants || 0),
         expected_occupants_entity: this._config.expected_occupants_entity || "",
       });

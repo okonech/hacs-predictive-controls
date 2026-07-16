@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 
 from .events import OccupancyEvent
 from .model import PredictiveMap
+from .occupancy_state import EntityEvidence as EntityEvidence
 from .occupancy_state import ObservationProvenance
 
 
@@ -22,18 +23,6 @@ class ObservationProfile:
 SUSTAINED_PROFILE = ObservationProfile(0.97, 0.02, 0.30, 0.95)
 ORDINARY_PROFILE = ObservationProfile(0.90, 0.04, 0.45, 0.90)
 TRANSITION_PROFILE = ObservationProfile(0.85, 0.05, 0.55, 0.85)
-
-
-@dataclass(frozen=True)
-class EntityEvidence:
-    """Latest likelihood contribution retained for one physical entity."""
-
-    state: str
-    log_likelihood_by_count: tuple[float, ...]
-    changed_at: datetime
-    episode_started_at: datetime
-    duration_log_odds: float = 0.0
-    departure_observed: bool = False
 
 
 class ObservationModel:

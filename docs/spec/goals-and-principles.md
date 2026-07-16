@@ -15,9 +15,10 @@ instead of reproducing model logic.
   while a person is still are plausible. Observations usually arrive promptly,
   but delayed or missed edges remain possible.
 - **ASSUME-002:** The configured occupant count is authoritative. Supported
-  inference covers every integer count from zero through five occupants. Two
-  occupants are the primary and overwhelmingly common operating profile. Count
-  updates are ordered control inputs; they provide count, not identity or room.
+  inference covers every integer count from zero through two occupants. Two
+  occupants are the primary, maximum, and overwhelmingly common operating
+  profile. Count updates are ordered control inputs; they provide count, not
+  identity or room.
 - **ASSUME-003:** Occupants are anonymous and exchangeable. The model does not
   invent identity when paths cross or merge.
 - **ASSUME-004:** Physical adjacency constrains normal movement, but a missing
@@ -74,10 +75,9 @@ instead of reproducing model logic.
   SHOULD gain bounded local support and protect final ownership until clear,
   authoritative count or away state, or explicit reset.
 - **GOAL-007, multi-occupant correctness:** For every supported authoritative
-  count $0 \le N \le 5$, all exact anonymous joint explanations, same-zone
-  multiplicities, and count-conserving movements MUST be preserved. Calibration
-  and optimization SHOULD prioritize $N=2$ without introducing count-specific
-  behavior or weaker guarantees at other supported counts.
+  count $0 \le N \le 2$, all exact anonymous joint explanations, same-zone
+  multiplicities, and count-conserving movements MUST be preserved without
+  count-specific behavior or weaker guarantees at other supported counts.
 - **GOAL-008, useful route learning:** Next-zone prediction MUST learn common
   multi-step paths and return routes over time while remaining separate from
   occupancy evidence and normal activation authorization.

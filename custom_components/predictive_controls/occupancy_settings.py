@@ -1,5 +1,27 @@
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
+
+
+def authoritative_occupants_from_state_value(value: object) -> int | None:
+    """Parse an authoritative occupant count without coercing invalid input."""
+
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text in {"home", "on", "true", "yes"}:
+        return 1
+    if text in {"not_home", "off", "false", "no", "away"}:
+        return 0
+    try:
+        numeric = Decimal(text)
+    except InvalidOperation:
+        return None
+    if not numeric.is_finite() or numeric != numeric.to_integral_value():
+        return None
+    count = int(numeric)
+    return count if 0 <= count <= 5 else None
+
 
 def expected_occupants_from_state_value(value: object, fallback: int) -> int:
     """Resolve an expected occupant count from a Home Assistant state value."""

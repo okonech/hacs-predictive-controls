@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
 import math
 from datetime import datetime
 from typing import Any, cast
 
-from .automation_policy import (
-    POLICY_AUDIT_MAX_CONTEXT_BYTES,
+from .inference.policy import (
+    POLICY_AUDIT_MAX_BYTES,
     POLICY_AUDIT_MAX_ENTRIES,
     POLICY_AUDIT_RETENTION,
 )
@@ -43,6 +44,24 @@ def runtime_status_payload(runtime: Any) -> dict[str, Any]:
         "probabilities": runtime.probabilities,
         "transition_counts": runtime.transition_counts,
         "expected_occupants": getattr(runtime, "expected_occupants", 0),
+        "authoritative_count": {
+            "source": getattr(runtime, "expected_occupants_entity", "")
+            or "configured_expected_occupants",
+            "requested": getattr(
+                runtime.confidence,
+                "requested_expected_occupants",
+                getattr(runtime, "expected_occupants", 0),
+            ),
+            "accepted": getattr(runtime, "expected_occupants", 0),
+            "available": getattr(runtime, "authoritative_count_available", True),
+            "invalid": "invalid_authoritative_count"
+            in getattr(runtime, "problem_reasons", ()),
+            "unsupported": getattr(
+                runtime.confidence.diagnostics,
+                "joint_unsupported_count",
+                None,
+            ),
+        },
         "occupancy_diagnostics": tracker_diagnostics_payload(
             runtime.confidence.diagnostics
         ),
@@ -74,11 +93,15 @@ def zone_state_payload(state: Any) -> dict[str, Any]:
 
 
 def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
-    policy_audit = tuple(getattr(diagnostics, "joint_policy_audit", ()))
+    legacy_policy_audit = tuple(getattr(diagnostics, "joint_policy_audit", ()))
+    target_policy_audit = tuple(
+        getattr(diagnostics, "joint_target_policy_audit", ())
+    )
+    policy_audit = target_policy_audit or legacy_policy_audit
     payload = {
         "expected_occupants": diagnostics.expected_occupants,
         "reliability": reliability_payload(
-            summarize_policy_reliability(policy_audit)
+            summarize_policy_reliability(legacy_policy_audit)
         ),
         "protected_tracks": list(diagnostics.protected_tracks),
         "protected_corridor": list(diagnostics.protected_corridor),
@@ -103,7 +126,11 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
     }
     joint_posterior = getattr(diagnostics, "joint_posterior", ())
     joint_provenance = getattr(diagnostics, "joint_last_provenance", None)
-    if joint_posterior or joint_provenance is not None:
+    if (
+        joint_posterior
+        or joint_provenance is not None
+        or bool(getattr(diagnostics, "joint_occupied_marginals", {}))
+    ):
         oldest_decision_at = cast(
             datetime | None,
             min(
@@ -200,40 +227,7 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
                 )
             ],
             "policy_audit": [
-                {
-                    "decision_at": entry.decision_at.isoformat(),
-                    "source": entry.source,
-                    "trigger": {
-                        "event_id": entry.trigger_event_id,
-                        "entity_id": entry.trigger_entity_id,
-                        "zone": entry.trigger_zone,
-                        "state": entry.trigger_state,
-                        "disposition": entry.trigger_disposition,
-                    },
-                    "decision": {
-                        "zone": entry.decision.zone,
-                        "action": entry.decision.action,
-                        "accepted": entry.decision.accepted,
-                        "reason_code": entry.decision.reason_code,
-                        "gate_values": dict(entry.decision.gate_values),
-                        "evidence_ids": list(entry.decision.evidence_ids),
-                    },
-                    "previous": {
-                        "keep_on": entry.previous_keep_on,
-                        "reason": entry.previous_reason,
-                        "release_cause": None
-                        if entry.previous_release_cause is None
-                        else entry.previous_release_cause.value,
-                    },
-                    "current": {
-                        "keep_on": entry.current_keep_on,
-                        "reason": entry.current_reason,
-                        "release_cause": None
-                        if entry.current_release_cause is None
-                        else entry.current_release_cause.value,
-                    },
-                    "context": stored_policy_audit_context_payload(entry.context),
-                }
+                policy_audit_entry_payload(entry)
                 for entry in policy_audit
             ],
             "policy_audit_retention": {
@@ -241,11 +235,9 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
                     POLICY_AUDIT_RETENTION.total_seconds() // 3600
                 ),
                 "max_entries": POLICY_AUDIT_MAX_ENTRIES,
-                "max_context_compressed_bytes": (
-                    POLICY_AUDIT_MAX_CONTEXT_BYTES
-                ),
+                "max_context_compressed_bytes": POLICY_AUDIT_MAX_BYTES,
                 "context_compressed_bytes": sum(
-                    packed_policy_audit_context_size(entry.context)
+                    policy_audit_entry_size(entry)
                     for entry in policy_audit
                 ),
                 "entry_count": len(policy_audit),
@@ -362,8 +354,94 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
                 ),
                 "reason": getattr(diagnostics, "joint_restore_reason", None),
             },
+            "arrival_supported_probabilities": getattr(
+                diagnostics,
+                "joint_arrival_supported_probabilities",
+                {},
+            ),
+            "release_safe": {
+                "available": getattr(
+                    diagnostics,
+                    "joint_release_safe_available",
+                    False,
+                ),
+                "probabilities": getattr(
+                    diagnostics,
+                    "joint_release_safe_probabilities",
+                    {},
+                ),
+            },
         }
     return payload
+
+
+def target_policy_audit_entry_payload(entry: Any) -> dict[str, Any]:
+    return {
+        "decision_at": entry.decision_at.isoformat(),
+        "decision": {
+            "zone": entry.decision.zone,
+            "action": entry.decision.action,
+            "accepted": entry.decision.accepted,
+            "reason_code": entry.decision.reason_code,
+            "gate_values": dict(entry.decision.gate_values),
+            "evidence_ids": list(entry.decision.evidence_ids),
+        },
+        "prior_active": entry.prior_active,
+        "resulting_active": entry.resulting_active,
+        "context_complete": entry.context is not None,
+        "context": stored_policy_audit_context_payload(entry.context),
+    }
+
+
+def policy_audit_entry_payload(entry: Any) -> dict[str, Any]:
+    if hasattr(entry, "prior_active"):
+        return target_policy_audit_entry_payload(entry)
+    return {
+        "decision_at": entry.decision_at.isoformat(),
+        "source": entry.source,
+        "trigger": {
+            "event_id": entry.trigger_event_id,
+            "entity_id": entry.trigger_entity_id,
+            "zone": entry.trigger_zone,
+            "state": entry.trigger_state,
+            "disposition": entry.trigger_disposition,
+        },
+        "decision": {
+            "zone": entry.decision.zone,
+            "action": entry.decision.action,
+            "accepted": entry.decision.accepted,
+            "reason_code": entry.decision.reason_code,
+            "gate_values": dict(entry.decision.gate_values),
+            "evidence_ids": list(entry.decision.evidence_ids),
+        },
+        "previous": {
+            "keep_on": entry.previous_keep_on,
+            "reason": entry.previous_reason,
+            "release_cause": None
+            if entry.previous_release_cause is None
+            else entry.previous_release_cause.value,
+        },
+        "current": {
+            "keep_on": entry.current_keep_on,
+            "reason": entry.current_reason,
+            "release_cause": None
+            if entry.current_release_cause is None
+            else entry.current_release_cause.value,
+        },
+        "context": stored_policy_audit_context_payload(entry.context),
+    }
+
+
+def policy_audit_entry_size(entry: Any) -> int:
+    if not hasattr(entry, "prior_active"):
+        return packed_policy_audit_context_size(entry.context)
+    return packed_policy_audit_context_size(entry.context) + len(
+        json.dumps(
+            target_policy_audit_entry_payload(entry),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    )
 
 
 def reliability_payload(summary: PolicyReliabilitySummary) -> dict[str, Any]:

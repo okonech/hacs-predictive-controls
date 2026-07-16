@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from .inference.types import SupportEventAtom
 from .markov import MarkovChain
 from .model import PredictiveMap
 from .occupancy_graph import ZoneGraph
@@ -115,6 +116,55 @@ class PredictionManager:
                 )
         return self.leases
 
+    def apply_finalized_supports(
+        self,
+        supports: tuple[tuple[SupportEventAtom, float], ...],
+        now: datetime,
+    ) -> tuple[PredictionLease, ...]:
+        """Project finalized graph-valid support into forward leases."""
+
+        self.expire(now)
+        for support, probability in sorted(
+            supports,
+            key=lambda item: item[0].support_event_id,
+        ):
+            edge = self._finalized_graph_edge(support)
+            if probability < self.movement_threshold or edge is None:
+                continue
+            source_node, current_node = edge
+            source = self.map.nodes[source_node].occupancy_zone
+            current = self.map.nodes[current_node].occupancy_zone
+            self._cancel_from(source)
+            candidates = tuple(sorted(self.graph.neighbors(current) - {source}))
+            if not candidates:
+                continue
+            if len(candidates) == 1:
+                probabilities = {candidates[0]: 1.0}
+                reason = "only graph-valid forward continuation"
+            else:
+                probabilities = self._branch_probabilities(
+                    current_node,
+                    current,
+                    candidates,
+                    support.route_nodes,
+                )
+                reason = (
+                    "learned route-prefix branch probability"
+                    if self._last_route_match is not None
+                    and self._last_route_match.matched_prefix
+                    else "learned forward branch probability"
+                )
+            for target, branch_probability in probabilities.items():
+                path_key = (current, source, target)
+                self._leases[path_key] = PredictionLease(
+                    path_key=path_key,
+                    target_zone=target,
+                    probability=probability * branch_probability,
+                    expires_at=now + self.lease_duration,
+                    reason=reason,
+                )
+        return self.leases
+
     def learn(self, update: FilterUpdate) -> tuple[tuple[str, str], ...]:
         """Learn only the strongest posterior-consistent concrete node edge."""
 
@@ -159,6 +209,52 @@ class PredictionManager:
             compatible,
         )
         return ((source_node.node_id, target_node.node_id),)
+
+    def learn_finalized_supports(
+        self,
+        supports: tuple[tuple[SupportEventAtom, float], ...],
+    ) -> tuple[tuple[str, str], ...]:
+        """Learn unique high-mass finalized graph-valid endpoint assignments."""
+
+        by_endpoint: dict[str, list[tuple[SupportEventAtom, float]]] = {}
+        for support, probability in supports:
+            if (
+                probability < self.learning_threshold
+                or not support.learning_eligible
+                or support.disposition != "graph_valid"
+                or len(support.endpoint_ids) != 1
+            ):
+                continue
+            by_endpoint.setdefault(support.endpoint_ids[0], []).append(
+                (support, probability)
+            )
+
+        learned: list[tuple[str, str]] = []
+        for endpoint_id in sorted(by_endpoint):
+            alternatives = by_endpoint[endpoint_id]
+            if len(alternatives) != 1:
+                continue
+            support, probability = alternatives[0]
+            edge = self._finalized_graph_edge(support)
+            if edge is None:
+                continue
+            source_node, target_node = edge
+            if not self.chain.observe(
+                source_node,
+                target_node,
+                weight=probability,
+            ):
+                continue
+            compatible = self._compatible_route_contexts(source_node)
+            if len(compatible) == 1:
+                self.route_model.observe(
+                    compatible[0],
+                    target_node,
+                    weight=probability,
+                )
+            self._advance_route_contexts(source_node, target_node, compatible)
+            learned.append(edge)
+        return tuple(learned)
 
     def expire(self, now: datetime) -> bool:
         expired = [
@@ -216,6 +312,27 @@ class PredictionManager:
         for key in tuple(self._leases):
             if key[0] == source:
                 del self._leases[key]
+
+    def _finalized_graph_edge(
+        self,
+        support: SupportEventAtom,
+    ) -> tuple[str, str] | None:
+        if (
+            not support.learning_eligible
+            or support.disposition != "graph_valid"
+            or len(support.route_nodes) != 2
+        ):
+            return None
+        source_node, target_node = support.route_nodes
+        source = self.map.nodes.get(source_node)
+        target = self.map.nodes.get(target_node)
+        if (
+            source is None
+            or target is None
+            or target_node not in source.adjacent
+        ):
+            return None
+        return source_node, target_node
 
     def _branch_probabilities(
         self,

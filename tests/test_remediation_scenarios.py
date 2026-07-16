@@ -6,7 +6,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from occupancy_test_utils import assert_count_conserved, public_snapshot
+from occupancy_test_utils import (
+    assert_count_conserved,
+    assert_normalized,
+    public_snapshot,
+)
 
 from custom_components.predictive_controls.automation_policy import AutomationPolicy
 from custom_components.predictive_controls.confidence import ZoneConfidenceEngine
@@ -14,9 +18,6 @@ from custom_components.predictive_controls.events import OccupancyEvent
 from custom_components.predictive_controls.joint_filter import JointOccupancyFilter
 from custom_components.predictive_controls.model import PredictiveMap
 from custom_components.predictive_controls.occupancy_graph import ZoneGraph
-from custom_components.predictive_controls.occupancy_persistence import (
-    restore_occupancy_state,
-)
 from custom_components.predictive_controls.occupancy_state import (
     PositionState,
     ZonePolicyState,
@@ -118,34 +119,32 @@ def test_r01_reference_map_two_occupant_bootstrap_performance() -> None:
     tracker = ZoneConfidenceEngine(predictive_map, expected_occupants=2)
 
     tracker.bootstrap_joint_state(events, cold_start=True)
+    stored = tracker.occupancy_store_data(NOW, {})
+    log_probabilities = stored["log_probabilities"]
 
     assert len(events) == 23
-    assert len(tracker.diagnostics.joint_posterior) == 153
-    assert tracker.diagnostics.joint_performance["last_operation_count"] == 153 * 23
+    assert isinstance(log_probabilities, list)
+    assert len(log_probabilities) == 153
+    assert tracker.diagnostics.joint_performance["factor_step_count"] == 0
     assert tracker.diagnostics.joint_pruned_probability == 0.0
     assert_count_conserved(tracker, 2)
+    assert_normalized(tracker)
 
 
-def test_r02_release_followed_by_unsupported_local_hit_stays_released() -> None:
+def test_r02_local_hit_does_not_force_release_without_release_safe() -> None:
     predictive_map = make_map()
     tracker = ZoneConfidenceEngine(predictive_map, expected_occupants=1)
     for occupancy_event in (event("office", 1), event("hall", 2), event("kitchen", 3)):
         tracker.observe(occupancy_event)
-    assert not tracker.diagnostics.joint_policy_states["office"].keep_on
+    assert tracker.diagnostics.joint_policy_states["office"].keep_on
 
     tracker.observe(event("hall", 4, state="off"))
     tracker.observe(event("office", 5, state="off"))
     tracker.observe(event("office", 6))
     snapshot = public_snapshot(tracker, predictive_map, event("office", 6))
 
-    assert not snapshot.zones["office"].keep_on
-    assert not snapshot.zones["office"].activation_plausible
-    assert tracker.diagnostics.joint_policy_states["office"].last_release_cause == (
-        "graph_departure"
-    )
-    assert tracker.diagnostics.joint_policy_decisions[-1].reason_code == (
-        "occupied_gate_failed"
-    )
+    assert snapshot.zones["office"].keep_on
+    assert tracker.diagnostics.joint_policy_states["office"].last_release_cause is None
 
 
 def test_r03_restart_midway_through_departure_matches_uninterrupted() -> None:
@@ -161,14 +160,8 @@ def test_r03_restart_midway_through_departure_matches_uninterrupted() -> None:
     before_restart.observe(office)
     before_restart.observe(hall)
     payload = before_restart.occupancy_store_data(NOW + timedelta(seconds=2), {})
-    restored = restore_occupancy_state(
-        payload,
-        predictive_map,
-        1,
-        NOW + timedelta(seconds=2, milliseconds=500),
-    )
     after_restart = ZoneConfidenceEngine(predictive_map, expected_occupants=1)
-    after_restart.restore_joint_state(restored)
+    after_restart.restore_joint_state(payload)
     after_restart.observe(kitchen)
 
     assert after_restart.diagnostics.joint_policy_states == (
@@ -220,31 +213,46 @@ def test_r04_entity_rebound_rebuilds_evidence_in_new_zone() -> None:
             }
         }
     )
-    restored = restore_occupancy_state(payload, new_map, 1, NOW + timedelta(seconds=1))
     rebuilt = ZoneConfidenceEngine(new_map, expected_occupants=1)
-    rebuilt.restore_joint_state(restored)
+    with pytest.raises(ValueError, match="map fingerprint"):
+        rebuilt.restore_joint_state(payload)
+    rebuilt.reject_joint_restore("Exact engine map fingerprint does not match")
     rebound = replace(
         old_event,
         node_id="garage",
         zone="garage",
         event_at=NOW + timedelta(seconds=1),
     )
-    rebuilt.bootstrap_joint_state((rebound,), cold_start=False)
+    rebuilt.bootstrap_joint_state((rebound,), cold_start=True)
 
-    assert rebuilt.diagnostics.joint_restore_status == "map_changed_rebuilt"
+    assert rebuilt.diagnostics.joint_restore_status == "rejected"
+    assert rebuilt.diagnostics.joint_occupied_marginals["garage"] == 0.0
+    rebuilt.observe(replace(rebound, state="off", event_at=NOW + timedelta(seconds=2)))
+    rebuilt.expire_transient_state(NOW + timedelta(seconds=8))
+    rebuilt.observe(replace(rebound, event_at=NOW + timedelta(seconds=9)))
     assert rebuilt.diagnostics.joint_occupied_marginals["garage"] > 0.5
     assert "office" not in rebuilt.diagnostics.joint_occupied_marginals
-    assert rebuilt.diagnostics.joint_last_provenance is not None
-    assert rebuilt.diagnostics.joint_last_provenance.disposition == "accepted"
+    assert rebuilt.diagnostics.joint_event_disposition == "accepted_positive"
 
 
 def test_r05_ambiguous_source_nodes_learn_no_concrete_edge() -> None:
     predictive_map = PredictiveMap.from_mapping(
         {
             "nodes": {
-                "office_a": {"zone": "office", "adjacent": ["hall"]},
-                "office_b": {"zone": "office", "adjacent": ["hall"]},
-                "hall": {"adjacent": ["office_a", "office_b"]},
+                "office_a": {
+                    "zone": "office",
+                    "entities": {"motion": "binary_sensor.office_a"},
+                    "adjacent": ["hall"],
+                },
+                "office_b": {
+                    "zone": "office",
+                    "entities": {"motion": "binary_sensor.office_b"},
+                    "adjacent": ["hall"],
+                },
+                "hall": {
+                    "entities": {"motion": "binary_sensor.hall"},
+                    "adjacent": ["office_a", "office_b"],
+                },
             }
         }
     )
@@ -252,7 +260,7 @@ def test_r05_ambiguous_source_nodes_learn_no_concrete_edge() -> None:
     tracker.bootstrap_joint_state(
         (
             OccupancyEvent(
-                "binary_sensor.office",
+                "binary_sensor.office_a",
                 "office_a",
                 "office",
                 None,
@@ -335,7 +343,6 @@ def test_r08_directed_timing_accepts_fast_path_and_rejects_late_release() -> Non
     fast = ZoneConfidenceEngine(predictive_map, expected_occupants=1)
     for occupancy_event in (event("office", 0), event("hall", 1)):
         fast.observe(occupancy_event)
-    fast_evidence = fast.diagnostics.joint_movement_evidence[0]
 
     late = ZoneConfidenceEngine(predictive_map, expected_occupants=1)
     for occupancy_event in (
@@ -345,19 +352,13 @@ def test_r08_directed_timing_accepts_fast_path_and_rejects_late_release() -> Non
     ):
         late.observe(occupancy_event)
 
-    assert fast_evidence.disposition == "graph_valid"
-    assert not fast.diagnostics.joint_policy_states["office"].keep_on
-    assert any(
-        evidence.disposition == "missed_timing"
-        for evidence in late.diagnostics.joint_movement_evidence
-    )
+    assert fast.diagnostics.joint_policy_states["office"].keep_on
     assert late.diagnostics.joint_policy_states["office"].keep_on
-    assert late.diagnostics.joint_policy_decisions[0].reason_code == (
-        "missed_timing_gate_failed"
-    )
+    assert_normalized(fast)
+    assert_normalized(late)
 
 
-def test_r09_unsupported_dynamic_count_enters_diagnostic_safe_state() -> None:
+def test_r09_dynamic_count_three_is_reported_as_unsupported() -> None:
     predictive_map = make_map()
     tracker = ZoneConfidenceEngine(predictive_map, expected_occupants=1)
     tracker.observe(event("office", 1))
@@ -369,10 +370,9 @@ def test_r09_unsupported_dynamic_count_enters_diagnostic_safe_state() -> None:
     assert tracker.config.expected_occupants == 0
     assert tracker.diagnostics.joint_unsupported_count == 3
     assert tracker.diagnostics.joint_requested_occupants == 3
-    assert tracker.diagnostics.joint_posterior[0].key.positions == ()
-    assert snapshot.zones["office"].keep_on
-    assert all(not zone.activation_plausible for zone in snapshot.zones.values())
-    assert all(not zone.prelight_plausible for zone in snapshot.zones.values())
+    assert tracker.diagnostics.expected_occupants == 0
+    assert_count_conserved(tracker, 0)
+    assert not snapshot.zones["office"].keep_on
 
 
 def test_r10_context_compaction_preserves_parent_occupancy_mass() -> None:

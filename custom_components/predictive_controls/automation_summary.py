@@ -55,7 +55,9 @@ def runtime_automation_summary(
     diagnostics = runtime.confidence.diagnostics
     zone_ids = tuple(runtime.map.zones())
     states = runtime.zone_states
-    joint_authoritative = bool(getattr(diagnostics, "joint_posterior", ()))
+    joint_authoritative = bool(
+        getattr(diagnostics, "joint_occupied_marginals", {})
+    )
     prediction_hints = dict(
         getattr(diagnostics, "joint_prediction_hints", {})
         if joint_authoritative

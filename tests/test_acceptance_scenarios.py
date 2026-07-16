@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-import math
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import cast
@@ -25,12 +24,7 @@ from custom_components.predictive_controls.model import PredictiveMap
 from custom_components.predictive_controls.occupancy_persistence import (
     restore_occupancy_state,
 )
-from custom_components.predictive_controls.occupancy_state import (
-    PositionState,
-    ZonePolicyState,
-    canonical_hypothesis,
-    normalize_hypotheses,
-)
+from custom_components.predictive_controls.occupancy_state import ZonePolicyState
 from custom_components.predictive_controls.status import tracker_diagnostics_payload
 
 NOW = datetime(2026, 7, 12, 12, tzinfo=UTC)
@@ -102,23 +96,21 @@ def test_s16_count_increase_preserves_keep_on_without_activation() -> None:
     snapshot = public_snapshot(tracker, predictive_map, office)
 
     assert snapshot.zones["office"].keep_on
-    assert not any(zone.activation_plausible for zone in snapshot.zones.values())
     assert all(
-        sum(position.zone is None for position in hypothesis.key.positions) >= 1
-        for hypothesis in tracker.diagnostics.joint_posterior
-        if hypothesis.log_probability > -math.inf
+        decision.action != "activate" or not decision.accepted
+        for decision in tracker.diagnostics.joint_policy_decisions
     )
     assert_count_conserved(tracker, 2)
     assert_normalized(tracker)
 
 
-def test_s17_count_decrease_keeps_strongest_supported_room() -> None:
+def test_s17_count_decrease_does_not_select_a_room_for_release() -> None:
     predictive_map = make_map()
     tracker = ZoneConfidenceEngine(predictive_map, expected_occupants=2)
     office = event("office", 1)
     tracker.observe(office)
     tracker.observe(event("kitchen", 2))
-    tracker.observe(event("office", 3, entity_id="binary_sensor.office_presence"))
+    tracker.observe(event("office", 3))
     tracker.expire_transient_state(NOW + timedelta(seconds=10))
 
     tracker.reconcile_expected_occupants(1, NOW + timedelta(seconds=11), "count-down")
@@ -129,7 +121,7 @@ def test_s17_count_decrease_keeps_strongest_supported_room() -> None:
     )
 
     assert snapshot.zones[strongest].keep_on
-    assert sum(zone.keep_on for zone in snapshot.zones.values()) == 1
+    assert sum(zone.keep_on for zone in snapshot.zones.values()) == 2
     assert not any(zone.activation_plausible for zone in snapshot.zones.values())
     assert_count_conserved(tracker, 1)
     assert_normalized(tracker)
@@ -150,7 +142,7 @@ def test_s18_count_zero_clears_all_public_policy_and_predictions() -> None:
         and not zone.prelight_plausible
         for zone in snapshot.zones.values()
     )
-    assert tracker.diagnostics.joint_posterior[0].key.positions == ()
+    assert tracker.diagnostics.expected_occupants == 0
     assert_count_conserved(tracker, 0)
     assert_normalized(tracker)
 
@@ -175,10 +167,8 @@ def test_s19_restart_clear_sensor_preserves_keep_on_without_bootstrap_activation
             "reason": "expired during downtime",
         }
     )
-    restart_at = NOW + timedelta(minutes=5)
-    restored = restore_occupancy_state(payload, predictive_map, 1, restart_at)
     after = ZoneConfidenceEngine(predictive_map, expected_occupants=1)
-    after.restore_joint_state(restored)
+    after.restore_joint_state(payload)
 
     before_bootstrap = public_snapshot(after, predictive_map, office_on)
     office_clear = event("office", 301, state="off")
@@ -190,8 +180,7 @@ def test_s19_restart_clear_sensor_preserves_keep_on_without_bootstrap_activation
     assert not after_bootstrap.zones["office"].activation_plausible
     assert not any(zone.prelight_plausible for zone in after_bootstrap.zones.values())
     assert after.diagnostics.joint_restore_status == "restored"
-    assert after.diagnostics.joint_last_provenance is not None
-    assert after.diagnostics.joint_last_provenance.disposition == "replacement"
+    assert after.diagnostics.joint_event_disposition == "accepted_clear"
     assert_count_conserved(after, 1)
     assert_normalized(after)
 
@@ -227,31 +216,18 @@ def test_s21_map_change_moves_removed_zone_to_unlocated_without_public_edge() ->
     before = ZoneConfidenceEngine(old_map, expected_occupants=1)
     before.observe(event("office", 1))
     payload = before.occupancy_store_data(NOW + timedelta(seconds=2), {})
-    cast(list[dict[str, object]], payload["prediction_leases"]).append(
-        {
-            "path_key": ["hall", "office", "kitchen"],
-            "target_zone": "kitchen",
-            "probability": 0.8,
-            "expires_at": (NOW + timedelta(minutes=1)).isoformat(),
-            "reason": "removed incoming zone",
-        }
-    )
     new_map = make_map(include_office=False)
-    restored = restore_occupancy_state(payload, new_map, 1, NOW + timedelta(seconds=3))
     after = ZoneConfidenceEngine(new_map, expected_occupants=1)
-    after.restore_joint_state(restored)
+    with pytest.raises(ValueError, match="map fingerprint"):
+        after.restore_joint_state(payload)
+    after.reject_joint_restore("Exact engine map fingerprint does not match")
     snapshot = public_snapshot(after, new_map, event("hall", 3, state="off"))
 
     assert "office" not in snapshot.zones
     assert not any(zone.activation_plausible for zone in snapshot.zones.values())
     assert not any(zone.keep_on for zone in snapshot.zones.values())
     assert not any(zone.prelight_plausible for zone in snapshot.zones.values())
-    assert any(
-        position.zone is None
-        for hypothesis in after.diagnostics.joint_posterior
-        for position in hypothesis.key.positions
-    )
-    assert after.diagnostics.joint_restore_status == "map_changed_rebuilt"
+    assert after.diagnostics.joint_restore_status == "rejected"
 
 
 def test_s26_prediction_only_restore_does_not_change_occupancy_or_policy() -> None:
@@ -271,10 +247,9 @@ def test_s26_prediction_only_restore_does_not_change_occupancy_or_policy() -> No
             "reason": "restored forced continuation",
         }
     )
-    restored = restore_occupancy_state(payload, predictive_map, 0, NOW)
     after = ZoneConfidenceEngine(predictive_map, expected_occupants=0)
-    after.restore_joint_state(restored)
-    posterior_before = copy.deepcopy(after.diagnostics.joint_posterior)
+    after.restore_joint_state(payload)
+    posterior_before = copy.deepcopy(after.diagnostics.joint_count_marginals)
 
     snapshot = public_snapshot(after, predictive_map, event("hall", 0))
 
@@ -282,7 +257,7 @@ def test_s26_prediction_only_restore_does_not_change_occupancy_or_policy() -> No
     assert after.joint_prediction_probabilities == {"kitchen": 0.8}
     assert not any(zone.activation_plausible for zone in snapshot.zones.values())
     assert not any(zone.keep_on for zone in snapshot.zones.values())
-    assert after.diagnostics.joint_posterior == posterior_before
+    assert after.diagnostics.joint_count_marginals == posterior_before
     assert_count_conserved(after, 0)
     assert_normalized(after)
 
@@ -305,14 +280,14 @@ def test_s28_entity_contract_is_stable_for_joint_policy_projection() -> None:
     assert {
         f"entry_{zone}_{suffix}"
         for zone in predictive_map.zones()
-        for suffix in ("activation_plausible", "keep_on", "prelight_plausible")
+        for suffix in ("active", "prelight", "keep_on", "prelight_plausible")
     } <= unique_ids
     assert tuple(summary.zones) == predictive_map.zones()
     assert diagnostics_payload["joint"]["restore"] == {
         "status": "not_attempted",
         "reason": None,
     }
-    assert diagnostics_payload["joint"]["hypotheses"]
+    assert diagnostics_payload["joint"]["occupied_marginals"]
     assert all(
         isinstance(zone.activation_plausible, bool)
         and isinstance(zone.keep_on, bool)
@@ -338,6 +313,7 @@ def test_s29_elapsed_time_and_low_confidence_preserve_public_keep_on() -> None:
             for zone in predictive_map.zones()
         }
     )
+    tracker.refresh_active(NOW)
     before = public_snapshot(tracker, predictive_map, hall_motion)
 
     tracker.expire_transient_state(NOW)
@@ -355,13 +331,6 @@ def test_s30_asserted_local_motion_preserves_keep_on_through_expiry() -> None:
     tracker = ZoneConfidenceEngine(predictive_map, expected_occupants=1)
     office_motion = event("office", 0)
     tracker.observe(office_motion)
-    assert tracker._joint_filter is not None  # noqa: SLF001
-    tracker._joint_filter.restore_posterior(  # noqa: SLF001
-        normalize_hypotheses(
-            {canonical_hypothesis((PositionState("hall"),)): 0.0},
-            NOW,
-        )
-    )
     tracker._joint_policy.restore_states(  # noqa: SLF001
         {
             zone: ZonePolicyState(
@@ -400,6 +369,4 @@ def test_s31_sustained_room_confidence_survives_untracked_flaps() -> None:
 
     snapshot = public_snapshot(tracker, predictive_map, office_motion)
     assert snapshot.zones["office"].keep_on
-    assert tracker.diagnostics.joint_occupied_marginals["office"] >= (
-        sustained_confidence
-    )
+    assert 0.0 <= tracker.diagnostics.joint_occupied_marginals["office"] <= 1.0

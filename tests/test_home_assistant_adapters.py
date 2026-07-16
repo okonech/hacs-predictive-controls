@@ -388,7 +388,7 @@ def test_websocket_commands_success_and_errors(monkeypatch: pytest.MonkeyPatch) 
         ("prediction_threshold", 2.0),
         ("transition_window_seconds", 0),
         ("expected_occupants", -1),
-        ("expected_occupants", 3),
+        ("expected_occupants", 6),
         ("expected_occupants_entity", "people"),
     ):
         invalid = {**save_message, "id": f"bad-{key}", key: value}
@@ -446,7 +446,7 @@ def test_panel_registration_and_unregistration(monkeypatch: pytest.MonkeyPatch) 
     assert len(static_paths) == 1
     assert len(fake.registered_panels) == 2
     assert fake.removed_panels == [DOMAIN, DOMAIN]
-    assert module.panel_js_url().endswith("panel-v0.1.20.js")
+    assert module.panel_js_url().endswith("panel-v0.2.0.js")
 
 
 def make_runtime() -> SimpleNamespace:
@@ -478,6 +478,7 @@ def make_runtime() -> SimpleNamespace:
         map=predictive_map,
         zone_states=confidence.states,
         expected_occupants=1,
+        authoritative_count_available=True,
         expected_occupants_entity="",
         confidence=confidence,
         last_occupancy_event=occupancy_event,
@@ -631,7 +632,7 @@ def test_integration_setup_unload_and_reload(
 
     entry = Entry()
     assert asyncio.run(integration.async_setup_entry(hass, entry))
-    assert stores[0].version == 5
+    assert stores[0].version == 6
     assert stores[0].key == "predictive_controls_entry_transitions"
     assert ("restore", legacy_payload) in calls
     with pytest.raises(NotImplementedError):

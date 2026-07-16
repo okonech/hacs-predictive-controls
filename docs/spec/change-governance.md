@@ -74,8 +74,8 @@ The retained suite MUST cover these orthogonal behavior families:
   never moves two occupants, and one departure from a shared source retains
   ownership for anyone remaining. Count reconciliation and same-zone
   multiplicity MUST be exercised for every supported count from zero through
-  five, including the maximum count. The richest routine and incident-derived
-  replay corpus SHOULD use the primary two-occupant profile; other counts cover
+  two, including the maximum count. The richest routine and incident-derived
+  replay corpus MUST use the primary two-occupant profile; other counts cover
   count transitions, boundaries, and scale without receiving weaker assertions.
   Tests MUST cover $0\to1$, $1\to2$, $2\to1$, $1\to0$, multi-step changes,
   boundary-conditioned arrival/departure, and exchangeable unlocated fallback.
@@ -101,10 +101,10 @@ The retained suite MUST cover these orthogonal behavior families:
 12. **Latency and bounds:** the reference workload is the 16-zone, 17-node,
   23-entity map with the existing deterministic 10,000-accepted-update,
   one-millisecond-spacing replay plus separate correlated-burst, maximum-lag,
-  out-of-order, and overload traces, measured separately at $N=2$ and $N=5$.
-  Both runs MUST preserve every occupancy configuration and meet the preferred
-  50 ms and hard 100 ms callback budgets inside the declared `MOVE-020`
-  envelope.
+  out-of-order, and overload traces, measured at the maximum supported count
+  $N=2$. The run MUST preserve every occupancy configuration and meet the
+  preferred 50 ms and hard 100 ms callback budgets inside the declared
+  `MOVE-020` envelope.
     Results MUST report p50/p95/p99/max callback latency, candidate operations,
     configuration count, peak memory, active episode and unresolved-assignment
     maxima, overload count, policy-audit size, persistence size, and

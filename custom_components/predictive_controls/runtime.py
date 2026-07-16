@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import math
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from time import perf_counter_ns
 from typing import Any
 
@@ -14,15 +14,17 @@ from homeassistant.helpers.event import (
     async_track_time_interval,
 )
 
-from .actions import ActionDecision, PredictiveAction
+from .actions import ActionDecision, PredictiveAction, evaluate_actions
 from .confidence import ZoneConfidenceEngine, ZoneState, ZoneUpdate
-from .const import DISPATCH_UPDATE
-from .engine import PredictiveEngine
+from .const import DISPATCH_UPDATE, PRODUCT_MAX_OCCUPANTS
 from .events import OccupancyEvent, event_from_entity
 from .markov import MarkovChain, Prediction
 from .model import PredictiveMap
 from .occupancy_persistence import restore_occupancy_state
-from .occupancy_settings import expected_occupants_from_state_value, tracked_entity_ids
+from .occupancy_settings import (
+    authoritative_occupants_from_state_value,
+    tracked_entity_ids,
+)
 
 _LOGGER = logging.getLogger(__name__)
 RUNTIME_HARD_CEILING_MS = 100.0
@@ -41,16 +43,14 @@ class PredictiveControlsRuntime:
         expected_occupants_entity: str | None = None,
         transition_store: Any | None = None,
         transition_counts: dict[str, dict[str, float]] | None = None,
+        activation_risk_threshold: float = 0.80,
+        release_risk_threshold: float = 0.95,
     ) -> None:
         self.hass = hass
         self.map = predictive_map
         self.actions = actions
         self._transition_store = transition_store
-        self.engine = PredictiveEngine(
-            predictive_map, actions, timedelta(seconds=transition_window)
-        )
-        if transition_counts is not None:
-            self.engine.chain.restore_counts(transition_counts)
+        del transition_window, transition_counts
         self.configured_expected_occupants = (
             expected_occupants if expected_occupants and expected_occupants > 0 else 0
         )
@@ -58,8 +58,13 @@ class PredictiveControlsRuntime:
         self.confidence = ZoneConfidenceEngine(
             predictive_map,
             expected_occupants=self.configured_expected_occupants,
-            chain=self.engine.chain,
+            activation_risk_threshold=activation_risk_threshold,
+            release_risk_threshold=release_risk_threshold,
         )
+        self._prediction_probabilities: dict[str, float] = {}
+        self._last_prediction_source_node: str | None = None
+        self._last_prediction: Prediction | None = None
+        self._last_action_fired: dict[str, datetime] = {}
         self.last_occupancy_event: OccupancyEvent | None = None
         self.last_zone_update: ZoneUpdate | None = None
         self._unsubscribe: object | None = None
@@ -71,22 +76,25 @@ class PredictiveControlsRuntime:
         self._bootstrap_inference_ms = 0.0
         self._bootstrap_total_ms = 0.0
         self._performance_budget_exceeded_count = 0
+        self._invalid_authoritative_count = False
+        self._restore_rejected = False
+        self._safe_bootstrap_complete = False
 
     @property
     def chain(self) -> MarkovChain:
-        return self.engine.chain
+        return self.confidence.prediction_chain
 
     @property
     def probabilities(self) -> dict[str, float]:
-        return self.engine.probabilities
+        return self._prediction_probabilities.copy()
 
     @property
     def last_source_node(self) -> str | None:
-        return self.engine.last_source_node
+        return self._last_prediction_source_node
 
     @property
     def last_prediction(self) -> Prediction | None:
-        return self.engine.last_prediction
+        return self._last_prediction
 
     @property
     def zone_states(self) -> dict[str, ZoneState]:
@@ -98,11 +106,20 @@ class PredictiveControlsRuntime:
 
     @property
     def transition_counts(self) -> dict[str, dict[str, float]]:
-        return self.chain.counts
+        return {
+            source: dict(targets)
+            for source, targets in (
+                self.confidence.diagnostics.joint_route_transition_counts.items()
+            )
+        }
 
     @property
     def expected_occupants(self) -> int:
         return self.confidence.config.expected_occupants
+
+    @property
+    def authoritative_count_available(self) -> bool:
+        return not self._invalid_authoritative_count
 
     @property
     def latency_metrics(self) -> dict[str, float | int]:
@@ -125,11 +142,37 @@ class PredictiveControlsRuntime:
             "performance_degraded": self._performance_budget_exceeded_count > 0,
         }
 
+    @property
+    def problem_reasons(self) -> tuple[str, ...]:
+        reasons: list[str] = []
+        performance = self.confidence.diagnostics.joint_performance
+        if bool(performance.get("overloaded", False)):
+            reasons.append("association_overload")
+        if self._invalid_authoritative_count:
+            reasons.append("invalid_authoritative_count")
+        if self._restore_rejected:
+            reasons.append("restore_rejected")
+        return tuple(reasons)
+
+    @property
+    def problem_sources(self) -> tuple[str, ...]:
+        sources = {
+            "association_overload": "movement_association",
+            "invalid_authoritative_count": (
+                self.expected_occupants_entity or "configured_expected_occupants"
+            ),
+            "restore_rejected": "occupancy_storage",
+        }
+        return tuple(sources[reason] for reason in self.problem_reasons)
+
     def transition_store_data(self) -> dict[str, object]:
-        return self.confidence.occupancy_store_data(
-            datetime.now().astimezone(),
+        payload = self.confidence.occupancy_store_data(
+            datetime.now(UTC),
             self.transition_counts,
         )
+        if self._safe_bootstrap_complete:
+            self._restore_rejected = False
+        return payload
 
     def restore_stored_state(
         self,
@@ -140,7 +183,19 @@ class PredictiveControlsRuntime:
 
         if not isinstance(stored_state, dict):
             return False
+        now = _as_utc(now)
         self._sync_expected_occupants(now)
+        if stored_state.get("schema") == "exact-augmented-v6":
+            try:
+                self.confidence.restore_joint_state(stored_state)
+            except (TypeError, ValueError) as exc:
+                self._restore_rejected = True
+                self.confidence.reject_joint_restore(str(exc))
+                _LOGGER.warning("Rejected stored exact inference: %s", exc)
+                return False
+            self._restored_state = True
+            self._restore_rejected = False
+            return True
         try:
             restored = restore_occupancy_state(
                 stored_state,
@@ -149,12 +204,17 @@ class PredictiveControlsRuntime:
                 now,
             )
         except ValueError as exc:
+            self._restore_rejected = True
             self.confidence.reject_joint_restore(str(exc))
             _LOGGER.warning("Rejected stored occupancy inference: %s", exc)
             return False
-        self.confidence.restore_joint_state(restored)
-        self.chain.restore_counts(restored.transition_counts)
+        self.confidence.migrate_legacy_joint_state(
+            restored.policy_states,
+            restored.transition_counts,
+            restored.route_counts,
+        )
         self._restored_state = True
+        self._restore_rejected = False
         return True
 
     def start(self) -> None:
@@ -172,7 +232,7 @@ class PredictiveControlsRuntime:
         self._unsubscribe_transient_refresh = async_track_time_interval(
             self.hass, self._async_expire_transient_state, timedelta(seconds=5)
         )
-        now = datetime.now().astimezone()
+        now = datetime.now(UTC)
         self._sync_expected_occupants(now)
         snapshot = self._current_snapshot(now)
         started_ns = perf_counter_ns()
@@ -184,6 +244,7 @@ class PredictiveControlsRuntime:
         finally:
             self._bootstrap_inference_ms = (perf_counter_ns() - started_ns) / 1_000_000
             self._latency_samples_ms.append(self._bootstrap_inference_ms)
+        self._safe_bootstrap_complete = True
         self._bootstrap_total_ms = (perf_counter_ns() - startup_started_ns) / 1_000_000
         async_dispatcher_send(self.hass, DISPATCH_UPDATE)
         if snapshot:
@@ -213,7 +274,7 @@ class PredictiveControlsRuntime:
 
     @callback
     def _async_state_changed(self, event: Event) -> None:
-        now = datetime.now().astimezone()
+        now = datetime.now(UTC)
         time_fired = getattr(event, "time_fired", None)
         if isinstance(time_fired, datetime):
             delay_ms = max(0.0, (now - time_fired).total_seconds() * 1000.0)
@@ -224,11 +285,16 @@ class PredictiveControlsRuntime:
             return
 
         if str(entity_id) == self.expected_occupants_entity:
-            was_unsupported = self.confidence.requested_expected_occupants > 2
+            was_unsupported = (
+                self.confidence.requested_expected_occupants
+                > PRODUCT_MAX_OCCUPANTS
+            )
             if self._sync_expected_occupants(now):
                 if (
                     was_unsupported
-                    and 1 <= self.confidence.requested_expected_occupants <= 2
+                    and 1
+                    <= self.confidence.requested_expected_occupants
+                    <= PRODUCT_MAX_OCCUPANTS
                 ):
                     self.confidence.bootstrap_joint_state(
                         self._current_snapshot(now),
@@ -246,6 +312,7 @@ class PredictiveControlsRuntime:
 
     @callback
     def _async_refresh_active_confidence(self, now: datetime) -> None:
+        now = _as_utc(now)
         self._sync_expected_occupants(now)
         updates = self.confidence.refresh_active(now)
         if not updates:
@@ -256,6 +323,7 @@ class PredictiveControlsRuntime:
 
     @callback
     def _async_expire_transient_state(self, now: datetime) -> None:
+        now = _as_utc(now)
         if self.confidence.expire_transient_state(now):
             self.schedule_transition_count_save()
             async_dispatcher_send(self.hass, DISPATCH_UPDATE)
@@ -267,6 +335,7 @@ class PredictiveControlsRuntime:
         now: datetime,
         process_prediction_actions: bool = True,
     ) -> None:
+        now = _as_utc(now)
         started_ns = perf_counter_ns()
         try:
             self._observe_entity(
@@ -302,12 +371,10 @@ class PredictiveControlsRuntime:
         )
         action_decisions: tuple[ActionDecision, ...] = ()
         if occupancy_event.state == "on" and process_prediction_actions:
-            update = self.engine.project_predictions(
-                self._node_prediction_probabilities(),
+            action_decisions = self._evaluate_prediction_actions(
                 occupancy_event.node_id,
                 now,
             )
-            action_decisions = update.action_decisions
         elapsed_ms = (perf_counter_ns() - started_ns) / 1_000_000
         if elapsed_ms > RUNTIME_HARD_CEILING_MS:
             self._performance_budget_exceeded_count += 1
@@ -330,14 +397,45 @@ class PredictiveControlsRuntime:
         self._execute_actions(action_decisions)
 
     def observe_node(self, node_id: str, now: datetime) -> None:
+        now = _as_utc(now)
         self._sync_expected_occupants(now)
-        update = self.engine.project_predictions(
-            self._node_prediction_probabilities(),
-            node_id,
+        action_decisions = self._evaluate_prediction_actions(node_id, now)
+        async_dispatcher_send(self.hass, DISPATCH_UPDATE)
+        self._execute_actions(action_decisions)
+
+    def _evaluate_prediction_actions(
+        self,
+        source_node: str,
+        now: datetime,
+    ) -> tuple[ActionDecision, ...]:
+        self._last_prediction_source_node = source_node
+        self._prediction_probabilities = dict(
+            sorted(self._node_prediction_probabilities().items())
+        )
+        self._last_prediction = (
+            None
+            if not self._prediction_probabilities
+            else Prediction(
+                node_id=max(
+                    self._prediction_probabilities,
+                    key=lambda node_id: (
+                        self._prediction_probabilities[node_id],
+                        node_id,
+                    ),
+                ),
+                probability=max(self._prediction_probabilities.values()),
+            )
+        )
+        decisions = evaluate_actions(
+            self.actions,
+            self._prediction_probabilities,
+            source_node,
+            self._last_action_fired,
             now,
         )
-        async_dispatcher_send(self.hass, DISPATCH_UPDATE)
-        self._execute_actions(update.action_decisions)
+        for decision in decisions:
+            self._last_action_fired[decision.action.action_id] = now
+        return decisions
 
     def _node_prediction_probabilities(self) -> dict[str, float]:
         zone_probabilities = self.confidence.joint_prediction_probabilities
@@ -374,15 +472,20 @@ class PredictiveControlsRuntime:
         resolved = self.configured_expected_occupants
         if self.expected_occupants_entity:
             state = self.hass.states.get(self.expected_occupants_entity)
-            resolved = expected_occupants_from_state_value(
-                None if state is None else state.state,
-                self.configured_expected_occupants,
+            authoritative = authoritative_occupants_from_state_value(
+                None if state is None else state.state
             )
+            self._invalid_authoritative_count = authoritative is None
+            if authoritative is None:
+                return False
+            resolved = authoritative
+        else:
+            self._invalid_authoritative_count = False
         if resolved == self.confidence.requested_expected_occupants:
             return False
         self.confidence.reconcile_expected_occupants(
             resolved,
-            now or datetime.now().astimezone(),
+            _as_utc(now) if now is not None else datetime.now(UTC),
             evidence_id="authoritative_occupant_count_change",
         )
         return True
@@ -404,6 +507,12 @@ class PredictiveControlsRuntime:
                 decision.action.action_id,
                 decision.probability,
             )
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(UTC)
 
 
 def _latency_summary(samples: tuple[float, ...]) -> dict[str, float | int]:
