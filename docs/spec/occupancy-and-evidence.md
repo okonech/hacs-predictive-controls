@@ -250,6 +250,21 @@ and movement replay evidence.
   learning. A valid assertion MAY localize its source through the present using
   an explicit observation-validity interval, not a fabricated path event.
 
+  While building an interval-censored assignment from source $S$ through a
+  current open transient gate $G$ to one fresh target endpoint $T$ under
+  `MOVE-015`, a current physical-node episode at $S$ with `sustained` occupancy
+  behavior MAY extend its route source interval through $T$'s accepted event
+  time. This pre-assignment observation-validity extension is available only to
+  that censored $S\rightarrow G\rightarrow T$ candidate. Direct
+  $S\rightarrow T$ assignment construction continues to use the source's
+  ordinary finite endpoint-validity interval.
+
+  The censored-source extension contributes no observation or duration
+  likelihood, creates no source endpoint, and does not change the source
+  episode, evidence ID, or initial hardware hold interval. It does not apply to
+  sticky, transient, ambiguous, cleared, unavailable, or historical episodes.
+  Each resulting assignment remains bounded by its own semantic route deadline.
+
   A branch-local support atom retained from the assertion's original joint
   assignment MAY renew its finite `valid_until` to the current deterministic
   frontier while one of its episode IDs identifies that same current valid

@@ -27,12 +27,13 @@ from custom_components.predictive_controls.model import PredictiveMap
 NOW = datetime(2026, 7, 23, 12, 0, tzinfo=UTC)
 
 
-def make_map() -> PredictiveMap:
+def make_map(*, office_behavior: str | None = None) -> PredictiveMap:
     return PredictiveMap.from_mapping(
         {
             "nodes": {
                 "office": {
                     "zone": "office",
+                    "occupancy_behavior": office_behavior,
                     "entities": {"motion": "binary_sensor.office"},
                     "adjacent": ["hall"],
                 },
@@ -133,29 +134,105 @@ def test_sequential_endpoint_fold_retains_direct_and_censored_contexts() -> None
     )
 
 
-def test_current_positive_route_source_uses_finite_endpoint_validity() -> None:
-    predictive_map = make_map()
+def route_dispositions(
+    predictive_map: PredictiveMap,
+    seconds: int,
+) -> set[str]:
     space = StateSpace(predictive_map.zones(), 1)
     compact = FactorChainEventReducer(predictive_map, space)
     posterior = CompactLogPosterior.certain(
         space,
         (1, 0, 0, 0),
     )
+    result = compact.reduce(
+        compact.initial_state(posterior),
+        retained(event("office", 1), event("hall", seconds)),
+    )
+    hall_factor = next(
+        step
+        for step in result.chain.steps
+        if isinstance(step, EndpointFactor) and step.target_zone == "hall"
+    )
+    return {alternative.disposition for alternative in hall_factor.alternatives}
 
-    def hall_dispositions(seconds: int) -> set[str]:
-        result = compact.reduce(
-            compact.initial_state(posterior),
-            retained(event("office", 1), event("hall", seconds)),
-        )
-        hall_factor = next(
-            step
-            for step in result.chain.steps
-            if isinstance(step, EndpointFactor) and step.target_zone == "hall"
-        )
-        return {alternative.disposition for alternative in hall_factor.alternatives}
 
-    assert "graph_valid" in hall_dispositions(61)
-    assert "graph_valid" not in hall_dispositions(62)
+def test_current_sustained_direct_source_uses_finite_endpoint_validity() -> None:
+    predictive_map = make_map(office_behavior="sustained")
+
+    assert "graph_valid" in route_dispositions(predictive_map, 61)
+    assert "graph_valid" not in route_dispositions(predictive_map, 62)
+
+
+def test_current_sticky_route_source_uses_finite_endpoint_validity() -> None:
+    predictive_map = make_map(office_behavior="sticky")
+
+    assert "graph_valid" in route_dispositions(predictive_map, 61)
+    assert "graph_valid" not in route_dispositions(predictive_map, 62)
+
+
+def test_current_sustained_source_extends_only_for_censored_route() -> None:
+    predictive_map = make_map(office_behavior="sustained")
+    space = StateSpace(predictive_map.zones(), 1)
+    compact = FactorChainEventReducer(predictive_map, space)
+    posterior = CompactLogPosterior.certain(space, (1, 0, 0, 0))
+
+    result = compact.reduce(
+        compact.initial_state(posterior),
+        retained(
+            event("office", 1),
+            event("hall", 60 * 60 + 1),
+            event("kitchen", 60 * 60 + 2),
+        ),
+    )
+    factors = tuple(
+        step for step in result.chain.steps if isinstance(step, EndpointFactor)
+    )
+    hall_factor = next(factor for factor in factors if factor.target_zone == "hall")
+    kitchen_factor = next(
+        factor for factor in factors if factor.target_zone == "kitchen"
+    )
+
+    assert not any(
+        alternative.disposition == "graph_valid"
+        and alternative.source_node_id == "office"
+        for alternative in hall_factor.alternatives
+    )
+    censored = next(
+        alternative
+        for alternative in kitchen_factor.alternatives
+        if alternative.disposition == "censored_graph_path"
+        and alternative.source_node_id == "office"
+    )
+    assert censored.source_index == space.location_index("office")
+    assert censored.route_nodes == ("office", "hall", "kitchen")
+
+
+def test_cleared_sustained_source_does_not_extend_for_censored_route() -> None:
+    predictive_map = make_map(office_behavior="sustained")
+    space = StateSpace(predictive_map.zones(), 1)
+    compact = FactorChainEventReducer(predictive_map, space)
+    posterior = CompactLogPosterior.certain(space, (1, 0, 0, 0))
+
+    result = compact.reduce(
+        compact.initial_state(posterior),
+        retained(
+            event("office", 1),
+            event("office", 2, "off"),
+            event("hall", 60 * 60 + 1),
+            event("kitchen", 60 * 60 + 2),
+        ),
+    )
+    kitchen_factor = next(
+        step
+        for step in result.chain.steps
+        if isinstance(step, EndpointFactor) and step.target_zone == "kitchen"
+    )
+
+    assert not any(
+        alternative.disposition == "censored_graph_path"
+        and alternative.source_node_id == "office"
+        for alternative in kitchen_factor.alternatives
+    )
 
 
 def test_clear_likelihood_preserves_existing_assignment_context() -> None:

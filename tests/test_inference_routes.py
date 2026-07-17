@@ -132,6 +132,37 @@ def test_one_microsecond_overflow_removes_direct_and_censored_candidates() -> No
     assert alternatives == ()
 
 
+def test_separate_censored_sources_keep_their_own_zone_index() -> None:
+    route_builder = builder()
+    alternatives = route_builder.build(
+        EndpointToken("target-endpoint", "target", NOW + timedelta(seconds=4)),
+        "omega",
+        (episode("direct", "hall", 0, 2),),
+        (episode("gate", "hall", 1, 6, current_positive=True, blocked_until=20),),
+        censored_sources=(episode("source", "alpha", 0, 4),),
+    )
+
+    censored = next(
+        alternative
+        for alternative in alternatives
+        if alternative.disposition == "censored_graph_path"
+    )
+    assert censored.source_index == route_builder._space.location_index("alpha")  # noqa: SLF001
+    assert censored.route_nodes == ("source", "gate", "target")
+
+
+def test_censored_source_in_target_zone_is_ignored() -> None:
+    alternatives = builder().build(
+        EndpointToken("target-endpoint", "target", NOW + timedelta(seconds=4)),
+        "omega",
+        (),
+        (episode("gate", "hall", 1, 6, current_positive=True, blocked_until=20),),
+        censored_sources=(episode("target", "omega", 0, 4),),
+    )
+
+    assert alternatives == ()
+
+
 @pytest.mark.parametrize(
     "gate",
     (
@@ -205,6 +236,13 @@ def test_route_episode_and_builder_validate_inputs() -> None:
         route_builder.build(target, "omega", (replace(valid, node_id="missing"),))
     with pytest.raises(ValueError, match="Route source"):
         route_builder.build(target, "omega", (replace(valid, zone="hall"),))
+    with pytest.raises(ValueError, match="Route source"):
+        route_builder.build(
+            target,
+            "omega",
+            (),
+            censored_sources=(replace(valid, node_id="missing"),),
+        )
     with pytest.raises(ValueError, match="Route gate"):
         route_builder.build(
             target,

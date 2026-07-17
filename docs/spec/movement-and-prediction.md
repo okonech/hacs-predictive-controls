@@ -101,7 +101,12 @@ contributes no observation or movement evidence.
 - **MOVE-016:** A causal assignment remains revisable only before its stored
   semantic deadline and while it is newer than the finalized watermark. Event
   count, unrelated sensor traffic, inactivity, and room-specific timers MUST NOT
-  shorten or extend that interval.
+  shorten or extend that interval. Computing the interval-censored
+  pre-assignment source interval permitted by `EVID-015` from the specific fresh
+  target endpoint's accepted event time does not revise an existing assignment
+  or its deadline and MUST NOT alter direct-route feasibility. Once created,
+  that assignment remains subject to its stored finite deadline without renewal
+  from later endpoint traffic.
 - **MOVE-017:** Accepted in-lag evidence MAY reweight unresolved anonymous
   assignments and confirm or reject a prior interpretation. Activation MAY use
   the forward decision immediately and is never retracted. Release waits for

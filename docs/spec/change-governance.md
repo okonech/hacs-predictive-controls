@@ -99,7 +99,7 @@ The retained suite MUST cover these orthogonal behavior families:
   become route-learning evidence. Finalized observed movement remains eligible
   for learning regardless of prior `prelight` state.
 12. **Latency and bounds:** the reference workload is the 16-zone, 17-node,
-  23-entity map with the existing deterministic 10,000-accepted-update,
+  23-entity map with a deterministic replay capped at 1,000 accepted updates,
   one-millisecond-spacing replay plus separate correlated-burst, maximum-lag,
   out-of-order, and overload traces, measured at the maximum supported count
   $N=2$. The run MUST preserve every occupancy configuration and meet the

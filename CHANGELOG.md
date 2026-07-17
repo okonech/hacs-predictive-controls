@@ -14,6 +14,14 @@
 	and the aggregate activation/keep-on zone lists. Config-entry setup deletes
 	existing registry rows for those exact retired IDs.
 
+### Fixed
+
+- Allowed a currently asserted sustained room source to support a later
+	interval-censored arrival through an open transient gate, while preserving the
+	finite source interval for ordinary direct movement. This prevents an
+	unrelated interleaved endpoint from suppressing a coherent arrival without
+	letting old room assertions authorize late direct moves.
+
 ## 0.2.0 release candidate
 
 ### Changed

@@ -494,3 +494,58 @@ def test_inc_two_supported_occupants_release_held_transition_zone() -> None:
     snapshot = public_snapshot(tracker, predictive_map, latest_event)
 
     assert not snapshot.zones["bedroom_entrance"].keep_on
+
+
+def test_inc_long_held_source_routes_through_hall_to_activate_target() -> None:
+    predictive_map = load_predictive_map(
+        (
+            Path(__file__).resolve().parents[1] / "benchmarks" / "reference-map.yaml"
+        ).read_text()
+    )
+    tracker = ZoneConfidenceEngine(predictive_map, expected_occupants=2)
+
+    def incident_event(
+        node_id: str,
+        timestamp: str,
+    ) -> OccupancyEvent:
+        node = predictive_map.nodes[node_id]
+        return OccupancyEvent(
+            entity_id=next(iter(node.entities.values())),
+            node_id=node_id,
+            zone=node.occupancy_zone,
+            floor=node.floor,
+            role=node.role,
+            occupancy_behavior=predictive_map.occupancy_behavior_for_node(node),
+            signal_type="motion",
+            state="on",
+            event_at=datetime.fromisoformat(timestamp),
+            reliability=node.initial_weight,
+        )
+
+    tracker.observe(
+        incident_event("office_a_sensor", "2026-07-17T16:19:09.673534+00:00")
+    )
+    tracker.observe(
+        incident_event("living_right_sensor", "2026-07-17T17:08:01.840252+00:00")
+    )
+    tracker.observe(
+        incident_event("stairs_top_sensor", "2026-07-17T17:26:01.623088+00:00")
+    )
+    tracker.observe(
+        incident_event("dining_sensor", "2026-07-17T17:26:04.300759+00:00")
+    )
+    target_event = incident_event(
+        "upstairs_bathroom_sensor",
+        "2026-07-17T17:26:07.494721+00:00",
+    )
+    tracker.observe(target_event)
+
+    snapshot = public_snapshot(tracker, predictive_map, target_event)
+    target_decision = next(
+        decision
+        for decision in tracker.diagnostics.joint_policy_decisions
+        if decision.zone == "upstairs_bathroom" and decision.action == "activate"
+    )
+
+    assert target_decision.gate_values["threshold"] == pytest.approx(0.8)
+    assert snapshot.zones["upstairs_bathroom"].keep_on

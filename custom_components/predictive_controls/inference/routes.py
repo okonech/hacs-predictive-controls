@@ -60,6 +60,8 @@ class RouteCandidateBuilder:
         target_zone: str,
         sources: Sequence[RouteEpisodeInterval],
         gates: Sequence[RouteEpisodeInterval] = (),
+        *,
+        censored_sources: Sequence[RouteEpisodeInterval] | None = None,
     ) -> tuple[EndpointAlternative, ...]:
         if target_zone not in self._space.zones:
             raise ValueError("Route target zone is not in the state space")
@@ -68,6 +70,10 @@ class RouteCandidateBuilder:
             raise ValueError("Route target does not match its map node")
         _validate_unique_episodes(sources, "source")
         _validate_unique_episodes(gates, "gate")
+        resolved_censored_sources = (
+            sources if censored_sources is None else censored_sources
+        )
+        _validate_unique_episodes(resolved_censored_sources, "censored source")
 
         alternatives: list[EndpointAlternative] = []
         for source in sorted(sources, key=_episode_key):
@@ -92,6 +98,13 @@ class RouteCandidateBuilder:
                             _evidence_ids(source, endpoint),
                         )
                     )
+        for source in sorted(resolved_censored_sources, key=_episode_key):
+            source_node = self._map.nodes.get(source.node_id)
+            if source_node is None or source_node.occupancy_zone != source.zone:
+                raise ValueError("Route source does not match its map node")
+            if source.zone == target_zone:
+                continue
+            source_index = self._space.location_index(source.zone)
             for gate in sorted(gates, key=_episode_key):
                 deadline = self._censored_deadline(source, gate, endpoint)
                 if deadline is None:

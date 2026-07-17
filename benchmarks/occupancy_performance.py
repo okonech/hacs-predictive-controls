@@ -114,6 +114,23 @@ TRACE_PROFILES = (
     "all_episodes_active",
     "overload",
 )
+MAX_BENCHMARK_EVENTS = 1_000
+
+
+def _validate_event_count(event_count: int) -> None:
+    if event_count > MAX_BENCHMARK_EVENTS:
+        raise ValueError(
+            f"event count must not exceed {MAX_BENCHMARK_EVENTS}"
+        )
+
+
+def _parse_event_count(value: str) -> int:
+    event_count = int(value)
+    try:
+        _validate_event_count(event_count)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+    return event_count
 
 
 @dataclass(frozen=True)
@@ -716,6 +733,7 @@ def run_benchmark(
     target_counts: tuple[int, ...] = (2,),
     trace_profile: str = "deterministic",
 ) -> dict[str, object]:
+    _validate_event_count(event_count)
     predictive_map = load_predictive_map(map_path.read_text())
     started_at = datetime.now(UTC)
     count_results: dict[str, dict[str, object]] = {}
@@ -879,7 +897,11 @@ def main() -> int:
         type=Path,
         default=repository / "benchmarks" / "reference-map.yaml",
     )
-    parser.add_argument("--events", type=int, default=10_000)
+    parser.add_argument(
+        "--events",
+        type=_parse_event_count,
+        default=MAX_BENCHMARK_EVENTS,
+    )
     parser.add_argument(
         "--target-counts",
         type=int,

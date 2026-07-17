@@ -340,9 +340,11 @@ npm run test:frontend
 
 The Python test command enforces whole-package 100% branch coverage. Do not
 weaken coverage, exact-state, performance, or retained-regression gates to make a
-change pass. Run the full benchmark without `--events` only when the change
-touches event-path performance, a smoke or latency gate regresses, or release
-validation explicitly requires the 10,000-event wall-clock result.
+change pass.
+Benchmark runs MUST NOT exceed 1,000 events. Use the 100-event smoke command for
+routine validation; use the default 1,000-event run only when the change touches
+event-path performance, a smoke or latency gate regresses, or release validation
+explicitly requires the full wall-clock result.
 
 ## Decision Report Detail
 

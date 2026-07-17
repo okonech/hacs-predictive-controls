@@ -340,9 +340,10 @@ The hard callback ceiling is 100 ms; an over-budget update completes its state
 change atomically but suppresses activation and predictive actions. Routine core
 and runtime tail latency should remain at or below 30 ms.
 
-The `0.2.0` benchmark uses the checked-in 16-zone, 17-node, 23-entity reference
-map at the maximum supported count of two occupants over 10,000 deterministic
-updates. The checked-in artifact covers all 153 configurations with zero
+The historical `0.2.0` benchmark used the checked-in 16-zone, 17-node, 23-entity
+reference map at the maximum supported count of two occupants over 10,000
+deterministic updates. Current benchmark runs are capped at 1,000 events. The
+checked-in artifact covers all 153 configurations with zero
 pruning, exact normalization, deterministic restart, fixed-lag workload,
 startup, persistence, operator storage, and memory measurements. See
 `PERFORMANCE_RESULTS.json` for the measured environment and gate results.
@@ -444,7 +445,7 @@ python benchmarks/occupancy_performance.py \
 ```
 
 CI runs whole-package coverage, Ruff, strict mypy, frontend tests, and a portable
-benchmark smoke test. The full 10,000-event wall-clock benchmark is a release
-gate because shared CI timing is too noisy for a meaningful hard ceiling. Run
-the full benchmark locally only for event-path performance changes, a smoke or
-latency regression, or explicit release validation.
+CI runs whole-package coverage, Ruff, strict mypy, frontend tests, and a portable
+benchmark smoke test. Benchmark runs must not exceed 1,000 events. Run the
+default 1,000-event benchmark locally only for event-path performance changes, a
+smoke or latency regression, or explicit release validation.

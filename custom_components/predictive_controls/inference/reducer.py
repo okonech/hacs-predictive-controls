@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 from ..model import PredictiveMap
@@ -184,6 +184,19 @@ class AugmentedEventReducer:
             for state in episode_states
             if (interval := _route_interval(state)) is not None
         )
+        censored_sources = tuple(
+            interval
+            for state in episode_states
+            if (
+                interval := _censored_route_interval(
+                    state,
+                    event_at,
+                    self._map.occupancy_behavior_for_node(
+                        self._map.nodes[state.node_id]
+                    ),
+                )
+            ) is not None
+        )
         alternatives = [
             EndpointAlternative(
                 f"stay:{endpoint.token_id}",
@@ -200,6 +213,7 @@ class AugmentedEventReducer:
                 emission.zone,
                 intervals,
                 intervals,
+                censored_sources=censored_sources,
             ),
             EndpointAlternative(
                 f"unlocated:{endpoint.token_id}",
@@ -498,6 +512,21 @@ def _route_interval(
         state.current_positive,
         state.endpoint_valid_until,
     )
+
+
+def _censored_route_interval(
+    state: NodeEpisodeState,
+    event_at: datetime,
+    occupancy_behavior: str,
+) -> RouteEpisodeInterval | None:
+    interval = _route_interval(state)
+    if (
+        interval is None
+        or not state.current_positive
+        or occupancy_behavior != "sustained"
+    ):
+        return interval
+    return replace(interval, valid_until=max(interval.valid_until, event_at))
 
 
 def _context_endpoint_ids(message: AugmentedLogMessage) -> set[str]:

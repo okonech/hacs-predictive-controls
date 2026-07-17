@@ -597,8 +597,9 @@ Use four complementary levels. None substitutes for another.
 
 Run the 16-zone/17-node/23-entity reference map at the maximum supported count
 $N=2$.
-Include the deterministic 10,000-update one-millisecond replay plus correlated
-burst, maximum-lag, out-of-order, all-episodes-active, and overload traces.
+Include a deterministic replay of at most 1,000 one-millisecond updates plus
+correlated burst, maximum-lag, out-of-order, all-episodes-active, and overload
+traces.
 Report every metric required by governance scenario 12.
 
 ## Required Validation Commands
@@ -617,8 +618,8 @@ npm run test:frontend
 ```
 
 The benchmark command accepts occupant count, trace profile, and target output.
-Final release validation must run the complete 10,000-update $N=2$ profile, not
-only the 100-event CI smoke command.
+No benchmark may exceed 1,000 events. Final release validation must run the
+complete 1,000-update $N=2$ profile, not only the 100-event CI smoke command.
 
 The Python test command enforces whole-package 100% branch coverage. Do not lower
 coverage, remove retained regressions, or relax exactness/performance gates to

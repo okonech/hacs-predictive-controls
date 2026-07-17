@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from benchmarks.occupancy_performance import (
+    MAX_BENCHMARK_EVENTS,
     TRACE_PROFILES,
     _association_envelope,
     _build_workload,
@@ -99,6 +100,11 @@ def test_benchmark_configuration_gate_depends_on_requested_count(
     predictive_map: PredictiveMap,
 ) -> None:
     assert _configuration_count(predictive_map, 2) == 153
+
+
+def test_benchmark_rejects_more_than_one_thousand_events() -> None:
+    with pytest.raises(ValueError, match="must not exceed 1000"):
+        run_benchmark(MAP_PATH, event_count=MAX_BENCHMARK_EVENTS + 1)
 
 
 def test_benchmark_routes_profile_and_count_through_every_layer() -> None:
