@@ -7,7 +7,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .automation_summary import runtime_automation_summary
-from .const import DISPATCH_UPDATE, DOMAIN
+from .const import DISPATCH_DIAGNOSTIC_UPDATE, DISPATCH_UPDATE, DOMAIN
 from .runtime import PredictiveControlsRuntime
 
 
@@ -21,8 +21,6 @@ async def async_setup_entry(
         AuthoritativeOccupantCountSensor(runtime, entry.entry_id),
         DiagnosticPredictedNextZoneSensor(runtime, entry.entry_id),
         DiagnosticEntryPathPlausibleZonesSensor(runtime, entry.entry_id),
-        ActivationPlausibleZonesSensor(runtime, entry.entry_id),
-        KeepOnZonesSensor(runtime, entry.entry_id),
     ]
     entities.extend(
         ZoneDiagnosticConfidenceSensor(runtime, entry.entry_id, zone)
@@ -51,9 +49,13 @@ class RuntimeSensor(SensorEntity):
         self.runtime = runtime
         self.entry_id = entry_id
 
+    @property
+    def update_signal(self) -> str:
+        return DISPATCH_DIAGNOSTIC_UPDATE
+
     async def async_added_to_hass(self) -> None:
         self.async_on_remove(
-            async_dispatcher_connect(self.hass, DISPATCH_UPDATE, self._handle_update)
+            async_dispatcher_connect(self.hass, self.update_signal, self._handle_update)
         )
 
     @callback
@@ -66,6 +68,23 @@ class AuthoritativeOccupantCountSensor(RuntimeSensor):
         super().__init__(runtime, entry_id)
         self._attr_name = "Authoritative Occupant Count"
         self._attr_unique_id = f"{entry_id}_authoritative_occupant_count"
+        self._published_value: tuple[bool, int | None] | None = None
+
+    @property
+    def update_signal(self) -> str:
+        return DISPATCH_UPDATE
+
+    async def async_added_to_hass(self) -> None:
+        self._published_value = (self.available, self.native_value)
+        await super().async_added_to_hass()
+
+    @callback
+    def _handle_update(self) -> None:
+        value = (self.available, self.native_value)
+        if value == self._published_value:
+            return
+        self._published_value = value
+        self.async_write_ha_state()
 
     @property
     def available(self) -> bool:
@@ -149,28 +168,6 @@ class DiagnosticEntryPathPlausibleZonesSensor(ZoneListSensor):
             runtime_automation_summary(self.runtime)
             .diagnostic_entry_path_plausible_zones
         )
-
-
-class ActivationPlausibleZonesSensor(ZoneListSensor):
-    entity_key = "activation_plausible_zones"
-    entity_name = "Activation Plausible Zones"
-    _attr_icon = "mdi:motion-sensor"
-    _attr_zone_attribute = "activation_plausible_zones"
-
-    @property
-    def zones(self) -> tuple[str, ...]:
-        return runtime_automation_summary(self.runtime).activation_plausible_zones
-
-
-class KeepOnZonesSensor(ZoneListSensor):
-    entity_key = "keep_on_zones"
-    entity_name = "Keep On Zones"
-    _attr_icon = "mdi:account-clock-outline"
-    _attr_zone_attribute = "keep_on_zones"
-
-    @property
-    def zones(self) -> tuple[str, ...]:
-        return runtime_automation_summary(self.runtime).keep_on_zones
 
 
 class ZoneDiagnosticConfidenceSensor(RuntimeSensor):

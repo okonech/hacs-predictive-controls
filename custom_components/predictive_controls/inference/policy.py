@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
@@ -84,9 +84,13 @@ class PosteriorEventPolicy:
         emit_activation: bool,
         arrival_evidence_ids: Mapping[str, tuple[str, ...]] | None = None,
         audit_context: PackedPolicyAuditContext | None = None,
+        audit_context_factory: Callable[[], PackedPolicyAuditContext] | None = None,
+        capture_audit_context: bool = False,
     ) -> dict[str, ZonePolicyState]:
         """Apply available posterior events; missing values never authorize edges."""
 
+        if audit_context is not None and audit_context_factory is not None:
+            raise ValueError("Policy audit context must use one source")
         self.expire(now)
         arrival_evidence_ids = arrival_evidence_ids or {}
         prior_states = self.states
@@ -110,7 +114,14 @@ class PosteriorEventPolicy:
                         {"expected_occupants": 0},
                     )
                 )
-            self._record_decisions(now, prior_states, decisions, audit_context)
+            self._record_decisions(
+                now,
+                prior_states,
+                decisions,
+                audit_context,
+                audit_context_factory,
+                capture_audit_context,
+            )
             return self.states
 
         released: set[str] = set()
@@ -201,7 +212,14 @@ class PosteriorEventPolicy:
                     arrival_evidence_ids.get(zone, ()),
                 )
             )
-        self._record_decisions(now, prior_states, decisions, audit_context)
+        self._record_decisions(
+            now,
+            prior_states,
+            decisions,
+            audit_context,
+            audit_context_factory,
+            capture_audit_context,
+        )
         return self.states
 
     def expire(self, now: datetime) -> bool:
@@ -271,15 +289,45 @@ class PosteriorEventPolicy:
         prior_states: Mapping[str, ZonePolicyState],
         decisions: list[PolicyDecision] | tuple[PolicyDecision, ...],
         audit_context: PackedPolicyAuditContext | None = None,
+        audit_context_factory: Callable[[], PackedPolicyAuditContext] | None = None,
+        capture_audit_context: bool = False,
     ) -> None:
         self._last_decisions = tuple(decisions)
-        for decision in decisions:
+        changed_zones = {
+            decision.zone
+            for decision in decisions
+            if prior_states[decision.zone].keep_on
+            != self._states[decision.zone].keep_on
+        }
+        if audit_context_factory is not None and (
+            changed_zones or capture_audit_context
+        ):
+            audit_context = audit_context_factory()
+        retained_decisions = list(decisions)
+        if not retained_decisions and audit_context is not None:
+            sample_zone = next(iter(self._states))
+            retained_decisions.append(
+                PolicyDecision(
+                    sample_zone,
+                    "observe",
+                    True,
+                    "periodic_sample",
+                    {},
+                )
+            )
+        sample_index = len(retained_decisions) - 1
+        for index, decision in enumerate(retained_decisions):
+            entry_context = audit_context
+            if audit_context_factory is not None and (
+                decision.zone not in changed_zones and index != sample_index
+            ):
+                entry_context = None
             entry = PosteriorPolicyAuditEntry(
                 now,
                 decision,
                 prior_states[decision.zone].keep_on,
                 self._states[decision.zone].keep_on,
-                audit_context,
+                entry_context,
             )
             self._audit.append(entry)
             self._audit_bytes += self._audit_entry_size(entry)

@@ -82,19 +82,37 @@ def endpoint_factor_decimal(
     *,
     empty_likelihood: Decimal,
     occupied_likelihood: Decimal,
+    reserved_source_indexes: frozenset[int] = frozenset(),
+    reserved_alternative_ids: frozenset[str] = frozenset(),
 ) -> dict[DecimalEndpointKey, Decimal]:
     output: dict[DecimalEndpointKey, Decimal] = {}
     for predecessor, probability in posterior.items():
-        for alternative_id, source_index, weight in alternatives:
-            if weight == 0:
-                continue
+        feasible = tuple(
+            (alternative_id, source_index, weight, multiplicity)
+            for alternative_id, source_index, weight in alternatives
+            if weight != 0
+            for multiplicity in (
+                1
+                if source_index is None
+                else max(
+                    0,
+                    predecessor[source_index]
+                    - int(
+                        source_index in reserved_source_indexes
+                        and alternative_id in reserved_alternative_ids
+                    ),
+                ),
+            )
+            if multiplicity > 0
+        )
+        transition_total = sum(
+            (Decimal(multiplicity) * weight for _, _, weight, multiplicity in feasible),
+            Decimal(0),
+        )
+        for alternative_id, source_index, weight, multiplicity in feasible:
             if source_index is None:
                 successor = predecessor
-                multiplicity = 1
             else:
-                multiplicity = predecessor[source_index]
-                if multiplicity == 0:
-                    continue
                 successor_values = list(predecessor)
                 successor_values[source_index] -= 1
                 successor_values[target_index] += 1
@@ -106,7 +124,11 @@ def endpoint_factor_decimal(
             )
             key = (successor, predecessor, alternative_id)
             output[key] = output.get(key, Decimal(0)) + (
-                probability * Decimal(multiplicity) * weight * likelihood
+                probability
+                * Decimal(multiplicity)
+                * weight
+                / transition_total
+                * likelihood
             )
     total = sum(output.values(), Decimal(0))
     if total <= 0:
@@ -122,19 +144,37 @@ def augmented_endpoint_factor_decimal(
     *,
     empty_likelihood: Decimal,
     occupied_likelihood: Decimal,
+    reserved_source_indexes: frozenset[int] = frozenset(),
+    reserved_alternative_ids: frozenset[str] = frozenset(),
 ) -> dict[DecimalAugmentedKey, Decimal]:
     output: dict[DecimalAugmentedKey, Decimal] = {}
     for (predecessor, contexts), probability in posterior.items():
-        for alternative_id, source_index, weight in alternatives:
-            if weight == 0:
-                continue
+        feasible = tuple(
+            (alternative_id, source_index, weight, multiplicity)
+            for alternative_id, source_index, weight in alternatives
+            if weight != 0
+            for multiplicity in (
+                1
+                if source_index is None
+                else max(
+                    0,
+                    predecessor[source_index]
+                    - int(
+                        source_index in reserved_source_indexes
+                        and alternative_id in reserved_alternative_ids
+                    ),
+                ),
+            )
+            if multiplicity > 0
+        )
+        transition_total = sum(
+            (Decimal(multiplicity) * weight for _, _, weight, multiplicity in feasible),
+            Decimal(0),
+        )
+        for alternative_id, source_index, weight, multiplicity in feasible:
             if source_index is None:
                 successor = predecessor
-                multiplicity = 1
             else:
-                multiplicity = predecessor[source_index]
-                if multiplicity == 0:
-                    continue
                 successor_values = list(predecessor)
                 successor_values[source_index] -= 1
                 successor_values[target_index] += 1
@@ -147,7 +187,11 @@ def augmented_endpoint_factor_decimal(
             context = (endpoint_id, predecessor, alternative_id)
             key = (successor, tuple(sorted((*contexts, context))))
             output[key] = output.get(key, Decimal(0)) + (
-                probability * Decimal(multiplicity) * weight * likelihood
+                probability
+                * Decimal(multiplicity)
+                * weight
+                / transition_total
+                * likelihood
             )
     total = sum(output.values(), Decimal(0))
     if total <= 0:

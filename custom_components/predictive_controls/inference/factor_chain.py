@@ -137,10 +137,11 @@ class ExactFactorChain:
             occupied_log_likelihood,
             event_at,
         )
+        posterior = self._apply_step(self._posterior, step)
         return self._from_parts(
             self._base,
-            (*self._steps, step),
-            self._apply_step(self._posterior, step),
+            _coalesce_trailing_likelihoods(self._steps, (step,)),
+            posterior,
             self._operators,
             self._base_message,
             self._endpoint_prefixes,
@@ -164,7 +165,7 @@ class ExactFactorChain:
         )
         return self._from_parts(
             self._base,
-            (*self._steps, *steps),
+            _coalesce_trailing_likelihoods(self._steps, steps),
             posterior,
             self._operators,
             self._base_message,
@@ -273,13 +274,17 @@ class ExactFactorChain:
         ):
             if predecessor_mass == -math.inf:
                 continue
+            transition_log_normalizer = factor.transition_log_normalizer(predecessor)
             for alternative, successors, matching_queries in compiled:
                 source_index = alternative.source_index
                 if source_index is None:
                     successor_rank = predecessor_rank
                     multiplicity = 0.0
                 else:
-                    count = predecessor[source_index]
+                    count = factor.alternative_multiplicity(
+                        predecessor,
+                        alternative,
+                    )
                     if count == 0:
                         continue
                     assert successors is not None
@@ -295,6 +300,7 @@ class ExactFactorChain:
                     predecessor_mass
                     + alternative.log_weight
                     + multiplicity
+                    - transition_log_normalizer
                     + likelihood
                 )
                 if cached_total is None:
@@ -398,9 +404,14 @@ class ExactFactorChain:
         self,
         watermark: datetime,
         support_factory: SupportCertificateFactory | None = None,
+        *,
+        current_sustained_episode_ids: frozenset[str] = frozenset(),
     ) -> tuple[ExactFactorChain, tuple[str, ...]]:
         require_utc(watermark, "Factor-chain compaction watermark")
-        base_message = self._base_message.expire_support(watermark)
+        base_message = self._base_message.renew_episode_support(
+            current_sustained_episode_ids,
+            watermark,
+        ).expire_support(watermark)
         through = 0
         consumed: list[str] = []
         for step in self._steps:
@@ -562,13 +573,17 @@ class ExactFactorChain:
         ):
             if predecessor_mass == -math.inf:
                 continue
+            transition_log_normalizer = step.transition_log_normalizer(predecessor)
             for alternative, successors in compiled:
                 source_index = alternative.source_index
                 if source_index is None:
                     successor_rank = predecessor_rank
                     multiplicity = 0.0
                 else:
-                    count = predecessor[source_index]
+                    count = step.alternative_multiplicity(
+                        predecessor,
+                        alternative,
+                    )
                     if count == 0:
                         continue
                     assert successors is not None
@@ -585,9 +600,11 @@ class ExactFactorChain:
                     predecessor_mass
                     + alternative.log_weight
                     + multiplicity
+                    - transition_log_normalizer
                     + likelihood,
                 )
         return CompactLogPosterior(self.space, output)
+
 
     def _apply_likelihood_steps(
         self,
@@ -675,13 +692,17 @@ class ExactFactorChain:
                 ).successors
             compiled.append((alternative, successors))
         for rank, configuration in enumerate(self.space.configurations):
+            transition_log_normalizer = step.transition_log_normalizer(configuration)
             for alternative, successors in compiled:
                 source_index = alternative.source_index
                 if source_index is None:
                     successor_rank = rank
                     multiplicity = 0.0
                 else:
-                    count = configuration[source_index]
+                    count = step.alternative_multiplicity(
+                        configuration,
+                        alternative,
+                    )
                     if count == 0:
                         continue
                     assert successors is not None
@@ -694,7 +715,10 @@ class ExactFactorChain:
                     else step.empty_log_likelihood
                 )
                 log_potential = (
-                    alternative.log_weight + multiplicity + likelihood
+                    alternative.log_weight
+                    + multiplicity
+                    - transition_log_normalizer
+                    + likelihood
                 )
                 total_predecessor[rank] = _logaddexp(
                     total_predecessor[rank],
@@ -716,7 +740,14 @@ class ExactFactorChain:
     ) -> tuple[tuple[EndpointAlternative, int, float], ...]:
         if not 0 <= factor.target_index < len(self.space.zones):
             raise IndexError("Endpoint target zone index is out of range")
+        for alternative in factor.alternatives:
+            source_index = alternative.source_index
+            if source_index is not None and not 0 <= source_index < len(
+                self.space.locations
+            ):
+                raise IndexError("Endpoint source location index is out of range")
         predecessor = self.space.unrank(predecessor_rank)
+        transition_log_normalizer = factor.transition_log_normalizer(predecessor)
         transitions: list[tuple[EndpointAlternative, int, float]] = []
         for alternative in factor.alternatives:
             if alternative.log_weight == -math.inf:
@@ -726,11 +757,12 @@ class ExactFactorChain:
                 successor_rank = predecessor_rank
                 multiplicity = 0.0
             else:
-                if not 0 <= source_index < len(self.space.locations):
-                    raise IndexError("Endpoint source location index is out of range")
                 if source_index == factor.target_index:
                     raise ValueError("Endpoint movement source and target must differ")
-                count = predecessor[source_index]
+                count = factor.alternative_multiplicity(
+                    predecessor,
+                    alternative,
+                )
                 if count == 0:
                     continue
                 successor_rank = self._operators.operator(
@@ -748,7 +780,10 @@ class ExactFactorChain:
                 (
                     alternative,
                     successor_rank,
-                    alternative.log_weight + multiplicity + likelihood,
+                    alternative.log_weight
+                    + multiplicity
+                    - transition_log_normalizer
+                    + likelihood,
                 )
             )
         return tuple(transitions)
@@ -774,6 +809,35 @@ class ExactFactorChain:
             alternative.deadline,
             alternative.evidence_ids,
         )
+
+
+def _coalesce_trailing_likelihoods(
+    existing_steps: tuple[FactorStep, ...],
+    added_steps: tuple[ZoneLikelihoodStep, ...],
+) -> tuple[FactorStep, ...]:
+    segment_start = next(
+        (
+            index + 1
+            for index in range(len(existing_steps) - 1, -1, -1)
+            if isinstance(existing_steps[index], EndpointFactor)
+        ),
+        0,
+    )
+    prefix = existing_steps[:segment_start]
+    by_zone: dict[int, ZoneLikelihoodStep] = {}
+    for step in (*existing_steps[segment_start:], *added_steps):
+        assert isinstance(step, ZoneLikelihoodStep)
+        previous = by_zone.get(step.zone_index)
+        if previous is None:
+            by_zone[step.zone_index] = step
+            continue
+        by_zone[step.zone_index] = ZoneLikelihoodStep(
+            step.zone_index,
+            previous.empty_log_likelihood + step.empty_log_likelihood,
+            previous.occupied_log_likelihood + step.occupied_log_likelihood,
+            max(previous.event_at, step.event_at),
+        )
+    return (*prefix, *by_zone.values())
 
 
 def _logaddexp(first: float, second: float) -> float:

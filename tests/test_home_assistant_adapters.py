@@ -124,6 +124,7 @@ def install_homeassistant(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
             "homeassistant.core",
             "homeassistant.helpers",
             "homeassistant.helpers.dispatcher",
+            "homeassistant.helpers.entity_registry",
             "homeassistant.helpers.entity_platform",
             "homeassistant.helpers.event",
             "homeassistant.helpers.selector",
@@ -171,6 +172,17 @@ def install_homeassistant(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         modules["homeassistant.helpers.dispatcher"],
         "async_dispatcher_send",
         lambda *_: None,
+    )
+    registry = SimpleNamespace(entities={}, async_remove=lambda _entity_id: None)
+    set_attr(
+        modules["homeassistant.helpers.entity_registry"],
+        "async_get",
+        lambda _hass: registry,
+    )
+    set_attr(
+        modules["homeassistant.helpers"],
+        "entity_registry",
+        modules["homeassistant.helpers.entity_registry"],
     )
     set_attr(
         modules["homeassistant.helpers.entity_platform"], "AddEntitiesCallback", object
@@ -446,7 +458,7 @@ def test_panel_registration_and_unregistration(monkeypatch: pytest.MonkeyPatch) 
     assert len(static_paths) == 1
     assert len(fake.registered_panels) == 2
     assert fake.removed_panels == [DOMAIN, DOMAIN]
-    assert module.panel_js_url().endswith("panel-v0.2.0.js")
+    assert module.panel_js_url().endswith("panel-v0.2.1.js")
 
 
 def make_runtime() -> SimpleNamespace:
@@ -516,7 +528,14 @@ def test_entity_lifecycles_properties_and_diagnostics(
             _ = entity.is_on
         if hasattr(type(entity), "extra_state_attributes"):
             _ = entity.extra_state_attributes
-        assert entity.writes == 1
+        edge_gated = isinstance(
+            entity,
+            (
+                sensor.AuthoritativeOccupantCountSensor,
+                binary.RuntimeBinarySensor,
+            ),
+        )
+        assert getattr(entity, "writes", 0) == (0 if edge_gated else 1)
 
     missing = sensor.ZoneDiagnosticConfidenceSensor(runtime, "entry", "missing")
     assert missing.native_value == 0.0

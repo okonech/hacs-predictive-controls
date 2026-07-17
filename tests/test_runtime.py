@@ -306,7 +306,7 @@ def test_runtime_lifecycle_callbacks_persistence_and_actions(
 
     runtime.start()
     assert len(state_callbacks) == 1
-    assert len(interval_callbacks) == 2
+    assert len(interval_callbacks) == 3
     assert runtime.expected_occupants == 1
     assert runtime.latency_metrics["sample_count"] == 1
     assert store.delayed
@@ -363,6 +363,7 @@ def test_runtime_lifecycle_callbacks_persistence_and_actions(
         runtime.confidence, "expire_transient_state", lambda _now: False
     )
     runtime._async_expire_transient_state(NOW)  # noqa: SLF001
+    runtime._async_publish_diagnostics(NOW)  # noqa: SLF001
     monkeypatch.setattr(runtime.confidence, "expire_transient_state", lambda _now: True)
     runtime._async_expire_transient_state(NOW)  # noqa: SLF001
 
@@ -392,7 +393,7 @@ def test_runtime_lifecycle_callbacks_persistence_and_actions(
     asyncio_run(awaitable)
     assert store.saved
     asyncio_run(runtime.async_stop())
-    assert unsubscribed == ["state", "interval", "interval"]
+    assert unsubscribed == ["state", "interval", "interval", "interval"]
     assert store.saved
 
     no_store = runtime_module.PredictiveControlsRuntime(

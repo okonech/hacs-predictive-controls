@@ -164,7 +164,9 @@ def test_duration_is_partition_invariant_and_bounded() -> None:
         for update in single.advance(NOW + timedelta(seconds=300))
         for emission in update.emissions
     )
-    expected = math.log(4.0) * (1.0 - math.exp(-1.0))
+    expected = SUSTAINED_EPISODE_PROFILE.duration_max_log_odds * (
+        1.0 - math.exp(-1.0)
+    )
 
     assert frequent_total == pytest.approx(expected)
     assert single_total == pytest.approx(expected)
@@ -193,7 +195,7 @@ def test_duplicate_burst_and_timer_frequency_do_not_change_duration_evidence() -
         emission.occupied_log_likelihood
         for update in first
         for emission in update.emissions
-    ) < math.log(4.0)
+    ) < SUSTAINED_EPISODE_PROFILE.duration_max_log_odds
 
 
 def test_delayed_timer_finalizes_at_event_time_deadline() -> None:
@@ -525,7 +527,9 @@ def test_episode_restore_rejects_invalid_payloads_atomically(
         elif kind == "duration":
             item["applied_duration_log_odds"] = math.inf
         elif kind == "duration_ceiling":
-            item["applied_duration_log_odds"] = math.log(4.0) + 1.0
+            item["applied_duration_log_odds"] = (
+                SUSTAINED_EPISODE_PROFILE.duration_max_log_odds + 1.0
+            )
         elif kind == "datetime_type":
             item["last_event_at"] = 1
         elif kind == "datetime_value":

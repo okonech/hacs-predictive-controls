@@ -1,7 +1,7 @@
 DOMAIN = "predictive_controls"
 NAME = "Predictive Controls"
-VERSION = "0.2.0"
-PANEL_FILENAME = "panel-v0.2.0.js"
+VERSION = "0.2.1"
+PANEL_FILENAME = "panel-v0.2.1.js"
 
 CONF_ACTIONS_YAML = "actions_yaml"
 CONF_ACTIVATION_RISK_THRESHOLD = "activation_risk_threshold"
@@ -21,6 +21,7 @@ DEFAULT_RELEASE_RISK_THRESHOLD = 0.95
 DEFAULT_TRANSITION_WINDOW = 30
 
 DISPATCH_UPDATE = f"{DOMAIN}_update"
+DISPATCH_DIAGNOSTIC_UPDATE = f"{DOMAIN}_diagnostic_update"
 STATIC_PATH_REGISTERED = "_static_path_registered"
 WEBSOCKET_REGISTERED = "_websocket_registered"
 STORAGE_VERSION = 6

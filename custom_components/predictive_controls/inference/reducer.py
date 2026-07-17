@@ -182,7 +182,7 @@ class AugmentedEventReducer:
         intervals = tuple(
             interval
             for state in episode_states
-            if (interval := _route_interval(state, event_at)) is not None
+            if (interval := _route_interval(state)) is not None
         )
         alternatives = [
             EndpointAlternative(
@@ -233,6 +233,15 @@ class AugmentedEventReducer:
             tuple(alternatives),
             emission.empty_log_likelihood,
             emission.occupied_log_likelihood,
+            frozenset(
+                self._space.location_index(state.zone)
+                for state in episode_states
+                if state.current_positive
+                and self._map.occupancy_behavior_for_node(
+                    self._map.nodes[state.node_id]
+                )
+                == "sustained"
+            ),
         )
 
 
@@ -332,6 +341,16 @@ class FactorChainEventReducer:
                 through,
                 episodes.states,
             ),
+            current_sustained_episode_ids=frozenset(
+                state.episode_id
+                for state in episodes.states
+                if state.current_positive
+                and state.episode_id is not None
+                and self._map.occupancy_behavior_for_node(
+                    self._map.nodes[state.node_id]
+                )
+                == "sustained"
+            ),
         )
         return (
             FactorChainReplayState(chain, episodes.states, state.dispositions),
@@ -369,6 +388,8 @@ class FactorChainEventReducer:
                 atom.disposition == "graph_valid",
             )
         if atom.disposition not in {"stay", "unlocated"}:
+            return None
+        if self._space.unrank(atom.successor_rank)[factor.target_index] == 0:
             return None
         target_state = next(
             (
@@ -451,7 +472,6 @@ class FactorChainEventReducer:
 
 def _route_interval(
     state: NodeEpisodeState,
-    event_at: datetime,
 ) -> RouteEpisodeInterval | None:
     if (
         state.episode_id is None
@@ -460,11 +480,7 @@ def _route_interval(
     ):
         return None
     if state.current_positive:
-        valid_until = max(
-            event_at,
-            state.clear_deadline or event_at,
-            state.endpoint_valid_until or event_at,
-        )
+        valid_until = state.endpoint_valid_until or state.started_at
     else:
         valid_until = (
             state.finalized_at

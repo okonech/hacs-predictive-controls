@@ -5,8 +5,9 @@ from __future__ import annotations
 import math
 from array import array
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from math import exp as _exp
 from typing import cast
 
 from .operators import CompleteMoveOperators
@@ -360,6 +361,35 @@ class AugmentedLogMessage:
             ),
         )
 
+    def renew_episode_support(
+        self,
+        episode_ids: frozenset[str],
+        frontier: datetime,
+    ) -> AugmentedLogMessage:
+        """Renew existing branch-local episode support to a finite frontier."""
+
+        require_utc(frontier, "Support renewal frontier")
+        return AugmentedLogMessage(
+            self.space,
+            (
+                (
+                    AugmentedStateKey(
+                        key.occupancy_rank,
+                        key.contexts,
+                        tuple(
+                            replace(support, valid_until=frontier)
+                            if support.disposition == "stay"
+                            and not episode_ids.isdisjoint(support.episode_ids)
+                            else support
+                            for support in key.supports
+                        ),
+                    ),
+                    log_mass,
+                )
+                for key, log_mass in self._entries
+            ),
+        )
+
     def support_probability(
         self,
         predicate: Callable[[AugmentedStateKey], bool],
@@ -381,6 +411,7 @@ class EndpointFactor:
     alternatives: tuple[EndpointAlternative, ...]
     empty_log_likelihood: float
     occupied_log_likelihood: float
+    reserved_source_indexes: frozenset[int] = frozenset()
 
     def __post_init__(self) -> None:
         if self.target_index < 0 or not self.target_zone:
@@ -414,6 +445,40 @@ class EndpointFactor:
             )
         ):
             raise ValueError("Endpoint observation log likelihoods must be finite")
+        if any(index < 0 for index in self.reserved_source_indexes):
+            raise ValueError("Endpoint reserved source indexes must be non-negative")
+
+    def alternative_multiplicity(
+        self,
+        configuration: tuple[int, ...],
+        alternative: EndpointAlternative,
+    ) -> int:
+        """Return anonymous positions available to explain this endpoint."""
+
+        source_index = alternative.source_index
+        if source_index is None:
+            return 1
+        if not 0 <= source_index < len(configuration):
+            raise IndexError("source location index is out of range")
+        return max(
+            0,
+            configuration[source_index]
+            - int(
+                alternative.disposition == "missed_movement"
+                and source_index in self.reserved_source_indexes
+            ),
+        )
+
+    def transition_log_normalizer(self, configuration: tuple[int, ...]) -> float:
+        """Normalize feasible categorical alternatives for one predecessor."""
+
+        return _logsumexp(
+            alternative.log_weight
+            + math.log(self.alternative_multiplicity(configuration, alternative))
+            for alternative in self.alternatives
+            if alternative.log_weight != -math.inf
+            and self.alternative_multiplicity(configuration, alternative) > 0
+        )
 
     def apply(
         self,
@@ -443,6 +508,9 @@ class EndpointFactor:
         output: list[tuple[AugmentedStateKey, float]] = []
         for predecessor_key, predecessor_log_mass in message.entries:
             predecessor_configuration = space.unrank(predecessor_key.occupancy_rank)
+            transition_log_normalizer = self.transition_log_normalizer(
+                predecessor_configuration
+            )
             for alternative in self.alternatives:
                 if alternative.log_weight == -math.inf:
                     continue
@@ -451,7 +519,10 @@ class EndpointFactor:
                     successor_rank = predecessor_key.occupancy_rank
                     multiplicity_log_weight = 0.0
                 else:
-                    source_multiplicity = predecessor_configuration[source_index]
+                    source_multiplicity = self.alternative_multiplicity(
+                        predecessor_configuration,
+                        alternative,
+                    )
                     if source_multiplicity == 0:
                         continue
                     successor_rank = operators.operator(
@@ -489,6 +560,7 @@ class EndpointFactor:
                         predecessor_log_mass
                         + alternative.log_weight
                         + multiplicity_log_weight
+                        - transition_log_normalizer
                         + observation_log_likelihood,
                     )
                 )
@@ -525,7 +597,7 @@ def _logsumexp(values: Iterable[float]) -> float:
     if maximum == -math.inf:
         return -math.inf
     return maximum + math.log(
-        math.fsum(math.exp(value - maximum) for value in collected)
+        math.fsum(_exp(value - maximum) for value in collected)
     )
 
 

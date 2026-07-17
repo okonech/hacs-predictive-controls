@@ -171,22 +171,23 @@ Arrival events and these probability sensors are disabled by default:
 Detailed paths, competing assignments, evidence IDs, thresholds, and reasons
 remain in bounded panel, status, and policy-audit diagnostics.
 
-### `0.2.0` Compatibility Entities
+### `0.2.1` Legacy Entity Removal
 
-The integration also provides:
+Version `0.2.1` removes the `0.2.0` compatibility entities:
+`binary_sensor.<zone>_activation_plausible`,
+`binary_sensor.<zone>_keep_on`,
+`binary_sensor.<zone>_prelight_plausible`, `binary_sensor.home_keep_on`, and the
+aggregate activation/keep-on sensors. Their registry rows are deleted when the
+config entry starts. Automations should use `active`, `prelight`, and
+`home_active`.
 
-- `binary_sensor.<zone>_activation_plausible`, a short fresh-arrival lease;
-- `binary_sensor.<zone>_keep_on`, the current ownership latch;
-- `binary_sensor.<zone>_prelight_plausible`, the current prediction lease;
-- `binary_sensor.home_keep_on`;
-- per-zone diagnostic confidence and entry-path entities; and
-- aggregate activation, keep-on, entry-path, and prediction sensors.
+Per-zone confidence, probability, and entry-path entities plus aggregate
+entry-path and prediction sensors remain available as disabled-by-default
+diagnostics.
 
-`keep_on` aliases `active`, `prelight_plausible` aliases
-`prelight`, and `home_keep_on` aliases `home_active`; `activation_plausible`
-retains its short accepted-arrival lease for compatibility. Existing registry
-entries remain usable for at least one full released version. Legacy removal is
-a separately reviewed breaking change.
+The sidebar panel includes an Activity workspace for current policy ownership,
+production on/off edges, rejected decisions, and sampled exact-context markers.
+It renders retained decisions newest first in bounded 50-row pages.
 
 ## Using It in Automations
 

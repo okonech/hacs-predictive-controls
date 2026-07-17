@@ -771,6 +771,92 @@ def test_target_policy_audit_sparse_chain_is_hermetic_and_audit_only(
     assert restored.diagnostics.joint_target_policy_audit[-1].context == entry.context
 
 
+def test_policy_audit_sample_frontier_advances_only_after_successful_pack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target_policy = PosteriorEventPolicy(
+        make_map().zones(),
+        activation_threshold=0.8,
+        release_threshold=0.95,
+    )
+    engine = ExactInferenceEngine(make_map(), 1, policy=target_policy)
+
+    def reject_context(*_args: object) -> object:
+        raise ValueError("context packing failed")
+
+    monkeypatch.setattr(engine, "_target_policy_audit_context", reject_context)
+
+    with pytest.raises(ValueError, match="context packing failed"):
+        engine._apply_policy(NOW, emit_activation=False)  # noqa: SLF001
+
+    assert engine._last_policy_audit_context_at is None  # noqa: SLF001
+    assert target_policy.audit == ()
+
+
+def test_policy_audit_sample_frontier_never_moves_backward(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target_policy = PosteriorEventPolicy(
+        make_map().zones(),
+        activation_threshold=0.8,
+        release_threshold=0.95,
+    )
+    engine = ExactInferenceEngine(make_map(), 1, policy=target_policy)
+    sampled_at: list[datetime] = []
+
+    def context_at(now: datetime, *_args: object) -> object:
+        sampled_at.append(now)
+        return pack_policy_audit_payload({"schema": "test-audit-context"})
+
+    monkeypatch.setattr(engine, "_target_policy_audit_context", context_at)
+
+    engine._apply_policy(NOW, emit_activation=False)  # noqa: SLF001
+    engine._apply_policy(  # noqa: SLF001
+        NOW - timedelta(seconds=1), emit_activation=False
+    )
+    engine._apply_policy(  # noqa: SLF001
+        NOW + timedelta(seconds=29), emit_activation=False
+    )
+    engine._apply_policy(  # noqa: SLF001
+        NOW + timedelta(seconds=30), emit_activation=False
+    )
+
+    assert sampled_at == [NOW, NOW + timedelta(seconds=30)]
+    assert engine._last_policy_audit_context_at == NOW + timedelta(  # noqa: SLF001
+        seconds=30
+    )
+
+
+def test_policy_audit_sample_frontier_restores_newest_complete_context() -> None:
+    target_policy = PosteriorEventPolicy(
+        make_map().zones(),
+        activation_threshold=0.8,
+        release_threshold=0.95,
+    )
+    context = pack_policy_audit_payload({"schema": "test-audit-context"})
+    target_policy.apply(
+        NOW,
+        1,
+        {"office": 0.1},
+        False,
+        {},
+        emit_activation=False,
+        audit_context=context,
+    )
+    target_policy.apply(
+        NOW + timedelta(seconds=1),
+        1,
+        {"office": 0.2},
+        False,
+        {},
+        emit_activation=False,
+    )
+
+    engine = ExactInferenceEngine(make_map(), 1, policy=target_policy)
+
+    assert engine._last_policy_audit_context_at == NOW  # noqa: SLF001
+
+
 @pytest.mark.parametrize(
     "mutate",
     (
@@ -1470,6 +1556,14 @@ def test_exact_persists_unresolved_replay_and_continues_exactly() -> None:
         emit_activation=False,
     )
     payload = original.serialize(NOW, {})
+    assert isinstance(payload, dict)
+    chain = payload["chain"]
+    assert isinstance(chain, dict)
+    steps = chain["steps"]
+    assert isinstance(steps, list)
+    endpoint_steps = [step for step in steps if step.get("kind") == "endpoint"]
+    assert endpoint_steps
+    assert all("reserved_source_indexes" in step for step in endpoint_steps)
     restored = ExactInferenceEngine(predictive_map, 0)
 
     restored.restore(payload)
@@ -1497,6 +1591,38 @@ def test_exact_persists_unresolved_replay_and_continues_exactly() -> None:
     assert restored.serialize(NOW + timedelta(seconds=1), {}) == original.serialize(
         NOW + timedelta(seconds=1), {}
     )
+
+
+def test_exact_endpoint_reservation_metadata_is_backward_compatible() -> None:
+    endpoint_factor = EndpointFactor(
+        EndpointToken("endpoint", "hall", NOW),
+        1,
+        "hall",
+        (
+            EndpointAlternative(
+                "stay",
+                "stay",
+                None,
+                None,
+                ("hall",),
+                0.0,
+                NOW,
+                (),
+            ),
+        ),
+        math.log(0.2),
+        math.log(0.9),
+        frozenset({0}),
+    )
+
+    payload = engine_module._encode_factor_step(endpoint_factor)  # noqa: SLF001
+    assert isinstance(payload, dict)
+    assert engine_module._decode_factor_step(payload) == endpoint_factor  # noqa: SLF001
+
+    payload.pop("reserved_source_indexes")
+    restored = engine_module._decode_factor_step(payload)  # noqa: SLF001
+    assert isinstance(restored, EndpointFactor)
+    assert restored.reserved_source_indexes == frozenset()
 
 
 def test_exact_finalization_compacts_raw_input_and_consumes_endpoint() -> None:
@@ -1721,6 +1847,10 @@ def _invalid_support_field(field: str, value: object) -> PayloadMutation:
         (
             _set_payload(("chain", "steps", 0, "alternatives"), None),
             "endpoint alternatives",
+        ),
+        (
+            _set_payload(("chain", "steps", 0, "reserved_source_indexes"), {}),
+            "reserved sources",
         ),
         (
             _set_payload(("chain", "steps", 0, "alternatives", 0), None),

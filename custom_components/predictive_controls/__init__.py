@@ -41,6 +41,7 @@ PLATFORM_NAMES = ["sensor", "binary_sensor", "event"]
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     from homeassistant.const import Platform
 
+    from .entity_registry import async_remove_legacy_entities
     from .panel import async_register_panel
     from .runtime import PredictiveControlsRuntime
     from .storage import PredictiveControlsStore
@@ -103,6 +104,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     domain_data[entry.entry_id] = runtime
     platforms = [Platform(platform_name) for platform_name in PLATFORM_NAMES]
     await hass.config_entries.async_forward_entry_setups(entry, platforms)
+    await async_remove_legacy_entities(hass, entry.entry_id, predictive_map)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     return True
 

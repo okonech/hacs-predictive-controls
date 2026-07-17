@@ -563,6 +563,122 @@ def test_factor_chain_strictly_compacts_only_resolved_prefix() -> None:
     assert tuple(after.posterior) == pytest.approx(tuple(chain.posterior), abs=1e-12)
 
 
+def test_factor_chain_coalesces_trailing_same_zone_likelihoods() -> None:
+    space = StateSpace(("zone-0", "zone-1"), 1)
+    posterior = CompactLogPosterior.uniform(space)
+    chain = ExactFactorChain(posterior)
+    empty_log_likelihood = math.log(0.95)
+    occupied_log_likelihood = math.log(0.85)
+
+    for offset in range(100):
+        chain = chain.apply_zone_likelihood(
+            0,
+            empty_log_likelihood=empty_log_likelihood,
+            occupied_log_likelihood=occupied_log_likelihood,
+            event_at=NOW + timedelta(milliseconds=offset),
+        )
+    expected = posterior.apply_zone_likelihoods(
+        ((0, 100 * empty_log_likelihood, 100 * occupied_log_likelihood),)
+    )
+
+    assert len(chain.steps) == 1
+    assert tuple(chain.posterior) == pytest.approx(tuple(expected), abs=1e-12)
+
+
+def test_factor_chain_coalesces_interleaved_likelihood_batch_by_zone() -> None:
+    space = StateSpace(("zone-0", "zone-1"), 2)
+    posterior = CompactLogPosterior.uniform(space)
+    steps = (
+        ZoneLikelihoodStep(0, -0.1, -0.2, NOW),
+        ZoneLikelihoodStep(1, -0.3, -0.4, NOW + timedelta(milliseconds=1)),
+        ZoneLikelihoodStep(0, -0.5, -0.6, NOW + timedelta(milliseconds=2)),
+    )
+
+    chain = ExactFactorChain(posterior).apply_zone_likelihoods(steps)
+    expected = ExactFactorChain(posterior, steps)
+
+    assert all(isinstance(step, ZoneLikelihoodStep) for step in chain.steps)
+    assert [
+        step.zone_index
+        for step in chain.steps
+        if isinstance(step, ZoneLikelihoodStep)
+    ] == [0, 1]
+    first_step = chain.steps[0]
+    assert isinstance(first_step, ZoneLikelihoodStep)
+    assert first_step == ZoneLikelihoodStep(
+        0,
+        -0.6,
+        -0.8,
+        NOW + timedelta(milliseconds=2),
+    )
+    assert tuple(chain.posterior) == pytest.approx(
+        tuple(expected.posterior), abs=1e-12
+    )
+
+
+def test_factor_chain_never_coalesces_likelihoods_across_endpoint() -> None:
+    space = StateSpace(("zone-0", "zone-1"), 1)
+    posterior = CompactLogPosterior.uniform(space)
+    before = ZoneLikelihoodStep(0, -0.1, -0.2, NOW)
+    endpoint = factor("first", 1, 0)
+    after = ZoneLikelihoodStep(
+        0,
+        -0.3,
+        -0.4,
+        NOW + timedelta(milliseconds=1),
+    )
+    expected = ExactFactorChain(posterior, (before, endpoint, after))
+
+    chain = ExactFactorChain(posterior).apply_zone_likelihood(
+        before.zone_index,
+        empty_log_likelihood=before.empty_log_likelihood,
+        occupied_log_likelihood=before.occupied_log_likelihood,
+        event_at=before.event_at,
+    )
+    chain = chain.apply_endpoint(endpoint).apply_zone_likelihood(
+        after.zone_index,
+        empty_log_likelihood=after.empty_log_likelihood,
+        occupied_log_likelihood=after.occupied_log_likelihood,
+        event_at=after.event_at,
+    )
+
+    assert chain.steps == (before, endpoint, after)
+    assert chain.assignment_probability("first", lambda _atom: True) == pytest.approx(
+        expected.assignment_probability("first", lambda _atom: True), abs=1e-12
+    )
+    assert tuple(chain.posterior) == pytest.approx(
+        tuple(expected.posterior), abs=1e-12
+    )
+
+
+def test_coalesced_likelihood_compacts_after_latest_contributing_event() -> None:
+    space = StateSpace(("zone-0", "zone-1"), 1)
+    posterior = CompactLogPosterior.uniform(space)
+    latest = NOW + timedelta(seconds=1)
+    chain = ExactFactorChain(posterior).apply_zone_likelihood(
+        0,
+        empty_log_likelihood=-0.1,
+        occupied_log_likelihood=-0.2,
+        event_at=NOW,
+    )
+    chain = chain.apply_zone_likelihood(
+        0,
+        empty_log_likelihood=-0.3,
+        occupied_log_likelihood=-0.4,
+        event_at=latest,
+    )
+
+    at_latest, consumed = chain.compact(latest)
+    after_latest, _ = chain.compact(latest + timedelta(microseconds=1))
+
+    assert at_latest is chain
+    assert consumed == ()
+    assert after_latest.steps == ()
+    assert tuple(after_latest.posterior) == pytest.approx(
+        tuple(chain.posterior), abs=1e-12
+    )
+
+
 def test_compact_preserves_exact_branch_support_strata() -> None:
     space = StateSpace(("zone-0", "zone-1"), 2)
     posterior = CompactLogPosterior(

@@ -225,6 +225,14 @@ and movement replay evidence.
   reset remain permitted overrides. Automatic recovery from a continuously
   stuck-on room sensor is out of scope.
 
+  A coherent `graph_valid` or `censored_graph_path` assignment remains feasible
+  with full anonymous source multiplicity while current sustained evidence
+  competes in the same joint posterior. For a non-adjacent `missed_movement`
+  alternative, one position best supported by a current sustained assertion is
+  unavailable as that alternative's source; co-occupants remain available.
+  This movement distinction does not authorize automation release, which
+  remains governed by `POL-016` and `POL-017`.
+
   A room-positive assertion is current while its physical node's effective state
   is positive or a subsequent clear remains before that episode's deterministic
   stable-clear deadline. If no reassertion occurs, the positive becomes
@@ -241,6 +249,15 @@ and movement replay evidence.
   timestamps, evidence IDs, dispositions, update sequence, prediction, or
   learning. A valid assertion MAY localize its source through the present using
   an explicit observation-validity interval, not a fabricated path event.
+
+  A branch-local support atom retained from the assertion's original joint
+  assignment MAY renew its finite `valid_until` to the current deterministic
+  frontier while one of its episode IDs identifies that same current valid
+  sustained assertion. Renewal MUST preserve the atom's augmented stratum and
+  probability exactly; it MUST NOT create support on another stratum,
+  recalculate evidence, or reconstruct provenance from occupancy marginals.
+  When stable clear makes the episode historical, renewal stops and ordinary
+  support expiration removes the atom.
 
 Naive periodic reapplication is rejected because it counts correlated samples
 as independent. An infinite posterior anchor is also rejected: a current

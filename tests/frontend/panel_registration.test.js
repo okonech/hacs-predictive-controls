@@ -99,10 +99,196 @@ test("panel defaults to occupancy first and renders requested tab order", async 
   assert.match(panel.innerHTML, /<main class="occupancy-layout">/);
   assert.match(
     panel.innerHTML,
-    /data-tab="occupancy">Occupancy<\/button>\s*<button[^>]+data-tab="reliability">Reliability<\/button>\s*<button[^>]+data-tab="map">Map<\/button>\s*<button[^>]+data-tab="yaml">YAML<\/button>\s*<button[^>]+data-tab="actions">Actions<\/button>\s*<button[^>]+data-tab="settings">Settings<\/button>/,
+    /data-tab="occupancy">Occupancy<\/button>\s*<button[^>]+data-tab="reliability">Reliability<\/button>\s*<button[^>]+data-tab="activity">Activity<\/button>\s*<button[^>]+data-tab="map">Map<\/button>\s*<button[^>]+data-tab="yaml">YAML<\/button>\s*<button[^>]+data-tab="actions">Actions<\/button>\s*<button[^>]+data-tab="settings">Settings<\/button>/,
   );
   assert.match(panel.innerHTML, /Anonymous Tracks/);
   assert.match(panel.innerHTML, /No occupants are currently localized/);
+});
+
+test("activity workspace explains edges, rejections, and sampled snapshots", async () => {
+  const Panel = await panelConstructor();
+  const panel = new Panel();
+  panel._hass = {};
+  panel._config = {
+    map: {
+      zones: {
+        office: { label: "Office", floor: "second_floor" },
+        hallway: { label: "Hallway", floor: "second_floor" },
+      },
+      nodes: {},
+    },
+  };
+  panel._statusUpdated = new Date("2026-07-17T12:01:00Z");
+  panel._status = {
+    occupancy_diagnostics: {
+      joint: {
+        policy: {
+          office: {
+            keep_on: true,
+            reason: "arrival-supported posterior event",
+            last_trusted_at: "2026-07-17T12:00:00Z",
+            last_release_cause: null,
+          },
+          hallway: {
+            keep_on: false,
+            reason: "finalized release-safe posterior event",
+            last_trusted_at: "2026-07-17T11:50:00Z",
+            last_release_cause: "release_safe",
+          },
+        },
+        arrival_supported_probabilities: { office: 0.84 },
+        release_safe: {
+          available: true,
+          probabilities: { office: 0.12, hallway: 0.97 },
+        },
+        policy_audit_retention: {
+          retention_hours: 12,
+          entry_count: 3,
+          context_compressed_bytes: 24576,
+          oldest_decision_at: "2026-07-17T11:59:30Z",
+          newest_decision_at: "2026-07-17T12:00:30Z",
+        },
+        policy_audit: [
+          {
+            decision_at: "2026-07-17T12:00:00Z",
+            decision: {
+              zone: "office",
+              action: "activate",
+              accepted: true,
+              reason_code: "arrival_supported",
+              gate_values: { probability: 0.84, threshold: 0.8 },
+              evidence_ids: ["episode-office"],
+            },
+            prior_active: false,
+            resulting_active: true,
+            context_complete: true,
+          },
+          {
+            decision_at: "2026-07-17T12:00:15Z",
+            decision: {
+              zone: "hallway",
+              action: "activate",
+              accepted: false,
+              reason_code: "arrival_supported_not_met",
+              gate_values: { probability: 0.31, threshold: 0.8 },
+              evidence_ids: [],
+            },
+            prior_active: false,
+            resulting_active: false,
+            context_complete: false,
+          },
+          {
+            decision_at: "2026-07-17T12:00:30Z",
+            decision: {
+              zone: "office",
+              action: "observe",
+              accepted: true,
+              reason_code: "periodic_sample",
+              gate_values: {},
+              evidence_ids: [],
+            },
+            prior_active: true,
+            resulting_active: true,
+            context_complete: true,
+          },
+        ],
+      },
+    },
+  };
+  panel._tab = "activity";
+
+  panel.render();
+
+  assert.match(panel.innerHTML, /<main class="activity-layout">/);
+  assert.match(panel.innerHTML, /1 active zone/);
+  assert.match(panel.innerHTML, /Turned on/);
+  assert.match(panel.innerHTML, /Arrival support reached 84% against the 80% threshold/);
+  assert.match(panel.innerHTML, /Exact context/);
+  assert.match(panel.innerHTML, /data-activity-filter="edges" aria-pressed="true"/);
+  assert.doesNotMatch(panel.innerHTML, /Arrival support stayed below/);
+  assert.doesNotMatch(panel.innerHTML, /Periodic exact snapshot/);
+
+  panel._activityFilter = "rejected";
+  panel.render();
+  assert.match(panel.innerHTML, /Arrival support stayed below the 80% threshold at 31%/);
+  assert.match(panel.innerHTML, /Lightweight decision/);
+
+  panel._activityFilter = "snapshots";
+  panel.render();
+  assert.match(panel.innerHTML, /Periodic exact snapshot/);
+});
+
+test("activity workspace supports legacy edges and an empty exact state", async () => {
+  const Panel = await panelConstructor();
+  const panel = new Panel();
+  panel._hass = {};
+  panel._config = { map: { zones: {}, nodes: {} } };
+  panel._tab = "activity";
+  panel._status = { occupancy_diagnostics: {} };
+
+  panel.render();
+  assert.match(panel.innerHTML, /Exact policy activity will appear after the first observation/);
+
+  panel._status.occupancy_diagnostics.joint = {
+    policy: {},
+    policy_audit: [
+      {
+        decision_at: "2026-07-17T12:00:00Z",
+        decision: {
+          zone: "entry",
+          action: "release",
+          accepted: true,
+          reason_code: "authoritative_away",
+          gate_values: {},
+          evidence_ids: [],
+        },
+        previous: { keep_on: true },
+        current: { keep_on: false },
+        context: { encoding: "zlib-json-v1", data: "packed" },
+      },
+    ],
+    policy_audit_retention: { entry_count: 1, context_compressed_bytes: 128 },
+  };
+  panel.render();
+
+  assert.match(panel.innerHTML, /Turned off/);
+  assert.match(panel.innerHTML, /Authoritative away state cleared ownership/);
+  assert.match(panel.innerHTML, /Exact context/);
+});
+
+test("activity workspace initially renders at most fifty audit rows", async () => {
+  const Panel = await panelConstructor();
+  const panel = new Panel();
+  panel._hass = {};
+  panel._config = { map: { zones: {}, nodes: {} } };
+  panel._tab = "activity";
+  panel._status = {
+    occupancy_diagnostics: {
+      joint: {
+        policy: {},
+        policy_audit_retention: { entry_count: 55 },
+        policy_audit: Array.from({ length: 55 }, (_, index) => ({
+          decision_at: new Date(Date.UTC(2026, 6, 17, 12, index)).toISOString(),
+          decision: {
+            zone: `zone_${index}`,
+            action: index % 2 ? "activate" : "release",
+            accepted: true,
+            reason_code: index % 2 ? "arrival_supported" : "release_safe",
+            gate_values: { probability: 0.9, threshold: 0.8 },
+            evidence_ids: [],
+          },
+          prior_active: index % 2 === 0,
+          resulting_active: index % 2 === 1,
+          context_complete: true,
+        })),
+      },
+    },
+  };
+
+  panel.render();
+
+  assert.equal((panel.innerHTML.match(/class="audit-row kind-/g) || []).length, 50);
+  assert.match(panel.innerHTML, /Show 50 more/);
 });
 
 test("panel renders live occupancy zones from configured map data", async () => {
@@ -550,7 +736,7 @@ test("panel reports when no stale entities are found", async () => {
 });
 
 test("panel script parses when Home Assistant loads it as a classic script", async () => {
-  const source = await readFile(panelAssetUrl("panel-v0.2.0.js"), "utf8");
+  const source = await readFile(panelAssetUrl("panel-v0.2.1.js"), "utf8");
 
   assert.doesNotThrow(() => new vm.Script(source));
 });
@@ -558,7 +744,7 @@ test("panel script parses when Home Assistant loads it as a classic script", asy
 test("versioned panel asset matches the development panel asset", async () => {
   const [developmentSource, versionedSource] = await Promise.all([
     readFile(panelAssetUrl("panel.js"), "utf8"),
-    readFile(panelAssetUrl("panel-v0.2.0.js"), "utf8"),
+    readFile(panelAssetUrl("panel-v0.2.1.js"), "utf8"),
   ]);
 
   assert.equal(versionedSource, developmentSource);

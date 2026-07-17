@@ -16,7 +16,10 @@ from custom_components.predictive_controls.automation_policy import (
     PendingDeparture,
 )
 from custom_components.predictive_controls.events import OccupancyEvent
-from custom_components.predictive_controls.joint_filter import JointOccupancyFilter
+from custom_components.predictive_controls.joint_filter import (
+    SUSTAINED_DURATION_MAX_LOG_ODDS,
+    JointOccupancyFilter,
+)
 from custom_components.predictive_controls.model import PredictiveMap
 from custom_components.predictive_controls.observation_model import EntityEvidence
 from custom_components.predictive_controls.occupancy_graph import ZoneGraph
@@ -205,6 +208,33 @@ def test_restart_scenario_round_trips_complete_inference_state() -> None:
     assert restored.restore_status == "restored"
     assert restored.update_sequence == 2
     assert payload["map_fingerprint"] == map_fingerprint(predictive_map)
+
+
+def test_duration_evidence_above_legacy_ceiling_round_trips() -> None:
+    predictive_map = make_map()
+    occupancy_filter = JointOccupancyFilter(predictive_map, 1, NOW)
+    occupancy_filter.observe(event("office", NOW + timedelta(seconds=1)))
+    payload = serialize_occupancy_state(
+        predictive_map,
+        occupancy_filter.posterior,
+        AutomationPolicy(ZoneGraph.from_map(predictive_map)).states,
+        (),
+        occupancy_filter.observations.entity_states,
+        {},
+        directional_contexts=occupancy_filter.directional_contexts,
+        update_sequence=occupancy_filter.update_sequence,
+    )
+    entity_states = payload["entity_states"]
+    assert isinstance(entity_states, dict)
+    office = entity_states["binary_sensor.office"]
+    assert isinstance(office, dict)
+    office["duration_log_odds"] = SUSTAINED_DURATION_MAX_LOG_ODDS
+
+    restored = restore_occupancy_state(payload, predictive_map, 1, NOW)
+
+    assert restored.entity_states[
+        "binary_sensor.office"
+    ].duration_log_odds == pytest.approx(SUSTAINED_DURATION_MAX_LOG_ODDS)
 
 
 def test_schema_four_restores_with_empty_censored_consumption_state() -> None:

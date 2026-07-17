@@ -9,13 +9,10 @@ AGGREGATE_SENSOR_SUFFIXES = (
     "authoritative_occupant_count",
     "diagnostic_predicted_next_zone",
     "diagnostic_entry_path_plausible_zones",
-    "activation_plausible_zones",
-    "keep_on_zones",
 )
 
 AGGREGATE_BINARY_SENSOR_SUFFIXES = (
     "home_active",
-    "home_keep_on",
     "predictive_controls_problem",
 )
 
@@ -28,14 +25,23 @@ ZONE_SENSOR_SUFFIXES = (
 
 ZONE_BINARY_SENSOR_SUFFIXES = (
     "active",
-    "activation_plausible",
-    "keep_on",
     "prelight",
-    "prelight_plausible",
     "diagnostic_entry_path_plausible",
 )
 
 ZONE_EVENT_SUFFIXES = ("arrival",)
+
+LEGACY_AGGREGATE_SUFFIXES = (
+    "activation_plausible_zones",
+    "keep_on_zones",
+    "home_keep_on",
+)
+
+LEGACY_ZONE_SUFFIXES = (
+    "activation_plausible",
+    "keep_on",
+    "prelight_plausible",
+)
 
 
 def expected_entity_unique_ids(
@@ -75,6 +81,36 @@ def stale_entity_registry_entries(
         and getattr(entry, "config_entry_id", None) == config_entry_id
         and getattr(entry, "unique_id", None) not in expected_unique_ids
     ]
+
+
+async def async_remove_legacy_entities(
+    hass: Any,
+    entry_id: str,
+    predictive_map: PredictiveMap,
+) -> int:
+    """Remove compatibility projections retired at the target cutover."""
+
+    from homeassistant.helpers import entity_registry as er
+
+    legacy_unique_ids = {
+        f"{entry_id}_{suffix}" for suffix in LEGACY_AGGREGATE_SUFFIXES
+    }
+    for zone in predictive_map.zones():
+        legacy_unique_ids.update(
+            f"{entry_id}_{zone}_{suffix}" for suffix in LEGACY_ZONE_SUFFIXES
+        )
+
+    registry = er.async_get(hass)
+    legacy_entries = [
+        registry_entry
+        for registry_entry in list(registry.entities.values())
+        if getattr(registry_entry, "platform", None) == DOMAIN
+        and getattr(registry_entry, "config_entry_id", None) == entry_id
+        and getattr(registry_entry, "unique_id", None) in legacy_unique_ids
+    ]
+    for registry_entry in legacy_entries:
+        registry.async_remove(registry_entry.entity_id)
+    return len(legacy_entries)
 
 
 async def async_cleanup_stale_entities(

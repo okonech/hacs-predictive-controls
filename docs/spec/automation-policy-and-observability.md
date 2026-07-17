@@ -121,8 +121,10 @@ categorical overrides.
   same retained fixed-lag graph. Policy MUST sum the joint qualifying mass and
   MUST NOT combine maxima, thresholds, or evidence from unrelated, stale, or
   expired episodes. Release waits for the qualifying assignments to finalize.
-- **POL-011:** Every accepted and rejected release records gates, evidence IDs,
-  prior latch, resulting latch, and reason.
+- **POL-011:** Every accepted and rejected release records lightweight gates,
+  evidence IDs, prior latch, resulting latch, and reason. These decision rows
+  remain event-complete even when their complete exact context is omitted under
+  the bounded sampling rule in `POL-013`.
 - **POL-012:** Compatible restart or reload preserves `active` ownership without
   a synthetic state edge or arrival event.
 - **POL-013:** Retained policy audit covers up to the preceding 12 hours, bounded
@@ -140,12 +142,24 @@ categorical overrides.
   invalidate the complete restore atomically. An empty pair of mappings is the
   canonical record for a decision without a current fresh target.
 
+  A sampled evaluation with no gate decision retains one explicit no-op
+  observation row. A sample shared by multiple lightweight rows is retained once,
+  while every row whose durable latch changes retains the complete context.
+
   Signed `exact-policy-audit-v1` contexts remain valid historical records and
   restore through their original deterministic latest-per-zone reconstruction
   rule. That legacy rule is used only to validate v1 history; it MUST NOT select
   targets for v2 contexts or live policy. Storage-envelope encoding, exact
   number representation, integrity hashing, and decompression bounds remain
   unchanged across the context versions.
+
+  Complete exact context MUST be retained for every durable `active` latch edge
+  and for the first policy evaluation at or after each 30-second sample interval.
+  Intermediate decision rows that do not change a durable latch MAY retain a
+  null context. Context sampling MUST NOT sample, suppress, or otherwise alter
+  observation processing, exact replay, posterior updates, policy evaluation,
+  or persistence. The sample frontier advances only after a context is packed
+  successfully and MUST NOT move backward for an older evaluation time.
 - **POL-014:** Reliability diagnostics MAY aggregate unique positive trigger
   events that policy rejected while `active` remained off, plus repeated short
   pulses whose positive edge failed the occupied gate. The aggregate MUST state
@@ -268,16 +282,27 @@ what evidence is missing.
   class; the problem entity uses the problem device class.
 - **ENT-009:** The default entity surface is `active` and `prelight` per zone,
   `home_active`, and `predictive_controls_problem`. Arrival events and probability
-  sensors are disabled by default. Legacy aggregate list, path, and confidence
-  entities are compatibility diagnostics disabled by default for new installs.
-  There is no third default per-zone binary sensor.
-- **ENT-010:** At target cutover, legacy projections remain for at least one full
-  released version: `keep_on` aliases `active`; `activation_plausible` retains
-  the short accepted-arrival lease; `prelight_plausible` aliases `prelight`; and
-  `home_keep_on` aliases `home_active`. Existing entity-registry rows remain
-  usable, while new installs receive legacy entities disabled by default during
-  compatibility. Legacy removal is a separately reviewed breaking change after
-  the compatibility release and migration evidence, not automatic cleanup.
+  sensors are disabled by default. Entry-path, confidence, aggregate-path, and
+  prediction entities remain optional diagnostics. There is no third default
+  per-zone binary sensor.
+- **ENT-010:** Version `0.2.1` removes the compatibility projections retained by
+  `0.2.0`: per-zone `keep_on`, `activation_plausible`, and
+  `prelight_plausible`; whole-home `home_keep_on`; and aggregate
+  `keep_on_zones` and `activation_plausible_zones`. Config-entry setup removes
+  existing registry rows for exactly those retired unique IDs. Internal policy
+  fields with similar names remain implementation state and are not entities.
+- **ENT-011:** Binary state projections publish to Home Assistant only when their
+  native on/off value changes. Each published edge includes a concise text
+  `explanation` alongside the existing machine-readable reasons, gates, or
+  probabilities. Initial entity setup, bootstrap, restore, reload, duplicate
+  callbacks, and inference updates that leave the native value unchanged MUST
+  NOT create a synthetic state-history write. This cadence does not alter policy
+  semantics.
+- **ENT-012:** Optional diagnostic projections publish from one runtime-owned
+  30-second sample signal rather than from every raw inference update. The
+  authoritative occupant-count projection remains immediate and publishes when
+  its value or availability changes because it reports a control input. Arrival
+  events retain their distinct episode-ID deduplication and are not sampled.
 
 ## Observability
 
@@ -286,6 +311,11 @@ incident.
 
 - Retain policy decisions and complete event context for up to the preceding 12
   hours within the entry and compressed-context bounds in `POL-013`.
+- Keep raw observation processing, exact replay, posterior updates, and
+  persistence event-complete. Keep lightweight policy decisions event-complete,
+  while retaining complete exact context on durable latch edges and 30-second
+  policy samples. Publish production binary entities on native-value edges and
+  optional diagnostics on the separate 30-second runtime sample.
 - Record pre/post occupied and count marginals, $a_z$, $r_z$, fresh and asserted
   evidence, movement alternatives and dispositions, unresolved factor-graph
   assignments, endpoint tokens, deadlines and watermark, injective support

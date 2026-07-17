@@ -8,8 +8,12 @@ from custom_components.predictive_controls.inference.policy import (
     PosteriorEventPolicy,
 )
 from custom_components.predictive_controls.occupancy_state import (
+    PackedPolicyAuditContext,
     ReleaseCause,
     ZonePolicyState,
+)
+from custom_components.predictive_controls.policy_audit import (
+    pack_policy_audit_payload,
 )
 
 NOW = datetime(2026, 7, 15, 12, tzinfo=UTC)
@@ -118,6 +122,115 @@ def test_already_active_arrival_does_not_toggle_ownership() -> None:
     assert target.last_decisions[-1].reason_code == "already_active"
 
 
+def test_exact_audit_context_is_built_only_for_edges_or_samples() -> None:
+    target = policy()
+    contexts = []
+
+    def context_factory() -> PackedPolicyAuditContext:
+        context = pack_policy_audit_payload({"schema": "test-audit-context"})
+        contexts.append(context)
+        return context
+
+    target.apply(
+        NOW,
+        1,
+        {"office": 0.79},
+        False,
+        {},
+        emit_activation=True,
+        audit_context_factory=context_factory,
+    )
+    assert contexts == []
+    assert target.audit[-1].context is None
+
+    target.apply(
+        NOW + timedelta(seconds=1),
+        1,
+        {"office": 0.8},
+        False,
+        {},
+        emit_activation=True,
+        audit_context_factory=context_factory,
+    )
+    assert len(contexts) == 1
+    assert target.audit[-1].context is contexts[-1]
+
+    target.apply(
+        NOW + timedelta(seconds=31),
+        1,
+        {"office": 1.0},
+        False,
+        {},
+        emit_activation=True,
+        audit_context_factory=context_factory,
+        capture_audit_context=True,
+    )
+    assert len(contexts) == 2
+    assert target.audit[-1].context is contexts[-1]
+
+
+def test_sample_context_is_retained_once_without_gate_decisions() -> None:
+    target = policy()
+    context = pack_policy_audit_payload({"schema": "test-audit-context"})
+
+    target.apply(
+        NOW,
+        1,
+        {},
+        False,
+        {},
+        emit_activation=False,
+        audit_context_factory=lambda: context,
+        capture_audit_context=True,
+    )
+
+    assert target.last_decisions == ()
+    assert len(target.audit) == 1
+    assert target.audit[0].decision.action == "observe"
+    assert target.audit[0].decision.reason_code == "periodic_sample"
+    assert target.audit[0].context is context
+
+
+def test_sample_context_is_not_duplicated_across_lightweight_rows() -> None:
+    target = policy()
+    context = pack_policy_audit_payload({"schema": "test-audit-context"})
+
+    target.apply(
+        NOW,
+        1,
+        {"hall": 0.1, "office": 0.2},
+        False,
+        {},
+        emit_activation=True,
+        audit_context_factory=lambda: context,
+        capture_audit_context=True,
+    )
+
+    assert len(target.audit) == 2
+    assert [entry.context is context for entry in target.audit] == [False, True]
+
+
+def test_every_latch_edge_retains_the_complete_context() -> None:
+    target = policy()
+    target.restore_states(
+        {"hall": ZonePolicyState(True), "office": ZonePolicyState(True)}
+    )
+    context = pack_policy_audit_payload({"schema": "test-audit-context"})
+
+    target.apply(
+        NOW,
+        0,
+        {},
+        False,
+        {},
+        emit_activation=False,
+        audit_context_factory=lambda: context,
+    )
+
+    assert len(target.audit) == 2
+    assert all(entry.context is context for entry in target.audit)
+
+
 def test_policy_validates_thresholds_and_restore_atomically() -> None:
     with pytest.raises(ValueError, match="activation threshold"):
         PosteriorEventPolicy(
@@ -133,6 +246,18 @@ def test_policy_validates_thresholds_and_restore_atomically() -> None:
         )
 
     target = policy()
+    context = pack_policy_audit_payload({"schema": "test-audit-context"})
+    with pytest.raises(ValueError, match="one source"):
+        target.apply(
+            NOW,
+            1,
+            {},
+            False,
+            {},
+            emit_activation=False,
+            audit_context=context,
+            audit_context_factory=lambda: context,
+        )
     before = target.states
     with pytest.raises(ValueError, match="zones"):
         target.restore_states({"office": ZonePolicyState(True)})

@@ -8,6 +8,7 @@ import pytest
 from custom_components.predictive_controls.events import OccupancyEvent
 from custom_components.predictive_controls.inference.association import (
     AugmentedLogMessage,
+    EndpointFactor,
 )
 from custom_components.predictive_controls.inference.reducer import (
     AugmentedEventReducer,
@@ -130,6 +131,31 @@ def test_sequential_endpoint_fold_retains_direct_and_censored_contexts() -> None
         sum(space.unrank(key.occupancy_rank)) == 2
         for key, _ in result.message.entries
     )
+
+
+def test_current_positive_route_source_uses_finite_endpoint_validity() -> None:
+    predictive_map = make_map()
+    space = StateSpace(predictive_map.zones(), 1)
+    compact = FactorChainEventReducer(predictive_map, space)
+    posterior = CompactLogPosterior.certain(
+        space,
+        (1, 0, 0, 0),
+    )
+
+    def hall_dispositions(seconds: int) -> set[str]:
+        result = compact.reduce(
+            compact.initial_state(posterior),
+            retained(event("office", 1), event("hall", seconds)),
+        )
+        hall_factor = next(
+            step
+            for step in result.chain.steps
+            if isinstance(step, EndpointFactor) and step.target_zone == "hall"
+        )
+        return {alternative.disposition for alternative in hall_factor.alternatives}
+
+    assert "graph_valid" in hall_dispositions(61)
+    assert "graph_valid" not in hall_dispositions(62)
 
 
 def test_clear_likelihood_preserves_existing_assignment_context() -> None:
@@ -377,6 +403,53 @@ def test_stable_clear_prevents_historical_local_support_certificate() -> None:
 
     assert all(
         not key.supports for key, _ in finalized.chain.base_message.entries
+    )
+
+
+def test_current_sustained_local_support_renews_then_expires_after_clear() -> None:
+    predictive_map = make_map()
+    space = StateSpace(predictive_map.zones(), 1)
+    compact = FactorChainEventReducer(predictive_map, space)
+    configuration = [0] * len(space.locations)
+    configuration[space.location_index("office")] = 1
+    posterior = CompactLogPosterior.certain(space, tuple(configuration))
+    observed = compact.reduce(
+        compact.initial_state(posterior),
+        retained(event("office", 1)),
+    )
+
+    first, _ = compact.advance(observed, NOW + timedelta(seconds=70))
+    renewed, _ = compact.advance(first, NOW + timedelta(seconds=100))
+    cleared = compact.reduce(
+        renewed,
+        retained(event("office", 101, "off")),
+    )
+    expired, _ = compact.advance(cleared, NOW + timedelta(seconds=107))
+
+    first_supports = {
+        support
+        for key, _ in first.chain.base_message.entries
+        for support in key.supports
+        if support.episode_ids
+    }
+    renewed_supports = {
+        support
+        for key, _ in renewed.chain.base_message.entries
+        for support in key.supports
+        if support.episode_ids
+    }
+    assert first_supports
+    assert renewed_supports
+    assert {support.valid_until for support in first_supports} == {
+        NOW + timedelta(seconds=70)
+    }
+    assert {support.valid_until for support in renewed_supports} == {
+        NOW + timedelta(seconds=100)
+    }
+    assert all(
+        not support.episode_ids
+        for key, _ in expired.chain.base_message.entries
+        for support in key.supports
     )
 
 

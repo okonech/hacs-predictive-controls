@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, cast
 
+from .joint_filter import SUSTAINED_DURATION_MAX_LOG_ODDS
 from .model import PredictiveMap
 from .occupancy_state import (
     DirectionalContext,
@@ -1041,7 +1042,7 @@ def _restore_entity_states(
         if (
             not isinstance(duration_log_odds, int | float)
             or not math.isfinite(duration_log_odds)
-            or not 0.0 <= duration_log_odds <= math.log(4.0)
+            or not 0.0 <= duration_log_odds <= SUSTAINED_DURATION_MAX_LOG_ODDS
             or not isinstance(departure_observed, bool)
         ):
             raise ValueError("stored duration evidence is invalid")

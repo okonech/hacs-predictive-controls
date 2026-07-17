@@ -16,7 +16,11 @@ from homeassistant.helpers.event import (
 
 from .actions import ActionDecision, PredictiveAction, evaluate_actions
 from .confidence import ZoneConfidenceEngine, ZoneState, ZoneUpdate
-from .const import DISPATCH_UPDATE, PRODUCT_MAX_OCCUPANTS
+from .const import (
+    DISPATCH_DIAGNOSTIC_UPDATE,
+    DISPATCH_UPDATE,
+    PRODUCT_MAX_OCCUPANTS,
+)
 from .events import OccupancyEvent, event_from_entity
 from .markov import MarkovChain, Prediction
 from .model import PredictiveMap
@@ -70,6 +74,7 @@ class PredictiveControlsRuntime:
         self._unsubscribe: object | None = None
         self._unsubscribe_refresh: object | None = None
         self._unsubscribe_transient_refresh: object | None = None
+        self._unsubscribe_diagnostic_refresh: object | None = None
         self._restored_state = False
         self._latency_samples_ms: deque[float] = deque(maxlen=256)
         self._event_loop_delay_samples_ms: deque[float] = deque(maxlen=256)
@@ -232,6 +237,9 @@ class PredictiveControlsRuntime:
         self._unsubscribe_transient_refresh = async_track_time_interval(
             self.hass, self._async_expire_transient_state, timedelta(seconds=5)
         )
+        self._unsubscribe_diagnostic_refresh = async_track_time_interval(
+            self.hass, self._async_publish_diagnostics, timedelta(seconds=30)
+        )
         now = datetime.now(UTC)
         self._sync_expected_occupants(now)
         snapshot = self._current_snapshot(now)
@@ -257,9 +265,12 @@ class PredictiveControlsRuntime:
             self._unsubscribe_refresh()
         if callable(self._unsubscribe_transient_refresh):
             self._unsubscribe_transient_refresh()
+        if callable(self._unsubscribe_diagnostic_refresh):
+            self._unsubscribe_diagnostic_refresh()
         self._unsubscribe = None
         self._unsubscribe_refresh = None
         self._unsubscribe_transient_refresh = None
+        self._unsubscribe_diagnostic_refresh = None
         await self.async_save_transition_counts()
 
     async def async_save_transition_counts(self) -> None:
@@ -327,6 +338,10 @@ class PredictiveControlsRuntime:
         if self.confidence.expire_transient_state(now):
             self.schedule_transition_count_save()
             async_dispatcher_send(self.hass, DISPATCH_UPDATE)
+
+    @callback
+    def _async_publish_diagnostics(self, _now: datetime) -> None:
+        async_dispatcher_send(self.hass, DISPATCH_DIAGNOSTIC_UPDATE)
 
     def observe_entity(
         self,

@@ -36,6 +36,13 @@ class FakeHass:
 
 
 class FakeEntity:
+    def async_on_remove(self, callback: Callable[[], None]) -> None:
+        self.remove_callbacks = getattr(self, "remove_callbacks", [])
+        self.remove_callbacks.append(callback)
+
+    def async_write_ha_state(self) -> None:
+        self.state_write_count = getattr(self, "state_write_count", 0) + 1
+
     @property
     def unique_id(self) -> str | None:
         value = getattr(self, "_attr_unique_id", None)
@@ -88,8 +95,6 @@ def test_sensor_platform_exports_only_automation_facing_entities(
         "entry123_authoritative_occupant_count",
         "entry123_diagnostic_predicted_next_zone",
         "entry123_diagnostic_entry_path_plausible_zones",
-        "entry123_activation_plausible_zones",
-        "entry123_keep_on_zones",
         "entry123_living_room_diagnostic_confidence",
         "entry123_kitchen_diagnostic_confidence",
         "entry123_living_room_occupancy_probability",
@@ -110,21 +115,116 @@ def test_binary_sensor_platform_exports_only_automation_facing_entities(
 
     assert unique_ids == {
         "entry123_home_active",
-        "entry123_home_keep_on",
         "entry123_predictive_controls_problem",
         "entry123_living_room_active",
         "entry123_kitchen_active",
-        "entry123_living_room_activation_plausible",
-        "entry123_kitchen_activation_plausible",
-        "entry123_living_room_keep_on",
-        "entry123_kitchen_keep_on",
-        "entry123_living_room_prelight_plausible",
-        "entry123_kitchen_prelight_plausible",
         "entry123_living_room_prelight",
         "entry123_kitchen_prelight",
         "entry123_living_room_diagnostic_entry_path_plausible",
         "entry123_kitchen_diagnostic_entry_path_plausible",
     }
+
+
+def test_production_binary_sensor_publishes_only_edges_with_explanation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, binary_sensor_module, _ = load_platform_modules(monkeypatch)
+    runtime = SimpleNamespace(problem_reasons=(), problem_sources=())
+    entity = binary_sensor_module.PredictiveControlsProblemSensor(
+        runtime,
+        "entry123",
+    )
+    entity.hass = object()
+    asyncio.run(entity.async_added_to_hass())
+
+    entity._handle_update()  # noqa: SLF001
+    entity._handle_update()  # noqa: SLF001
+    assert getattr(entity, "state_write_count", 0) == 0
+
+    runtime.problem_reasons = ("association_overload",)
+    runtime.problem_sources = ("movement_association",)
+    entity._handle_update()  # noqa: SLF001
+    entity._handle_update()  # noqa: SLF001
+
+    assert entity.state_write_count == 1
+    assert isinstance(entity.extra_state_attributes["explanation"], str)
+    assert entity.extra_state_attributes["explanation"]
+
+    runtime.problem_reasons = ()
+    runtime.problem_sources = ()
+    entity._handle_update()  # noqa: SLF001
+    entity._handle_update()  # noqa: SLF001
+    assert entity.state_write_count == 2
+
+
+def test_diagnostic_sensor_subscribes_to_sampled_updates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sensor_module, _, _ = load_platform_modules(monkeypatch)
+    signals: list[str] = []
+
+    def connect(
+        _hass: object,
+        signal: str,
+        _callback: Callable[[], None],
+    ) -> Callable[[], None]:
+        signals.append(signal)
+        return lambda: None
+
+    monkeypatch.setattr(
+        sensor_module,
+        "async_dispatcher_connect",
+        connect,
+    )
+    entity = sensor_module.ZoneOccupancyProbabilitySensor(
+        SimpleNamespace(),
+        "entry123",
+        "office",
+    )
+    entity.hass = object()
+
+    asyncio.run(entity.async_added_to_hass())
+
+    assert signals == [sensor_module.DISPATCH_DIAGNOSTIC_UPDATE]
+
+
+def test_authoritative_count_sensor_remains_immediate_and_edge_gated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sensor_module, _, _ = load_platform_modules(monkeypatch)
+    signals: list[str] = []
+
+    def connect(
+        _hass: object,
+        signal: str,
+        _callback: Callable[[], None],
+    ) -> Callable[[], None]:
+        signals.append(signal)
+        return lambda: None
+
+    monkeypatch.setattr(
+        sensor_module,
+        "async_dispatcher_connect",
+        connect,
+    )
+    runtime = SimpleNamespace(
+        authoritative_count_available=True,
+        expected_occupants=1,
+        expected_occupants_entity="sensor.people",
+        confidence=SimpleNamespace(requested_expected_occupants=1),
+    )
+    entity = sensor_module.AuthoritativeOccupantCountSensor(runtime, "entry123")
+    entity.hass = object()
+    asyncio.run(entity.async_added_to_hass())
+
+    entity._handle_update()  # noqa: SLF001
+    runtime.expected_occupants = 2
+    runtime.confidence.requested_expected_occupants = 2
+    entity._handle_update()  # noqa: SLF001
+    entity._handle_update()  # noqa: SLF001
+
+    assert signals == [sensor_module.DISPATCH_UPDATE]
+    assert entity.state_write_count == 1
 
 
 def test_event_platform_exports_optional_arrival_entities(

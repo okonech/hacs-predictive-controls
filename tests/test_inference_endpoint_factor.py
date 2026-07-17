@@ -65,6 +65,7 @@ def factor(
     target_index: int = 2,
     empty_likelihood: Decimal = Decimal("0.2"),
     occupied_likelihood: Decimal = Decimal("0.9"),
+    reserved_source_indexes: frozenset[int] = frozenset(),
 ) -> EndpointFactor:
     return EndpointFactor(
         EndpointToken(endpoint_id, "target-node", NOW),
@@ -73,6 +74,7 @@ def factor(
         alternatives,
         math.log(float(empty_likelihood)),
         math.log(float(occupied_likelihood)),
+        reserved_source_indexes,
     )
 
 
@@ -305,6 +307,45 @@ def test_competing_sources_are_disjoint_and_move_only_one_occupant() -> None:
     )
 
 
+def test_sustained_source_reservation_blocks_only_missed_movement() -> None:
+    space = StateSpace(("alpha", "beta", "gamma"), 2)
+    message = AugmentedLogMessage.from_posterior(
+        CompactLogPosterior.certain(space, (1, 1, 0, 0))
+    )
+    declarations = (
+        ("stay", None, Decimal(1)),
+        ("graph", 0, Decimal(1)),
+        ("missed", 0, Decimal(1)),
+    )
+    endpoint_factor = factor(
+        (
+            alternative("stay", "stay", None, Decimal(1)),
+            alternative("graph", "graph_valid", 0, Decimal(1)),
+            alternative("missed", "missed_movement", 0, Decimal(1)),
+        ),
+        reserved_source_indexes=frozenset({0}),
+    )
+
+    actual = endpoint_factor.apply(message, CompleteMoveOperators(space))
+    expected = endpoint_factor_decimal(
+        {(1, 1, 0, 0): Decimal(1)},
+        2,
+        declarations,
+        empty_likelihood=Decimal("0.2"),
+        occupied_likelihood=Decimal("0.9"),
+        reserved_source_indexes=frozenset({0}),
+        reserved_alternative_ids=frozenset({"missed"}),
+    )
+
+    assert production_endpoint_probabilities(actual) == pytest.approx(
+        {key: float(probability) for key, probability in expected.items()},
+        abs=1e-12,
+    )
+    assert {
+        key.contexts[-1].alternative_id for key, _ in actual.entries
+    } == {"stay", "graph"}
+
+
 def test_existing_context_and_support_pass_through_and_block_endpoint_reuse() -> None:
     space = StateSpace(("alpha", "beta", "gamma"), 1)
     old_context = EndpointAssignmentAtom(
@@ -420,6 +461,13 @@ def test_endpoint_type_and_factor_validation() -> None:
         )
     with pytest.raises(ValueError, match="likelihoods"):
         EndpointFactor(EndpointToken("e", "n", NOW), 0, "alpha", (stay,), math.nan, 0.0)
+    with pytest.raises(ValueError, match="reserved source indexes"):
+        factor((stay,), reserved_source_indexes=frozenset({-1}))
+    with pytest.raises(IndexError, match="source location index"):
+        factor((stay,)).alternative_multiplicity(
+            (1, 0, 0, 0),
+            alternative("outside", "graph_valid", 4, Decimal(1)),
+        )
 
 
 def test_assignment_support_and_augmented_key_validation() -> None:

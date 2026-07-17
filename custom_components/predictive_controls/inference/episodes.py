@@ -63,7 +63,7 @@ SUSTAINED_EPISODE_PROFILE = EpisodeProfile(
     off_occupied=0.30,
     off_empty=0.95,
     duration_tau=timedelta(minutes=5),
-    duration_max_log_odds=math.log(4.0),
+    duration_max_log_odds=math.log(24.0),
 )
 ORDINARY_EPISODE_PROFILE = EpisodeProfile(
     burst_correlation_window=timedelta(seconds=5),

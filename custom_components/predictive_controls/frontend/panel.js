@@ -154,6 +154,68 @@ function formatOccupiedPeak(value) {
     : "Occupied confidence unavailable";
 }
 
+function policyJoint(status) {
+  return status?.occupancy_diagnostics?.joint || null;
+}
+
+function auditTransition(entry) {
+  if (Object.prototype.hasOwnProperty.call(entry || {}, "prior_active")) {
+    return [Boolean(entry.prior_active), Boolean(entry.resulting_active)];
+  }
+  return [
+    Boolean(entry?.previous?.keep_on),
+    Boolean(entry?.current?.keep_on),
+  ];
+}
+
+function auditKind(entry) {
+  const [priorActive, resultingActive] = auditTransition(entry);
+  if (priorActive !== resultingActive) return "edges";
+  if (entry?.decision?.accepted === false) return "rejected";
+  if (
+    entry?.decision?.action === "observe"
+    && entry?.decision?.reason_code === "periodic_sample"
+  ) return "snapshots";
+  return "other";
+}
+
+function auditHasExactContext(entry) {
+  return entry?.context_complete === true || Boolean(entry?.context);
+}
+
+function formatPercent(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0
+    ? `${Math.round(number * 100)}%`
+    : "unavailable";
+}
+
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MiB`;
+}
+
+function decisionExplanation(decision) {
+  const gates = decision?.gate_values || {};
+  const probability = formatPercent(gates.probability);
+  const threshold = formatPercent(gates.threshold);
+  const explanations = {
+    arrival_supported: `Arrival support reached ${probability} against the ${threshold} threshold`,
+    arrival_supported_not_met: `Arrival support stayed below the ${threshold} threshold at ${probability}`,
+    release_safe: `Finalized release safety reached ${probability} against the ${threshold} threshold`,
+    release_safe_not_met: gates.available === false
+      ? "Finalized release safety is not available yet"
+      : `Release safety stayed below the ${threshold} threshold at ${probability}`,
+    authoritative_away: "Authoritative away state cleared ownership",
+    already_active: `Ownership was already active with ${probability} arrival support`,
+    periodic_sample: "Periodic exact snapshot",
+  };
+  return explanations[decision?.reason_code]
+    || labelFromValue(decision?.reason_code || decision?.action || "policy observation");
+}
+
 function defaultBehaviorForRole(role) {
   if (role === "transition_gate") return "transient";
   if (role === "ambiguous_open_plan") return "ambiguous";
@@ -684,6 +746,7 @@ class PredictiveControlsPanel extends HTMLElement {
         <nav>
           <button class="${this._tab === "occupancy" ? "active" : ""}" data-tab="occupancy">Occupancy</button>
           <button class="${this._tab === "reliability" ? "active" : ""}" data-tab="reliability">Reliability</button>
+          <button class="${this._tab === "activity" ? "active" : ""}" data-tab="activity">Activity</button>
           <button class="${this._tab === "map" ? "active" : ""}" data-tab="map">Map</button>
           <button class="${this._tab === "yaml" ? "active" : ""}" data-tab="yaml">YAML</button>
           <button class="${this._tab === "actions" ? "active" : ""}" data-tab="actions">Actions</button>
@@ -698,6 +761,7 @@ class PredictiveControlsPanel extends HTMLElement {
   renderActiveTab() {
     if (this._tab === "occupancy") return this.renderOccupancy();
     if (this._tab === "reliability") return this.renderReliability();
+    if (this._tab === "activity") return this.renderActivity();
     if (this._tab === "yaml") return this.renderYaml();
     if (this._tab === "actions") return this.renderActions();
     if (this._tab === "settings") return this.renderSettings();
@@ -837,6 +901,147 @@ class PredictiveControlsPanel extends HTMLElement {
         </section>
       </main>
     `;
+  }
+
+  renderActivity() {
+    const joint = policyJoint(this._status);
+    const policy = joint?.policy || {};
+    const audit = Array.isArray(joint?.policy_audit) ? joint.policy_audit : [];
+    const activeCount = Object.values(policy).filter((state) => state?.keep_on).length;
+    this._activityFilter = this._activityFilter || "edges";
+    this._auditLimit = this._auditLimit || 50;
+    return `
+      <main class="activity-layout">
+        <section class="occupancy-toolbar">
+          <div>
+            <h2>Activity</h2>
+            <p>${this._statusError ? escapeHtml(this._statusError) : `Updated ${this._statusUpdated ? this._statusUpdated.toLocaleTimeString() : "never"}`}</p>
+          </div>
+          <button data-action="refresh-status">Refresh</button>
+        </section>
+        ${joint ? `
+          ${this.renderPolicyOwnership(policy, joint, activeCount)}
+          ${this.renderAuditRetention(joint.policy_audit_retention || {}, activeCount)}
+          ${this.renderPolicyAudit(audit)}
+        ` : `
+          <section class="activity-empty">
+            <h3>Waiting for exact activity</h3>
+            <p>Exact policy activity will appear after the first observation.</p>
+          </section>
+        `}
+      </main>
+    `;
+  }
+
+  renderPolicyOwnership(policy, joint, activeCount) {
+    const entries = Object.entries(policy).sort(([left], [right]) =>
+      this.zoneLabel(left).localeCompare(this.zoneLabel(right)),
+    );
+    const releaseProbabilities = joint?.release_safe?.probabilities || {};
+    const arrivalProbabilities = joint?.arrival_supported_probabilities || {};
+    return `
+      <section class="ownership-section">
+        <div class="section-head">
+          <div class="section-title">
+            <h3>Current Ownership</h3>
+            <small>Durable production state</small>
+          </div>
+          <strong>${activeCount} active ${activeCount === 1 ? "zone" : "zones"}</strong>
+        </div>
+        <div class="ownership-grid">
+          ${entries.length ? entries.map(([zone, state]) => `
+            <article class="ownership-row ${state.keep_on ? "is-active" : ""}">
+              <div class="ownership-name">
+                <span class="state-indicator" aria-hidden="true"></span>
+                <div><strong>${escapeHtml(this.zoneLabel(zone))}</strong><small>${state.keep_on ? "Active ownership" : "Inactive"}</small></div>
+              </div>
+              <p>${escapeHtml(state.reason || (state.keep_on ? "Policy ownership is active" : "No active policy ownership"))}</p>
+              <div class="ownership-probabilities">
+                <span>Arrival ${escapeHtml(formatPercent(arrivalProbabilities[zone]))}</span>
+                <span>Release safe ${escapeHtml(formatPercent(releaseProbabilities[zone]))}</span>
+              </div>
+            </article>
+          `).join("") : `<p class="empty-state">No zone ownership state is available yet.</p>`}
+        </div>
+      </section>
+    `;
+  }
+
+  renderAuditRetention(retention, activeCount) {
+    return `
+      <section class="activity-metrics">
+        <div><strong>${activeCount}</strong><span>Active now</span></div>
+        <div><strong>${Number(retention.entry_count || 0).toLocaleString()}</strong><span>Retained decisions</span></div>
+        <div><strong>${escapeHtml(formatBytes(retention.context_compressed_bytes))}</strong><span>Exact context</span></div>
+        <p>${Number(retention.retention_hours || 12)} hour window &middot; ${escapeHtml(formatTimestamp(retention.oldest_decision_at))} to ${escapeHtml(formatTimestamp(retention.newest_decision_at))}</p>
+      </section>
+    `;
+  }
+
+  renderPolicyAudit(audit) {
+    const filter = this._activityFilter;
+    const ordered = [...audit].sort(
+      (left, right) => new Date(right.decision_at || 0) - new Date(left.decision_at || 0),
+    );
+    const filtered = filter === "all"
+      ? ordered
+      : ordered.filter((entry) => auditKind(entry) === filter);
+    const visible = filtered.slice(0, this._auditLimit);
+    const labels = {
+      edges: "Production edges",
+      rejected: "Rejected decisions",
+      snapshots: "Exact snapshots",
+      all: "All retained",
+    };
+    return `
+      <section class="audit-section">
+        <div class="audit-heading">
+          <div class="section-title"><h3>Decision Timeline</h3><small>Newest first</small></div>
+          <div class="activity-filters" role="group" aria-label="Activity filter">
+            ${Object.entries(labels).map(([value, label]) => `<button class="${filter === value ? "active" : ""}" data-activity-filter="${value}" aria-pressed="${filter === value ? "true" : "false"}">${label}</button>`).join("")}
+          </div>
+        </div>
+        <div class="audit-list">
+          ${visible.length ? visible.map((entry) => this.renderAuditEntry(entry)).join("") : `<p class="empty-state">No ${escapeHtml(labels[filter].toLowerCase())} in retained activity.</p>`}
+        </div>
+        ${filtered.length > visible.length ? `<button class="show-more" data-action="show-more-audit">Show 50 more</button>` : ""}
+      </section>
+    `;
+  }
+
+  renderAuditEntry(entry) {
+    const decision = entry?.decision || {};
+    const [priorActive, resultingActive] = auditTransition(entry);
+    const kind = auditKind(entry);
+    const title = kind === "edges"
+      ? (resultingActive ? "Turned on" : "Turned off")
+      : kind === "rejected"
+        ? "Decision rejected"
+        : kind === "snapshots"
+          ? "Periodic exact snapshot"
+          : labelFromValue(decision.action || "Observation");
+    const evidenceCount = Array.isArray(decision.evidence_ids) ? decision.evidence_ids.length : 0;
+    return `
+      <article class="audit-row kind-${kind}">
+        <div class="audit-marker" aria-hidden="true"></div>
+        <div class="audit-content">
+          <div class="audit-row-head">
+            <div><strong>${escapeHtml(title)}</strong><span>${escapeHtml(this.zoneLabel(decision.zone))}</span></div>
+            <time>${escapeHtml(formatTimestamp(entry.decision_at))}</time>
+          </div>
+          <p>${escapeHtml(decisionExplanation(decision))}</p>
+          <div class="audit-meta">
+            <span class="context-badge ${auditHasExactContext(entry) ? "exact" : "lightweight"}">${auditHasExactContext(entry) ? "Exact context" : "Lightweight decision"}</span>
+            ${kind === "edges" ? `<span>${priorActive ? "On" : "Off"} to ${resultingActive ? "On" : "Off"}</span>` : ""}
+            ${evidenceCount ? `<span>${evidenceCount} evidence ${evidenceCount === 1 ? "item" : "items"}</span>` : ""}
+          </div>
+        </div>
+      </article>
+    `;
+  }
+
+  zoneLabel(zone) {
+    return this._config?.map?.zones?.[zone]?.label || titleFromId(zone || "whole home");
   }
 
   renderRejectedCapture(item) {
@@ -1118,11 +1323,20 @@ class PredictiveControlsPanel extends HTMLElement {
   bindEvents() {
     this.querySelectorAll("[data-tab]").forEach((button) => button.addEventListener("click", () => {
       this._tab = button.dataset.tab;
-      if (this._tab === "occupancy") this.refreshStatus();
+      if (["occupancy", "reliability", "activity"].includes(this._tab)) this.refreshStatus();
       this.render();
     }));
     this.querySelector('[data-action="reload"]')?.addEventListener("click", () => this.loadData());
     this.querySelector('[data-action="refresh-status"]')?.addEventListener("click", () => this.refreshStatus());
+    this.querySelectorAll("[data-activity-filter]").forEach((button) => button.addEventListener("click", () => {
+      this._activityFilter = button.dataset.activityFilter;
+      this._auditLimit = 50;
+      this.render();
+    }));
+    this.querySelector('[data-action="show-more-audit"]')?.addEventListener("click", () => {
+      this._auditLimit += 50;
+      this.render();
+    });
     this.querySelector('[data-action="save"]')?.addEventListener("click", () => this.save());
     this.querySelector('[data-action="add-empty"]')?.addEventListener("click", () => this.addNode());
     this.querySelector('[data-action="cleanup-entities"]')?.addEventListener("click", () => this.cleanupEntities());
@@ -1303,10 +1517,10 @@ class PredictiveControlsPanel extends HTMLElement {
       });
       this._statusError = undefined;
       this._statusUpdated = new Date();
-      if (this._tab === "occupancy") this.render();
+      if (["occupancy", "reliability", "activity"].includes(this._tab)) this.render();
     } catch (error) {
       this._statusError = error.message || String(error);
-      if (this._tab === "occupancy") this.render();
+      if (["occupancy", "reliability", "activity"].includes(this._tab)) this.render();
     }
   }
 
@@ -1391,8 +1605,8 @@ class PredictiveControlsPanel extends HTMLElement {
       .chips { display:flex; flex-wrap:wrap; gap:8px; }
       textarea { min-height:520px; font-family:monospace; }
       textarea.small { min-height:96px; }
-      .occupancy-layout, .reliability-layout { display:grid; grid-template-columns:minmax(0, 1fr); gap:16px; }
-      .occupancy-toolbar, .track-section, .diagnostics-panel, .floor-section, .transition-section, .reliability-summary, .reliability-section { background:var(--card-background-color); border:1px solid var(--divider-color); border-radius:8px; padding:16px; }
+      .occupancy-layout, .reliability-layout, .activity-layout { display:grid; grid-template-columns:minmax(0, 1fr); gap:16px; }
+      .occupancy-toolbar, .track-section, .diagnostics-panel, .floor-section, .transition-section, .reliability-summary, .reliability-section, .ownership-section, .activity-metrics, .audit-section, .activity-empty { background:var(--card-background-color); border:1px solid var(--divider-color); border-radius:8px; padding:16px; }
       .occupancy-toolbar { display:flex; align-items:center; justify-content:space-between; gap:16px; }
       .occupancy-toolbar p { margin:4px 0 0; }
       .section-title h3 { margin:0; }
@@ -1421,6 +1635,43 @@ class PredictiveControlsPanel extends HTMLElement {
       .reliability-row-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
       .reliability-row-head strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       .reliability-row-head span { border:1px solid var(--warning-color, #f2a900); border-radius:999px; padding:3px 8px; white-space:nowrap; }
+      .ownership-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:1px; margin-top:14px; background:var(--divider-color); }
+      .ownership-row { min-width:0; padding:14px; background:var(--card-background-color); border-left:4px solid var(--disabled-text-color); }
+      .ownership-row.is-active { border-left-color:var(--success-color, #43a047); }
+      .ownership-name { display:flex; align-items:center; gap:9px; }
+      .ownership-name div { min-width:0; display:grid; gap:2px; }
+      .ownership-name strong, .ownership-name small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .ownership-name small, .ownership-row p, .ownership-probabilities { color:var(--secondary-text-color); }
+      .state-indicator { width:9px; height:9px; flex:0 0 auto; border-radius:50%; background:var(--disabled-text-color); }
+      .is-active .state-indicator { background:var(--success-color, #43a047); box-shadow:0 0 0 4px color-mix(in srgb, var(--success-color, #43a047) 18%, transparent); }
+      .ownership-row p { min-height:2.7em; margin:10px 0; line-height:1.35; }
+      .ownership-probabilities { display:flex; flex-wrap:wrap; gap:6px 12px; font-size:12px; }
+      .activity-metrics { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:1px; background:var(--divider-color); }
+      .activity-metrics div { display:grid; gap:4px; padding:14px; background:var(--card-background-color); }
+      .activity-metrics strong { font-size:22px; }
+      .activity-metrics span, .activity-metrics p { color:var(--secondary-text-color); }
+      .activity-metrics p { grid-column:1 / -1; margin:0; padding:12px 14px; background:var(--card-background-color); }
+      .audit-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
+      .activity-filters { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:6px; }
+      .activity-filters button { padding:6px 9px; }
+      .audit-list { margin-top:12px; }
+      .audit-row { display:grid; grid-template-columns:14px minmax(0, 1fr); gap:12px; padding:14px 0; border-top:1px solid var(--divider-color); }
+      .audit-row:first-child { border-top:0; }
+      .audit-marker { width:10px; height:10px; margin-top:5px; border-radius:50%; background:var(--disabled-text-color); }
+      .kind-edges .audit-marker { background:var(--primary-color); }
+      .kind-rejected .audit-marker { background:var(--warning-color, #f2a900); }
+      .kind-snapshots .audit-marker { background:var(--info-color, #4797ff); }
+      .audit-content { min-width:0; }
+      .audit-row-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+      .audit-row-head div { min-width:0; display:flex; flex-wrap:wrap; gap:5px 10px; }
+      .audit-row-head span, .audit-row-head time, .audit-content p, .audit-meta { color:var(--secondary-text-color); }
+      .audit-row-head time { flex:0 0 auto; font-size:12px; }
+      .audit-content p { margin:7px 0 9px; }
+      .audit-meta { display:flex; flex-wrap:wrap; gap:6px 12px; font-size:12px; }
+      .context-badge { border:1px solid var(--divider-color); border-radius:999px; padding:2px 7px; }
+      .context-badge.exact { border-color:var(--info-color, #4797ff); color:var(--primary-text-color); }
+      .show-more { width:100%; margin-top:10px; }
+      .activity-empty h3 { margin-top:0; }
       .floor-section, .transition-section { overflow:auto; }
       .occupancy-graph-section h3 { margin-top:0; }
       .occupancy-board { position:relative; overflow:auto; background:var(--secondary-background-color); border:1px solid var(--divider-color); border-radius:8px; }
@@ -1447,10 +1698,14 @@ class PredictiveControlsPanel extends HTMLElement {
       @media (max-width: 1000px) { .map-layout { grid-template-columns:1fr; } }
       @media (max-width: 700px) {
         .pc-shell { padding:12px; }
-        header, .occupancy-toolbar { align-items:flex-start; flex-direction:column; }
+        header, .occupancy-toolbar, .audit-heading { align-items:flex-start; flex-direction:column; }
         .track-row { grid-template-columns:1fr auto; }
         .track-row small { grid-column:1 / -1; }
         .reliability-metrics { grid-template-columns:1fr; }
+        .activity-metrics { grid-template-columns:1fr; }
+        .activity-metrics p { grid-column:1; }
+        .activity-filters { justify-content:flex-start; }
+        .audit-row-head { display:grid; }
       }
     `;
   }

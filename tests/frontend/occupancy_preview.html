@@ -154,6 +154,28 @@
             },
           ],
         },
+        joint: {
+          policy: {
+            alex_office: { keep_on: true, reason: "arrival-supported posterior event", last_trusted_at: "2026-07-17T11:58:30-04:00", last_release_cause: null },
+            living_room: { keep_on: true, reason: "arrival-supported posterior event", last_trusted_at: "2026-07-17T11:54:12-04:00", last_release_cause: null },
+            master_bedroom_entrance: { keep_on: false, reason: "finalized release-safe posterior event", last_trusted_at: "2026-07-17T11:42:00-04:00", last_release_cause: "release_safe" },
+          },
+          arrival_supported_probabilities: { alex_office: 0.91, living_room: 0.86 },
+          release_safe: { available: true, probabilities: { alex_office: 0.08, living_room: 0.14, master_bedroom_entrance: 0.97 } },
+          policy_audit_retention: {
+            retention_hours: 12,
+            entry_count: 4,
+            context_compressed_bytes: 24576,
+            oldest_decision_at: "2026-07-17T11:42:00-04:00",
+            newest_decision_at: "2026-07-17T12:00:30-04:00",
+          },
+          policy_audit: [
+            { decision_at: "2026-07-17T11:42:00-04:00", decision: { zone: "master_bedroom_entrance", action: "release", accepted: true, reason_code: "release_safe", gate_values: { probability: 0.97, threshold: 0.95 }, evidence_ids: [] }, prior_active: true, resulting_active: false, context_complete: true },
+            { decision_at: "2026-07-17T11:58:30-04:00", decision: { zone: "alex_office", action: "activate", accepted: true, reason_code: "arrival_supported", gate_values: { probability: 0.91, threshold: 0.8 }, evidence_ids: ["alex-office-episode"] }, prior_active: false, resulting_active: true, context_complete: true },
+            { decision_at: "2026-07-17T12:00:00-04:00", decision: { zone: "upstairs_hallway", action: "activate", accepted: false, reason_code: "arrival_supported_not_met", gate_values: { probability: 0.34, threshold: 0.8 }, evidence_ids: [] }, prior_active: false, resulting_active: false, context_complete: false },
+            { decision_at: "2026-07-17T12:00:30-04:00", decision: { zone: "alex_office", action: "observe", accepted: true, reason_code: "periodic_sample", gate_values: {}, evidence_ids: [] }, prior_active: true, resulting_active: true, context_complete: true },
+          ],
+        },
       },
     };
     const entities = Object.values(map.nodes).flatMap((node) => Object.values(node.entities || {})).map((entityId) => ({

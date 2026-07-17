@@ -9,6 +9,7 @@ import pytest
 
 from custom_components.predictive_controls.entity_registry import (
     async_cleanup_stale_entities,
+    async_remove_legacy_entities,
     expected_entity_unique_ids,
     stale_entity_registry_entries,
 )
@@ -56,13 +57,13 @@ def test_expected_entity_unique_ids_cover_automation_facing_entities() -> None:
 
     assert "entry123_diagnostic_predicted_next_zone" in unique_ids
     assert "entry123_diagnostic_entry_path_plausible_zones" in unique_ids
-    assert "entry123_activation_plausible_zones" in unique_ids
-    assert "entry123_keep_on_zones" in unique_ids
-    assert "entry123_home_keep_on" in unique_ids
+    assert "entry123_activation_plausible_zones" not in unique_ids
+    assert "entry123_keep_on_zones" not in unique_ids
+    assert "entry123_home_keep_on" not in unique_ids
     assert "entry123_living_room_diagnostic_confidence" in unique_ids
-    assert "entry123_living_room_activation_plausible" in unique_ids
-    assert "entry123_living_room_keep_on" in unique_ids
-    assert "entry123_living_room_prelight_plausible" in unique_ids
+    assert "entry123_living_room_activation_plausible" not in unique_ids
+    assert "entry123_living_room_keep_on" not in unique_ids
+    assert "entry123_living_room_prelight_plausible" not in unique_ids
     assert "entry123_living_room_diagnostic_entry_path_plausible" in unique_ids
     assert "entry123_predicted_next_zone" not in unique_ids
     assert "entry123_living_room_confidence" not in unique_ids
@@ -138,6 +139,8 @@ def test_stale_entries_only_include_this_integration_and_config_entry() -> None:
 
     assert [entry.entity_id for entry in stale_entries] == [
         "sensor.living_room_confidence",
+        "binary_sensor.living_room_keep_on",
+        "binary_sensor.living_room_activation_plausible",
         "sensor.entry_prediction_probability",
         "sensor.living_room_status",
         "binary_sensor.living_room_motion_plausible",
@@ -239,6 +242,63 @@ def test_async_cleanup_stale_entities_can_dry_run(
     assert result["removed_entities"] == []
     assert result["stale_count"] == 1
     assert result["dry_run"] is True
+
+
+def test_async_remove_legacy_entities_removes_only_compatibility_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = FakeRegistry(
+        [
+            FakeRegistryEntry(
+                entity_id="sensor.activation_plausible_zones",
+                unique_id="entry123_activation_plausible_zones",
+            ),
+            FakeRegistryEntry(
+                entity_id="sensor.keep_on_zones",
+                unique_id="entry123_keep_on_zones",
+            ),
+            FakeRegistryEntry(
+                entity_id="binary_sensor.home_keep_on",
+                unique_id="entry123_home_keep_on",
+            ),
+            FakeRegistryEntry(
+                entity_id="binary_sensor.living_room_activation_plausible",
+                unique_id="entry123_living_room_activation_plausible",
+            ),
+            FakeRegistryEntry(
+                entity_id="binary_sensor.living_room_keep_on",
+                unique_id="entry123_living_room_keep_on",
+            ),
+            FakeRegistryEntry(
+                entity_id="binary_sensor.living_room_prelight_plausible",
+                unique_id="entry123_living_room_prelight_plausible",
+            ),
+            FakeRegistryEntry(
+                entity_id="sensor.living_room_confidence",
+                unique_id="entry123_living_room_confidence",
+            ),
+            FakeRegistryEntry(
+                entity_id="binary_sensor.other_entry_keep_on",
+                unique_id="other_entry_living_room_keep_on",
+                config_entry_id="other_entry",
+            ),
+        ]
+    )
+    install_fake_entity_registry(monkeypatch, registry)
+
+    removed = asyncio.run(
+        async_remove_legacy_entities(object(), "entry123", make_map())
+    )
+
+    assert removed == 6
+    assert registry.removed == [
+        "sensor.activation_plausible_zones",
+        "sensor.keep_on_zones",
+        "binary_sensor.home_keep_on",
+        "binary_sensor.living_room_activation_plausible",
+        "binary_sensor.living_room_keep_on",
+        "binary_sensor.living_room_prelight_plausible",
+    ]
 
 
 def install_fake_entity_registry(

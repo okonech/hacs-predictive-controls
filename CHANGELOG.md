@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.1
+
+### Changed
+
+- Added an Activity workspace that shows current zone ownership and concise
+	policy explanations, with separate production-edge, rejected-decision, exact
+	snapshot, and complete-history filters. Retained activity renders newest first
+	in bounded 50-row pages and never expands compressed exact contexts in the
+	browser.
+- Removed the `0.2.0` compatibility entities for per-zone `keep_on`,
+	`activation_plausible`, and `prelight_plausible`, whole-home `home_keep_on`,
+	and the aggregate activation/keep-on zone lists. Config-entry setup deletes
+	existing registry rows for those exact retired IDs.
+
 ## 0.2.0 release candidate
 
 ### Changed
@@ -30,6 +44,15 @@
 	default automation surface. Existing `activation_plausible`, `keep_on`,
 	`prelight_plausible`, and `home_keep_on` IDs remain compatibility projections
 	for the documented `ENT-010` release window.
+- Changed production binary projections to publish only on native on/off edges,
+	with a concise text explanation on each published state. Optional diagnostic
+	entities now share one 30-second sampled runtime signal, while the
+	authoritative occupant count remains immediate on value or availability edges.
+- Kept exact inference and lightweight policy decisions event-complete while
+	building full exact audit contexts lazily on durable latch edges and 30-second
+	policy samples. Multi-row samples retain one context, every latch edge retains
+	its context, and packing or out-of-order events cannot advance the sample
+	frontier incorrectly.
 
 ### Added
 
@@ -43,12 +66,33 @@
 	persistence/replay, policy, and supported-count regression coverage. Low-level
 	state-space stress tests retain generalized coverage above the product limit.
 
+### Fixed
+
+- Preserved finite branch-local localization for a currently asserted sustained
+	physical-node episode without extending that episode's movement endpoint to
+	unrelated later events. Endpoint alternatives are now normalized as one
+	categorical transition per predecessor, coherent graph-valid movement retains
+	full multiplicity, and only the low-prior `missed_movement` branch is prevented
+	from spending the final occupant supported by a sustained source. A single
+	non-adjacent endpoint or correlated same-node flap still cannot authorize
+	activation.
+- Raised the shared sustained-duration evidence ceiling from `ln(4)` to `ln(24)`
+	after the generic zero-, one-, and two-occupant replay corpus passed. In the
+	frozen production incident, Guest Bedroom occupancy increased from `0.82405`
+	to `0.96274`, Bedroom Entrance `ReleaseSafe` reached `0.95720`, and the
+	unrelated held entrance released while the asserted bedroom remained occupied.
+
 ### Performance
 
 - The checked-in 16-zone, 17-node, 23-entity benchmark covers 10,000 deterministic
 	updates at the maximum supported count of two occupants (153 configurations),
 	with exact normalization, zero pruning, deterministic restart, and measured
 	startup, persistence, operator storage, and memory limits.
+- Coalesced commuting zone-likelihood factors within each endpoint-delimited
+	segment by summing their log-potentials and retaining the latest contributing
+	event time. This preserves the sequential exact posterior and endpoint
+	prefixes while bounding factor storage by unresolved endpoints and zones rather
+	than raw event volume.
 
 ### Rollout status
 

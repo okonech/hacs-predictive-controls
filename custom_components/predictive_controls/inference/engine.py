@@ -118,6 +118,7 @@ class ExactInferenceEngine:
         self._predictions = PredictionManager(predictive_map)
         self._processed_prediction_support_ids: frozenset[str] = frozenset()
         self._policy = policy
+        self._last_policy_audit_context_at = _latest_audit_context_at(policy)
         self._migration_bootstrap_pending = False
         self._current_arrival_factors: tuple[tuple[str, EndpointFactor], ...] = ()
         self._arrival_supported_cache: _ArrivalSupportedCache | None = None
@@ -343,6 +344,7 @@ class ExactInferenceEngine:
         )
 
         self._policy = migrated_policy
+        self._last_policy_audit_context_at = _latest_audit_context_at(migrated_policy)
         self._predictions = migrated_predictions
         self._migration_bootstrap_pending = True
         self._event_disposition = "legacy_v5_migrated"
@@ -498,6 +500,7 @@ class ExactInferenceEngine:
         self._predictions = predictions
         self._processed_prediction_support_ids = processed_prediction_support_ids
         self._policy = policy
+        self._last_policy_audit_context_at = _latest_audit_context_at(policy)
         self._migration_bootstrap_pending = migration_bootstrap_pending
         self._event_disposition = disposition
         self._updated_at = updated_at
@@ -862,13 +865,27 @@ class ExactInferenceEngine:
             self._release_safe_probabilities(overloaded)
         )
         arrival_probabilities = self._arrival_supported_probabilities()
-        audit_context = self._target_policy_audit_context(
-            now,
-            arrival_probabilities,
-            release_available,
-            release_probabilities,
-            release_evidence,
+        capture_audit_context = (
+            self._last_policy_audit_context_at is None
+            or now
+            >= self._last_policy_audit_context_at + timedelta(seconds=30)
         )
+
+        def audit_context_factory() -> PackedPolicyAuditContext:
+            context = self._target_policy_audit_context(
+                now,
+                arrival_probabilities,
+                release_available,
+                release_probabilities,
+                release_evidence,
+            )
+            if (
+                self._last_policy_audit_context_at is None
+                or now > self._last_policy_audit_context_at
+            ):
+                self._last_policy_audit_context_at = now
+            return context
+
         self._policy.apply(
             now,
             self._chain.space.occupants,
@@ -884,7 +901,8 @@ class ExactInferenceEngine:
                 if emit_activation
                 else {}
             ),
-            audit_context=audit_context,
+            audit_context_factory=audit_context_factory,
+            capture_audit_context=capture_audit_context,
         )
 
     def _target_policy_audit_context(
@@ -1542,7 +1560,23 @@ def _encode_factor_step(step: ZoneLikelihoodStep | EndpointFactor) -> object:
         "alternatives": [_encode_alternative(alt) for alt in step.alternatives],
         "empty_log_likelihood": step.empty_log_likelihood,
         "occupied_log_likelihood": step.occupied_log_likelihood,
+        "reserved_source_indexes": sorted(step.reserved_source_indexes),
     }
+
+
+def _latest_audit_context_at(
+    policy: PosteriorEventPolicy | None,
+) -> datetime | None:
+    if policy is None:
+        return None
+    return max(
+        (
+            entry.decision_at
+            for entry in policy.audit
+            if entry.context is not None
+        ),
+        default=None,
+    )
 
 
 def _decode_factor_step(payload: object) -> ZoneLikelihoodStep | EndpointFactor:
@@ -1580,6 +1614,13 @@ def _decode_factor_step(payload: object) -> ZoneLikelihoodStep | EndpointFactor:
         _required_number(
             payload.get("occupied_log_likelihood"),
             "occupied likelihood",
+        ),
+        frozenset(
+            _required_int(index, "endpoint reserved source")
+            for index in _optional_int_list(
+                payload.get("reserved_source_indexes"),
+                "endpoint reserved sources",
+            )
         ),
     )
 
@@ -2308,6 +2349,14 @@ def _required_number(value: object, label: str) -> float:
     ):
         raise ValueError(f"Exact {label} is invalid")
     return float(value)
+
+
+def _optional_int_list(value: object, label: str) -> list[object]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"Exact {label} are invalid")
+    return value
 
 
 def _string_tuple(value: object, label: str) -> tuple[str, ...]:

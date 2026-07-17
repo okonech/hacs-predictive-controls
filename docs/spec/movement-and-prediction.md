@@ -20,6 +20,10 @@ unresolved across a finite causal interval before finalization.
   evidence only after the configured coherent movement gate passes. It MUST NOT
   invalidate current valid sustained room-positive evidence to force automatic
   final-occupant release.
+  Coherent movement feasibility is separate from automation ownership: a
+  `graph_valid` or `censored_graph_path` endpoint uses full anonymous source
+  multiplicity, while a current sustained assertion continues to veto origin
+  release under `POL-017` until stable clear, authoritative zero/away, or reset.
 - **MOVE-003:** When two occupants share an origin, one departure leaves one
   occupant there and MUST NOT clear ownership.
 - **MOVE-004:** Another occupant's event MUST NOT advance or release the context
@@ -108,11 +112,20 @@ contributes no observation or movement evidence.
   resolved. A stronger path MUST NOT release a different origin while a
   graph-valid alternative backed by current local evidence can explain the same
   target event.
+  Current sustained evidence reserves one source position only against a
+  `missed_movement` alternative; coherent graph-valid alternatives retain full
+  source multiplicity. The reservation changes posterior association only. A
+  single non-adjacent endpoint remains insufficient to authorize destination
+  activation or relocation under `MOVE-006` and `POL-002`, and correlated flaps
+  from one physical node cannot provide independent corroboration.
 - **MOVE-019:** Finalization marginalizes expired assignment variables into the
   forward occupancy message and MUST preserve occupancy probability exactly. It
   MUST NOT release ownership or convert ambiguous mass into a precise track. A
   finite finalized support certificate may remain only while its joint
   probability and evidence validity remain available for policy or learning.
+  Renewing the finite validity frontier of an existing branch-local certificate
+  under `EVID-015` preserves the original finalized joint stratum; it does not
+  create a new assignment, observation, or support event.
 - **MOVE-020:** The supported workload MUST declare numeric maximum accepted
   event rate $R_{max}$, instantaneous burst $B_{max}$, active physical-node
   episodes, maximum semantic route duration $D_{max}$, and $L_{late}$. The number

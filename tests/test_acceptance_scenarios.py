@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
@@ -26,6 +27,7 @@ from custom_components.predictive_controls.occupancy_persistence import (
 )
 from custom_components.predictive_controls.occupancy_state import ZonePolicyState
 from custom_components.predictive_controls.status import tracker_diagnostics_payload
+from custom_components.predictive_controls.yaml_config import load_predictive_map
 
 NOW = datetime(2026, 7, 12, 12, tzinfo=UTC)
 pytestmark = pytest.mark.scenario
@@ -280,8 +282,16 @@ def test_s28_entity_contract_is_stable_for_joint_policy_projection() -> None:
     assert {
         f"entry_{zone}_{suffix}"
         for zone in predictive_map.zones()
-        for suffix in ("active", "prelight", "keep_on", "prelight_plausible")
+        for suffix in ("active", "prelight")
     } <= unique_ids
+    assert not {
+        f"entry_{zone}_{suffix}"
+        for zone in predictive_map.zones()
+        for suffix in ("activation_plausible", "keep_on", "prelight_plausible")
+    } & unique_ids
+    assert "entry_home_keep_on" not in unique_ids
+    assert "entry_activation_plausible_zones" not in unique_ids
+    assert "entry_keep_on_zones" not in unique_ids
     assert tuple(summary.zones) == predictive_map.zones()
     assert diagnostics_payload["joint"]["restore"] == {
         "status": "not_attempted",
@@ -370,3 +380,117 @@ def test_s31_sustained_room_confidence_survives_untracked_flaps() -> None:
     snapshot = public_snapshot(tracker, predictive_map, office_motion)
     assert snapshot.zones["office"].keep_on
     assert 0.0 <= tracker.diagnostics.joint_occupied_marginals["office"] <= 1.0
+
+
+def _replay_sustained_outside_support_incident() -> tuple[
+    ZoneConfidenceEngine,
+    PredictiveMap,
+    OccupancyEvent,
+]:
+    predictive_map = load_predictive_map(
+        (
+            Path(__file__).resolve().parents[1] / "benchmarks" / "reference-map.yaml"
+        ).read_text()
+    )
+    tracker = ZoneConfidenceEngine(predictive_map, expected_occupants=2)
+
+    def incident_event(
+        node_id: str,
+        timestamp: str,
+        *,
+        state: str = "on",
+    ) -> OccupancyEvent:
+        node = predictive_map.nodes[node_id]
+        entity_id = next(iter(node.entities.values()))
+        return OccupancyEvent(
+            entity_id=entity_id,
+            node_id=node_id,
+            zone=node.occupancy_zone,
+            floor=node.floor,
+            role=node.role,
+            occupancy_behavior=predictive_map.occupancy_behavior_for_node(node),
+            signal_type="motion",
+            state=state,
+            event_at=datetime.fromisoformat(timestamp),
+            reliability=node.initial_weight,
+        )
+
+    events = (
+        incident_event("guest_bedroom_sensor", "2026-07-17T01:05:58.991876+00:00"),
+        incident_event("bedroom_entrance_sensor", "2026-07-17T01:59:11.413081+00:00"),
+        incident_event(
+            "bedroom_entrance_sensor",
+            "2026-07-17T01:59:27.783545+00:00",
+            state="off",
+        ),
+        incident_event("foyer_sensor", "2026-07-17T01:59:58.819700+00:00", state="off"),
+        incident_event(
+            "entrance_sensor", "2026-07-17T02:00:01.581357+00:00", state="off"
+        ),
+        incident_event(
+            "dining_sensor", "2026-07-17T02:00:14.323969+00:00", state="off"
+        ),
+        incident_event("dining_sensor", "2026-07-17T02:00:20.972178+00:00"),
+        incident_event("entrance_sensor", "2026-07-17T02:00:39.207809+00:00"),
+        incident_event("foyer_sensor", "2026-07-17T02:00:42.426768+00:00"),
+        incident_event("stairs_bottom_sensor", "2026-07-17T02:00:45.806936+00:00"),
+        incident_event(
+            "entrance_sensor", "2026-07-17T02:00:49.082902+00:00", state="off"
+        ),
+        incident_event(
+            "kitchen_sensor", "2026-07-17T02:00:49.730563+00:00", state="off"
+        ),
+        incident_event(
+            "dining_sensor", "2026-07-17T02:00:54.066688+00:00", state="off"
+        ),
+        incident_event(
+            "stairs_bottom_sensor", "2026-07-17T02:00:56.934759+00:00", state="off"
+        ),
+        incident_event("foyer_sensor", "2026-07-17T02:00:59.924776+00:00", state="off"),
+        incident_event("foyer_sensor", "2026-07-17T02:02:05.211889+00:00"),
+        incident_event("stairs_top_sensor", "2026-07-17T02:02:06.584548+00:00"),
+        incident_event("office_a_sensor", "2026-07-17T02:02:15.250020+00:00"),
+        incident_event("foyer_sensor", "2026-07-17T02:02:17.056236+00:00", state="off"),
+        incident_event(
+            "stairs_bottom_sensor", "2026-07-17T02:02:19.843601+00:00", state="off"
+        ),
+        incident_event(
+            "stairs_top_sensor", "2026-07-17T02:02:22.353553+00:00", state="off"
+        ),
+        incident_event("upstairs_bathroom_sensor", "2026-07-17T02:03:58.773865+00:00"),
+        incident_event(
+            "stairs_top_sensor", "2026-07-17T02:04:02.539437+00:00", state="off"
+        ),
+        incident_event(
+            "office_a_sensor", "2026-07-17T02:04:11.997815+00:00", state="off"
+        ),
+        incident_event("stairs_top_sensor", "2026-07-17T02:05:07.792692+00:00"),
+        incident_event("office_a_sensor", "2026-07-17T02:05:12.150973+00:00"),
+        incident_event(
+            "stairs_top_sensor",
+            "2026-07-17T02:05:19.354734+00:00",
+            state="off",
+        ),
+        incident_event(
+            "upstairs_bathroom_sensor", "2026-07-17T02:05:25.355503+00:00", state="off"
+        ),
+    )
+    for occupancy_event in events:
+        tracker.observe(occupancy_event)
+    tracker.expire_transient_state(
+        datetime.fromisoformat("2026-07-17T02:24:50.232884+00:00")
+    )
+    return tracker, predictive_map, events[-1]
+
+
+def test_inc_current_sustained_sensor_retains_high_occupancy_probability() -> None:
+    tracker, _, _ = _replay_sustained_outside_support_incident()
+
+    assert tracker.diagnostics.joint_occupied_marginals["guest_bedroom"] >= 0.95
+
+
+def test_inc_two_supported_occupants_release_held_transition_zone() -> None:
+    tracker, predictive_map, latest_event = _replay_sustained_outside_support_incident()
+    snapshot = public_snapshot(tracker, predictive_map, latest_event)
+
+    assert not snapshot.zones["bedroom_entrance"].keep_on
