@@ -230,4 +230,4 @@ This hotfix replaces the setup-broken 0.1.17 candidate. The seven-day Home Assis
 
 ### Rollout status
 
-This is a release candidate, not a completed production cutover. The required seven-day Home Assistant shadow/soak evidence has not been collected. Follow `SHADOW_VALIDATION.md`; do not mark the behavioral specification implemented or remove the rollout blocker until that evidence passes review.
+This is a release candidate, not a completed production cutover. Its required seven-day Home Assistant shadow/soak evidence was never collected. The checklist was later retired when `SPECIFICATION.md` replaced that model; current rollout gates are in `MIGRATION_PLAN.md`.

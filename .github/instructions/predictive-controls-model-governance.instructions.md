@@ -1,6 +1,6 @@
 ---
 name: Predictive Controls Model Governance
-description: 'Use when changing Predictive Controls inference, observations, movement, prediction, policy, persistence, thresholds, or regression tests. Requires canonical requirement review and the predictive-controls-regression-review skill before behavior edits.'
+description: "Use when changing Predictive Controls observations, zone belief, traversal, count, policy, prediction, persistence, profiles, thresholds, benchmarks, or regression tests."
 applyTo:
   - "custom_components/predictive_controls/**/*.py"
   - "tests/**/*.py"
@@ -9,28 +9,31 @@ applyTo:
 
 # Predictive Controls Model Governance
 
+`SPECIFICATION.md` is the sole design authority. `MIGRATION_PLAN.md` sequences
+implementation but cannot add or reinterpret requirements.
+
 Before changing behavior in a matched file:
 
-1. Read `docs/spec/README.md`, goals, governance, and the owning technical
-   contract identified by the index.
-2. Use `.github/skills/predictive-controls-regression-review/SKILL.md` for every
-   report that something did not work properly, regression, incident, threshold
-   change, or model redesign. Follow its nine-gate Non-Negotiable Incident Order
-   exactly; later detail sections do not define a second sequence.
-3. Map expected behavior and the proposed change to canonical requirement IDs.
-4. Add and run an exact-timestamp retained regression that fails at the public
-   entity contract before examining the production implementation.
-5. Use fresh context-isolated read-only subagents to investigate the failing
-   implementation, verify each proposed solution against the canonical spec,
-   and review the resulting implementation. A failed spec verdict blocks edits
-   and requires another proposal and another fresh review.
-6. Explain the probabilistic or policy meaning of the change and compare
-   alternatives for model changes.
+1. Read `SPECIFICATION.md` and map the change to its `REQ-*` IDs.
+2. During migration, read only the active phase in `MIGRATION_PLAN.md` plus its
+   global execution and validation rules.
+3. Use `.github/skills/predictive-controls-regression-review/SKILL.md` for every
+   reported failure, incident, profile/threshold change, or model redesign.
+4. For an incident, add and prove the exact-timestamp public regression before
+   diagnosing or editing production behavior.
+5. Use fresh context-isolated read-only subagents for independent investigation,
+   proposal review against `SPECIFICATION.md`, and implementation conformance.
+6. Run the focused test immediately after the first production edit, then all
+   phase quality gates before widening scope.
 
-Do not add room-specific inference, count timer evaluations as independent
-evidence, hard-delete valid relocation hypotheses to force an outcome, feed
-prediction into occupancy, clear `active` from uncertainty alone, or move
-predictor defects into consuming Home Assistant automations.
+Do not add room/entity/person-specific model logic, count timer callbacks as
+independent evidence, let prediction or policy feed zone belief, normalize
+positive-count belief into forced room assignments, or move model defects into
+Home Assistant automations.
 
-If desired behavior conflicts with the canonical specification, amend and agree
-on the specification before changing production code.
+Elapsed time may advance declared bounded filter decay, episode health, token
+expiry, prediction leases, and policy dwell exactly once from stored timestamps.
+It must not synthesize sensor observations or traversal edges.
+
+If desired behavior conflicts with `SPECIFICATION.md`, stop production work and
+obtain explicit agreement to amend that file first.
