@@ -194,9 +194,17 @@ async def websocket_status(
 ) -> None:
     try:
         entry = _entry_for_message(hass, msg)
-        runtime = hass.data[DOMAIN][entry.entry_id]
-    except (KeyError, ValueError) as exc:
+    except ValueError as exc:
         connection.send_error(msg["id"], "not_found", str(exc))
+        return
+
+    runtime = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if runtime is None:
+        connection.send_error(
+            msg["id"],
+            "not_loaded",
+            "Predictive Controls is not loaded; check the integration setup error",
+        )
         return
 
     connection.send_message(

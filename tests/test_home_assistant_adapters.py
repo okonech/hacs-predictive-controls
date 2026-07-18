@@ -412,6 +412,15 @@ def test_websocket_commands_success_and_errors(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(module, "runtime_status_payload", lambda _runtime: {"ok": True})
     asyncio.run(module.websocket_status(hass, connection, {"id": 5}))
     assert connection.messages[-1]["result"] == {"ok": True}
+    unloaded_hass = SimpleNamespace(
+        config_entries=config_entries,
+        data={DOMAIN: {}},
+    )
+    asyncio.run(module.websocket_status(unloaded_hass, connection, {"id": "unloaded"}))
+    assert connection.errors[-1][1:] == (
+        "not_loaded",
+        "Predictive Controls is not loaded; check the integration setup error",
+    )
     asyncio.run(module.websocket_status(no_entry_hass, connection, {"id": 6}))
     assert connection.errors[-1][1] == "not_found"
     monkeypatch.setattr(
@@ -458,7 +467,7 @@ def test_panel_registration_and_unregistration(monkeypatch: pytest.MonkeyPatch) 
     assert len(static_paths) == 1
     assert len(fake.registered_panels) == 2
     assert fake.removed_panels == [DOMAIN, DOMAIN]
-    assert module.panel_js_url().endswith("panel-v0.2.2.js")
+    assert module.panel_js_url().endswith("panel-v0.2.3.js")
     panel_custom = fake.registered_panels[-1]["config"]["_panel_custom"]
     assert panel_custom["module_url"] == module.panel_js_url()
     assert "js_url" not in panel_custom

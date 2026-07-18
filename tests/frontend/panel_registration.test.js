@@ -80,6 +80,40 @@ test("panel module registers and renders websocket data", async () => {
   assert.equal(panel._entities[0].entity_id, "binary_sensor.entrance_mmwave_dimmer_motion_detection");
 });
 
+test("panel remains usable when runtime status is unavailable", async () => {
+  const Panel = await panelConstructor();
+  const panel = new Panel();
+  panel.hass = {
+    callWS(message) {
+      if (message.type === "predictive_controls/config") {
+        return Promise.resolve({
+          entry_id: "abc123",
+          map: { nodes: {} },
+          map_yaml: "nodes: {}\n",
+          actions_yaml: "",
+          transition_window_seconds: 30,
+          prediction_threshold: 0.6,
+          expected_occupants: 2,
+        });
+      }
+      if (message.type === "predictive_controls/entities") {
+        return Promise.resolve({ entities: [] });
+      }
+      if (message.type === "predictive_controls/status") {
+        return Promise.reject(new Error("Integration setup failed"));
+      }
+      throw new Error(`Unexpected websocket type: ${message.type}`);
+    },
+  };
+
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.match(panel.innerHTML, /Predictive Controls/);
+  assert.match(panel.innerHTML, /Integration setup failed/);
+  assert.equal(panel._config.entry_id, "abc123");
+  assert.equal(panel._error, undefined);
+});
+
 test("panel defaults to occupancy first and renders requested tab order", async () => {
   const Panel = await panelConstructor();
   const panel = new Panel();
@@ -666,7 +700,7 @@ test("panel reports when no stale entities are found", async () => {
 });
 
 test("panel script parses when Home Assistant loads it as a classic script", async () => {
-  const source = await readFile(panelAssetUrl("panel-v0.2.2.js"), "utf8");
+  const source = await readFile(panelAssetUrl("panel-v0.2.3.js"), "utf8");
 
   assert.doesNotThrow(() => new vm.Script(source));
 });
@@ -674,7 +708,7 @@ test("panel script parses when Home Assistant loads it as a classic script", asy
 test("versioned panel asset matches the development panel asset", async () => {
   const [developmentSource, versionedSource] = await Promise.all([
     readFile(panelAssetUrl("panel.js"), "utf8"),
-    readFile(panelAssetUrl("panel-v0.2.2.js"), "utf8"),
+    readFile(panelAssetUrl("panel-v0.2.3.js"), "utf8"),
   ]);
 
   assert.equal(versionedSource, developmentSource);

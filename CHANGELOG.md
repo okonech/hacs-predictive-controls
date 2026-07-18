@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.3
+
+### Fixed
+
+- Treat `review_required` as advisory once role, occupancy behavior, and signal
+  type resolve a deterministic physical profile. This prevents reviewed legacy
+  maps from failing integration startup.
+- Bootstrap and validate the target model before registering runtime callbacks,
+  so a setup error cannot leave orphaned event and timer subscriptions behind.
+- Keep the panel usable when live status is unavailable, and report a clear
+  integration setup error instead of rendering a config-entry ID.
+
 ## 0.2.2
 
 ### Fixed

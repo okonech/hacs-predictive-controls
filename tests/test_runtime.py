@@ -198,6 +198,45 @@ def test_runtime_lifecycle_persistence_callbacks_and_actions(
     assert store.saved
 
 
+def test_runtime_startup_validation_failure_does_not_subscribe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = runtime_module(monkeypatch)
+    subscriptions: list[str] = []
+    monkeypatch.setattr(
+        module,
+        "async_track_state_change_event",
+        lambda *_args, **_kwargs: subscriptions.append("state"),
+    )
+    monkeypatch.setattr(
+        module,
+        "async_track_time_interval",
+        lambda *_args, **_kwargs: subscriptions.append("interval"),
+    )
+    ambiguous_map = PredictiveMap.from_mapping(
+        {
+            "nodes": {
+                "room": {
+                    "occupancy_behavior": "ambiguous",
+                    "entities": {"motion": "binary_sensor.room"},
+                }
+            }
+        }
+    )
+    runtime = module.PredictiveControlsRuntime(
+        _FakeHass({"binary_sensor.room": _FakeState("off")}),
+        ambiguous_map,
+        (),
+        transition_window=30,
+        expected_occupants=1,
+    )
+
+    with pytest.raises(ValueError, match="ambiguous occupancy metadata"):
+        runtime.start()
+
+    assert subscriptions == []
+
+
 def test_runtime_adapter_boundaries_and_callbacks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

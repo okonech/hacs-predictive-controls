@@ -128,21 +128,21 @@ def test_ambiguous_mapping_reports_blocking_error() -> None:
     assert unrecognized.profile_name is None
     assert unrecognized.error is not None
 
-    review_map = PredictiveMap.from_mapping(
+    reviewed_map = PredictiveMap.from_mapping(
         {
             "nodes": {
                 "review": {
-                    "role": "transition_gate",
-                    "occupancy_behavior": "transient",
+                    "role": "room_occupancy",
+                    "occupancy_behavior": "sustained",
                     "review_required": True,
                     "entities": {"motion": "binary_sensor.review"},
                 }
             }
         }
     )
-    review = profile_assignment_for_node(review_map, "review")
-    assert review.profile_name is None
-    assert review.error is not None
+    reviewed = profile_assignment_for_node(reviewed_map, "review")
+    assert reviewed.profile_name == "stay_pir"
+    assert reviewed.error is None
 
 
 def test_profile_validation_is_strict() -> None:

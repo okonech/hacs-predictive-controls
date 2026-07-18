@@ -150,7 +150,12 @@ def profile_assignment_for_node(
     entry_roles = {"boundary", "entry", "entry_boundary", "household_boundary"}
     stay_roles = {"room_occupancy", "stay", "subzone", "subzone_occupancy"}
 
-    if node.review_required or behavior == "ambiguous":
+    # ``review_required`` is advisory map metadata.  It must not prevent a
+    # deterministic assignment when the node's role, behavior, and signal type
+    # already identify one of the supported physical profiles.  Older curated
+    # maps retain this flag after review, so treating it as a runtime gate makes
+    # an otherwise valid integration fail during startup.
+    if behavior == "ambiguous":
         profile_name = None
     elif role in entry_roles and behavior in {"sustained", "transient"}:
         profile_name = "entry_boundary"

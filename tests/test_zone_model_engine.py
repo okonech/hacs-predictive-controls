@@ -89,12 +89,12 @@ def test_engine_timer_advances_health_and_release_without_tick_counting() -> Non
     assert any(state.health_warning for state in direct.snapshot.episode_states)
 
 
-def test_engine_rejects_ambiguous_or_mixed_profile_zones() -> None:
+def test_engine_rejects_ambiguous_behavior_or_mixed_profile_zones() -> None:
     ambiguous = PredictiveMap.from_mapping(
         {
             "nodes": {
                 "unknown": {
-                    "review_required": True,
+                    "occupancy_behavior": "ambiguous",
                     "entities": {"motion": "binary_sensor.unknown"},
                 }
             }

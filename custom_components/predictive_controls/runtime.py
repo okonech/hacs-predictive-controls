@@ -198,18 +198,6 @@ class PredictiveControlsRuntime:
         if not entity_ids:
             _LOGGER.warning("Predictive Controls map has no entity bindings")
             return
-        self._unsubscribe = async_track_state_change_event(
-            self.hass, entity_ids, self._async_state_changed
-        )
-        self._unsubscribe_refresh = async_track_time_interval(
-            self.hass, self._async_refresh_active_confidence, timedelta(minutes=1)
-        )
-        self._unsubscribe_transient_refresh = async_track_time_interval(
-            self.hass, self._async_expire_transient_state, timedelta(seconds=5)
-        )
-        self._unsubscribe_diagnostic_refresh = async_track_time_interval(
-            self.hass, self._async_publish_diagnostics, timedelta(seconds=30)
-        )
         now = datetime.now(UTC)
         self._sync_expected_occupants(now)
         snapshot = self._current_snapshot(now)
@@ -222,6 +210,21 @@ class PredictiveControlsRuntime:
         finally:
             self._bootstrap_inference_ms = (perf_counter_ns() - started_ns) / 1_000_000
             self._latency_samples_ms.append(self._bootstrap_inference_ms)
+        # Subscribe only after the target model has bootstrapped successfully.
+        # A startup validation error must not leave orphaned state and timer
+        # callbacks running after Home Assistant marks the entry setup_error.
+        self._unsubscribe = async_track_state_change_event(
+            self.hass, entity_ids, self._async_state_changed
+        )
+        self._unsubscribe_refresh = async_track_time_interval(
+            self.hass, self._async_refresh_active_confidence, timedelta(minutes=1)
+        )
+        self._unsubscribe_transient_refresh = async_track_time_interval(
+            self.hass, self._async_expire_transient_state, timedelta(seconds=5)
+        )
+        self._unsubscribe_diagnostic_refresh = async_track_time_interval(
+            self.hass, self._async_publish_diagnostics, timedelta(seconds=30)
+        )
         self._safe_bootstrap_complete = True
         self._bootstrap_total_ms = (perf_counter_ns() - startup_started_ns) / 1_000_000
         async_dispatcher_send(self.hass, DISPATCH_UPDATE)

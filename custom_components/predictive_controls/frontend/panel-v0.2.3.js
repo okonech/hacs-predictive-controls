@@ -667,13 +667,19 @@ class PredictiveControlsPanel extends HTMLElement {
   async loadData() {
     this._error = undefined;
     try {
-      const [config, entityResponse, statusResponse] = await Promise.all([
+      const [config, entityResponse, statusResult] = await Promise.all([
         this._hass.callWS({ type: "predictive_controls/config" }),
         this._hass.callWS({ type: "predictive_controls/entities" }),
-        this._hass.callWS({ type: "predictive_controls/status" }),
+        this._hass.callWS({ type: "predictive_controls/status" }).then(
+          (value) => ({ value }),
+          (error) => ({ error }),
+        ),
       ]);
       this._config = config;
-      this._status = statusResponse;
+      this._status = statusResult.value;
+      this._statusError = statusResult.error
+        ? statusResult.error.message || String(statusResult.error)
+        : undefined;
       this._entities = normalizeEntityResponse(entityResponse);
       this._selectedNode = undefined;
       this._mapYamlDirty = false;
