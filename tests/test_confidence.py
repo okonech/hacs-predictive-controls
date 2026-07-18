@@ -52,4 +52,4 @@ def test_confidence_facade_ignores_unsupported_count_and_round_trips_target_stat
     assert restored.restore_state(payload, NOW + timedelta(seconds=1))
     assert restored.config.expected_occupants == 1
     assert restored.diagnostics.beliefs["hall"] < confidence.diagnostics.beliefs["hall"]
-    assert payload["schema"] == "zone-belief-v1"
+    assert payload["schema"] == "zone-belief-v2"

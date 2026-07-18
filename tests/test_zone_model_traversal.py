@@ -410,7 +410,11 @@ def test_source_free_rejects_untrustworthy_target(
 )
 def test_source_free_rejects_untrustworthy_corroboration(
     corroborating_change: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    profiles = dict(SHARED_PROFILES)
+    profiles["stay_pir"] = replace(STAY_PIR, single_node_reacquisition=False)
+    monkeypatch.setattr(traversal_module, "SHARED_PROFILES", profiles)
     frontier = TraversalFrontier(graph(), NODES)
     target = episode("isolated", "isolated", "stay_pir", NOW)
     corroborating = replace(
@@ -426,12 +430,7 @@ def test_source_free_rejects_untrustworthy_corroboration(
     assert result.authorized is False
 
 
-def test_reviewed_profile_capability_can_enable_source_free(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    profiles = dict(SHARED_PROFILES)
-    profiles["stay_pir"] = replace(STAY_PIR, single_node_reacquisition=True)
-    monkeypatch.setattr(traversal_module, "SHARED_PROFILES", profiles)
+def test_reviewed_stay_profile_capability_enables_source_free() -> None:
     frontier = TraversalFrontier(graph(), NODES)
     target = episode("isolated", "isolated", "stay_pir", NOW)
     result = frontier.authorize(target, NOW, count=CountState(1))

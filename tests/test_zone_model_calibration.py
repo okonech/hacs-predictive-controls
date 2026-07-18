@@ -36,7 +36,7 @@ TRACE_DISPOSITIONS = (
         "probability_release",
     ),
     CalibrationTrace("T05-stuck-transition-degrades", "replay", "stuck_transition"),
-    CalibrationTrace("T06-stuck-stay-degrades", "replay", "stuck_stay"),
+    CalibrationTrace("T06-held-stay-remains-active", "replay", "held_stay"),
     CalibrationTrace("T07-manual-off-refresh", "deferred", "phase_5_refresh"),
 )
 
@@ -305,15 +305,12 @@ def test_provisional_profiles_meet_retained_filter_timeline_bounds() -> None:
     stuck_transition.apply_health_degraded("transition", NOW + timedelta(seconds=62))
     stuck_transition.advance(NOW + timedelta(minutes=10))
 
-    stuck_presence = ZoneBeliefFilter("zone", BELIEF_PROFILES["stay_presence"], NOW)
-    stuck_presence.apply_positive("presence", NOW + timedelta(seconds=2))
-    stuck_presence.apply_health_degraded(
-        "presence", NOW + timedelta(minutes=30, seconds=2)
-    )
-    stuck_presence.advance(NOW + timedelta(hours=2))
+    held_presence = ZoneBeliefFilter("zone", BELIEF_PROFILES["stay_presence"], NOW)
+    held_presence.apply_positive("presence", NOW + timedelta(seconds=2))
+    held_presence.advance(NOW + timedelta(hours=2))
 
     assert quiet_stay.state.probability > 0.3
     assert outward_departure.state.probability < 0.3
     assert probability_release.state.probability < 0.3
     assert stuck_transition.state.probability < 0.3
-    assert stuck_presence.state.probability < 0.3
+    assert held_presence.state.probability > 0.9

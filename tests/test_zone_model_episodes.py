@@ -134,9 +134,11 @@ def test_availability_recovery_starts_a_new_episode(
 
 @pytest.mark.parametrize(
     "profile",
-    ["transition_fast", "stay_pir", "stay_presence", "entry_boundary"],
+    ["transition_fast", "entry_boundary"],
 )
-def test_assertion_trust_horizon_degrades_once_for_every_profile(profile: str) -> None:
+def test_assertion_trust_horizon_degrades_once_for_movement_profiles(
+    profile: str,
+) -> None:
     model = episodes(profile=profile)
     asserted = model.observe(sensor("binary_sensor.a", "on", 0))
     horizon = asserted.state.assertion_trust_until
@@ -151,6 +153,21 @@ def test_assertion_trust_horizon_degrades_once_for_every_profile(profile: str) -
     assert degraded.state.traversal_valid_until is None
     assert [effect.kind for effect in degraded.effects] == ["health_degraded"]
     assert repeated.effects == ()
+
+
+@pytest.mark.parametrize("profile", ["stay_pir", "stay_presence"])
+def test_held_stay_assertion_remains_current_local_evidence(profile: str) -> None:
+    model = episodes(profile=profile)
+    asserted = model.observe(sensor("binary_sensor.a", "on", 0))
+    horizon = asserted.state.assertion_trust_until
+    assert horizon is not None
+
+    held = model.advance(horizon + timedelta(hours=2))[0]
+
+    assert held.state.status == "asserted"
+    assert held.state.known_on
+    assert not held.state.health_warning
+    assert held.effects == ()
 
 
 def test_new_episode_recovers_health_after_stuck_assertion() -> None:

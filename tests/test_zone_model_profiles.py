@@ -68,10 +68,10 @@ def test_shared_profiles_have_independent_finite_timing() -> None:
     assert TRANSITION_FAST.assertion_trust_horizon < STAY_PIR.assertion_trust_horizon
     assert STAY_PIR.post_clear_residual < STAY_PRESENCE.post_clear_residual
     assert ENTRY_BOUNDARY.role == "entry"
-    assert all(
-        profile.single_node_reacquisition is False
-        for profile in SHARED_PROFILES.values()
-    )
+    assert STAY_PIR.single_node_reacquisition is True
+    assert STAY_PRESENCE.single_node_reacquisition is True
+    assert TRANSITION_FAST.single_node_reacquisition is False
+    assert ENTRY_BOUNDARY.single_node_reacquisition is False
     with pytest.raises(ValueError, match="must be boolean"):
         replace(STAY_PIR, single_node_reacquisition=1)  # type: ignore[arg-type]
 
@@ -235,12 +235,17 @@ def test_contradictory_role_and_behavior_require_review() -> None:
 
 
 @pytest.mark.parametrize(
-    ("behavior", "signal_type"),
-    [("sticky", "motion"), ("sustained", "presence"), ("sustained", "mmwave")],
+    ("behavior", "signal_type", "profile_name"),
+    [
+        ("sticky", "motion", "stay_pir"),
+        ("sustained", "presence", "stay_presence"),
+        ("sustained", "mmwave", "stay_presence"),
+    ],
 )
 def test_generic_stay_roles_use_explicit_presence_metadata(
     behavior: str,
     signal_type: str,
+    profile_name: str,
 ) -> None:
     predictive_map = PredictiveMap.from_mapping(
         {
@@ -256,7 +261,7 @@ def test_generic_stay_roles_use_explicit_presence_metadata(
 
     assert (
         profile_assignment_for_node(predictive_map, "room").profile_name
-        == "stay_presence"
+        == profile_name
     )
 
 

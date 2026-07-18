@@ -5,18 +5,18 @@ motion and presence sensors into stable zone-level automation entities. Its
 first use case is lighting, while configured actions may call other Home
 Assistant services.
 
-## Design and Migration Status
+## Design and Current Model
 
 [`SPECIFICATION.md`](SPECIFICATION.md) is the sole source of product and model
-requirements. [`MIGRATION_PLAN.md`](MIGRATION_PLAN.md) is the step-by-step AI
-agent handoff for implementing those requirements; it is not a second design
-authority.
+requirements. Code, tests, documentation, and historical changelog entries must
+remain consistent with it.
 
 The integration now runs graph-local per-zone probability filters, bounded
 anonymous traversal context, and hysteretic probability-driven `active`
-decisions. Store schema 7 reads schema-6 state once to seed public active state,
-then persists only target-model state. Historical changelog entries may still
-describe the retired architecture.
+decisions. Home Assistant Store schema 7 can import schema-6 state once to seed
+public active state, then persists only `zone-belief-v2` state. Older
+`zone-belief-v1` inference is rejected and rebuilt from current sensor states.
+Historical changelog entries may still describe the retired architecture.
 
 ## Installation
 
@@ -38,8 +38,11 @@ The map groups raw entity aliases into physical nodes, assigns nodes to zones,
 and declares physical adjacency. Current maps may use role names such as
 `transition_gate`, `room_occupancy`, `subzone_occupancy`, and `anchor_sensor`,
 plus occupancy behaviors `transient`, `sustained`, `sticky`, and `ambiguous`.
-The migration plan defines deterministic conversion to the target shared sensor
-profiles; target logic must not infer a profile from a room name.
+Profile assignment is capability-based: transient gates use `transition_fast`;
+room and subzone motion/PIR sensors use `stay_pir` even when their zone is
+sticky; true presence/mmWave sensors and reviewed sticky non-motion nodes use
+`stay_presence`; and configured household boundaries use `entry_boundary`.
+Runtime logic must not infer a profile from a room name.
 
 Example map:
 
@@ -146,13 +149,14 @@ probability, or timing logic.
 Transition sensors should generally use the shortest reliable hardware reset,
 initially 5-15 seconds when supported. Stay-room PIRs should start around 30
 seconds and be adjusted only from measured false-clear behavior. True-presence
-sensors should report stable absence promptly while retaining a finite software
-trust horizon.
+sensors should report stable absence promptly. A continuously asserted stay
+sensor remains strong bounded local evidence; its ability to authorize movement
+to neighboring zones still expires.
 
 Hardware timing and software profiles are calibrated together. A long-open
 hallway remains bounded traversal context and may authorize distinct fresh room
 episodes; it is never counted repeatedly as new motion. See the specification
-for behavior and the migration plan for rollout and measurement steps.
+for behavior, calibration, rollout, and measurement requirements.
 
 ## Development
 
@@ -181,8 +185,6 @@ quality gates.
 ## Repository Documents
 
 - [`SPECIFICATION.md`](SPECIFICATION.md): sole normative design authority.
-- [`MIGRATION_PLAN.md`](MIGRATION_PLAN.md): non-normative implementation and
-  rollout sequence.
 - [`CHANGELOG.md`](CHANGELOG.md): historical release record.
 - [`PERFORMANCE_RESULTS.json`](PERFORMANCE_RESULTS.json): latest checked-in
   performance artifact where applicable.

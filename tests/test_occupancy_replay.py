@@ -150,6 +150,6 @@ def test_replay_history_states_imports_and_summarizes_real_history_shape() -> No
         "possible",
         "probable",
     }
-    assert summary["active_zones"] == []
+    assert summary["active_zones"] == ["office"]
     assert summary["traversal_token_count"] == 1
     assert summary["health_warning_count"] == 0

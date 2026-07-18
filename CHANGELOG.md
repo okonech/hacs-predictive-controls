@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.5
+
+### Fixed
+
+- Keep continuously asserted stay-room PIR and presence sensors as strong,
+  bounded local occupancy evidence instead of degrading them to 5% solely due
+  to elapsed time.
+- Allow direct stay evidence and current startup assertions to activate their
+  own zones without manufacturing traversal or public arrival events.
+- Classify motion-only sensors as PIR even in sticky zones, preventing cleared
+  bathroom motion from receiving true-presence persistence.
+- Invalidate saved `zone-belief-v1` inference so previously degraded live
+  assertions are rebuilt immediately from current Home Assistant sensor state.
+
 ## 0.2.4
 
 ### Changed
@@ -277,4 +291,4 @@ This hotfix replaces the setup-broken 0.1.17 candidate. The seven-day Home Assis
 
 ### Rollout status
 
-This is a release candidate, not a completed production cutover. Its required seven-day Home Assistant shadow/soak evidence was never collected. The checklist was later retired when `SPECIFICATION.md` replaced that model; current rollout gates are in `MIGRATION_PLAN.md`.
+This is a release candidate, not a completed production cutover. Its required seven-day Home Assistant shadow/soak evidence was never collected. The checklist was later retired when `SPECIFICATION.md` replaced that model; current behavior and governance are defined solely by `SPECIFICATION.md`.

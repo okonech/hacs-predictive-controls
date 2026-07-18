@@ -27,7 +27,7 @@ from .types import (
     require_utc,
 )
 
-TARGET_SCHEMA = "zone-belief-v1"
+TARGET_SCHEMA = "zone-belief-v2"
 LEGACY_TARGET_SCHEMA = "zone-belief-shadow-v1"
 LEGACY_EXACT_SCHEMA = "exact-augmented-v6"
 
@@ -68,7 +68,7 @@ def restore_target_state(
 ) -> ZoneModelEngine:
     require_utc(restore_at, "Target restore time")
     root = _mapping(payload, "Target state")
-    if root.get("schema") not in {TARGET_SCHEMA, LEGACY_TARGET_SCHEMA}:
+    if root.get("schema") != TARGET_SCHEMA:
         raise ValueError("Target schema is incompatible")
     if root.get("map_fingerprint") != target_map_fingerprint(predictive_map):
         raise ValueError("Target map fingerprint is incompatible")

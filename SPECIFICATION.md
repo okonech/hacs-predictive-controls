@@ -4,7 +4,7 @@
 **Authority:** This file is the sole source of product and model requirements.
 **Supported occupants:** 0 through 2, with 2 as the primary operating profile.
 
-Code, tests, plans, changelogs, issues, and user documentation describe or
+Code, tests, changelogs, issues, and user documentation describe or
 implement this specification but do not override it. If another repository file
 conflicts with this file, this file wins and the other file must be corrected.
 
@@ -47,9 +47,10 @@ inputs.
 - **REQ-GOAL-006, multi-occupant tolerance:** Simultaneous activity fronts must be
   supported for authoritative counts 0, 1, and 2, including two occupants in one
   zone or on independent paths.
-- **REQ-GOAL-007, bounded state:** Every influence, lease, hold, and diagnostic
-  retention period is finite. No sensor episode or policy state may create
-  permanent ownership.
+- **REQ-GOAL-007, bounded state:** Every probability, traversal influence,
+  lease, hold, and diagnostic retention is bounded. Current asserted stay
+  evidence may persist only while its physical sensor remains asserted; it
+  cannot create permanent identity or neighboring authority.
 - **REQ-GOAL-008, deterministic replay:** Equal ordered inputs, map, profiles,
   count controls, and restored state must produce equal outputs and explanations.
 - **REQ-GOAL-009, generic behavior:** Production logic uses node roles, sensor
@@ -68,7 +69,8 @@ inputs.
 - Treating a light state, prediction, policy output, timer callback, or repeated
   unchanged sensor state as occupancy evidence.
 - Guaranteeing a correct location when all relevant sensors miss an occupant.
-- Hiding a failed or stuck sensor indefinitely through an infinite software hold.
+- Treating assertion duration alone as proof that an asserted stay sensor failed
+  or that its room became empty.
 - Room-specific thresholds or Home Assistant automations that reproduce model
   logic.
 
@@ -115,8 +117,9 @@ Every sensor profile declares independently:
    positive assertion is historical;
 3. `hardware_hold_interval`: the period in which hardware may be unable to emit
    another positive edge;
-4. `assertion_trust_horizon`: how long a continuous assertion retains full
-   evidential weight before sensor-health degradation begins;
+4. `assertion_trust_horizon`: how long a continuous transition or boundary
+   assertion retains full evidential weight before sensor-health degradation
+   begins, and the upper bound on assertion-derived traversal authority;
 5. `post_clear_residual`: the role-specific occupancy residual after stable
    clear; and
 6. `traversal_context_window`: how long the node may authorize a graph-neighbor
@@ -131,10 +134,12 @@ Every sensor profile declares independently:
   It starts residual decay but does not prove departure.
 - **REQ-EVID-004:** A current assertion is a bounded correlated observation.
   Duration influence may saturate but may not grow without limit.
-- **REQ-EVID-005:** When an assertion exceeds its trust horizon, its likelihood
-  influence decays toward a finite profile floor and a sensor-health warning is
-  emitted. A stuck node may retain some local protection but cannot keep `active`
-  on forever or authorize unlimited neighboring arrivals.
+- **REQ-EVID-005:** When a transition or boundary assertion exceeds its trust
+  horizon, its likelihood influence decays toward a finite profile floor and a
+  sensor-health warning is emitted. A stay assertion remains strong, bounded
+  local evidence while the device is currently asserted; elapsed wall time alone
+  must not convert it into absence. No continuous assertion may authorize
+  unlimited neighboring arrivals.
 - **REQ-EVID-006:** Out-of-order or duplicate inputs are ignored and diagnosed.
   They do not advance filter time, decay, traversal, policy, prediction, or
   learning.
@@ -181,8 +186,10 @@ context $c$. Context is a deterministic state machine; node role selects the
 shared parameter family and is not itself a competing state:
 
 1. an accepted positive selects `asserted` for its episode;
-2. expiry of that assertion's trust horizon selects `degraded_asserted` while
-  the same hardware assertion remains positive;
+2. expiry of a transition or boundary assertion's trust horizon selects
+   `degraded_asserted` while the same hardware assertion remains positive; stay
+   assertions retain `asserted` locally while their traversal authority still
+   expires;
 3. stable clear selects `cleared_with_outward` when at least one compatible
   outward context for that source episode remains unexpired, otherwise
   `cleared_without_outward`;
@@ -218,7 +225,8 @@ room-specific inactivity timers.
   context. It must not imply indefinite occupancy of the transition zone, even
   when hardware remains on during several crossings.
 - **REQ-BELIEF-005:** A current stay assertion retains stronger local occupancy
-  meaning, subject to bounded trust and health degradation.
+  meaning. Its duration influence saturates at a finite profile value, and its
+  traversal authority expires independently of that local meaning.
 - **REQ-BELIEF-006:** Wall time advances declared state survival and decay. It
   does not synthesize sensor edges, graph traversal, independent evidence, or
   route-learning observations.
@@ -246,9 +254,9 @@ A fresh local target episode is graph-authorized when any of these holds:
    unexpired frontier to the target.
 
 Source-free reacquisition requires a trustworthy fresh local episode and either
-independent physical-node corroboration or a profile whose measured false-positive
-rate permits single-node reacquisition. It may raise target belief, but it must
-be explained distinctly from an adjacent arrival.
+independent physical-node corroboration or a reviewed direct stay profile that
+permits single-node reacquisition. It may raise target belief, but it must be
+explained distinctly from an adjacent arrival.
 
 - **REQ-TRAV-001:** Tokens expire by event time and shared graph/profile timing.
   Expired tokens cannot authorize activation or learning.
@@ -314,9 +322,10 @@ than replacing it with a separate proof system.
   globally finalized movement, support certificates, or accounting for every
   occupant elsewhere.
 - **REQ-POLICY-003:** Current trustworthy stay evidence may floor $q_z$ or extend
-  release confirmation according to profile calibration, but bounded sensor-health
-  degradation guarantees eventual release when no fresh supporting evidence
-  appears.
+  release confirmation according to profile calibration. While a stay sensor
+  remains asserted, assertion age alone cannot release the zone. Stable clear,
+  unavailable state, count zero, or other accepted contradictory evidence may
+  begin release under the declared filter and dwell.
 - **REQ-POLICY-004:** Transition zones use shorter occupancy persistence and
   release dwell than stay zones. Their assertions may remain useful as bounded
   traversal context after transition-zone occupancy belief has decayed.
@@ -335,20 +344,30 @@ than replacing it with a separate proof system.
 - **REQ-POLICY-007:** Policy never mutates sensor episodes or retroactively changes
   $q_z$. It only projects the current model result.
 
+Current shared policy calibration is:
+
+| Profile           | On threshold | Off threshold | Release dwell |
+| ----------------- | ------------ | ------------- | ------------- |
+| `transition_fast` | 0.70         | 0.30          | 15 seconds    |
+| `stay_pir`        | 0.70         | 0.30          | 60 seconds    |
+| `stay_presence`   | 0.70         | 0.30          | 120 seconds   |
+| `entry_boundary`  | 0.70         | 0.30          | 15 seconds    |
+
 ## 10. Sensor Profiles and Hardware Settings
 
-The initial supported profiles are role-based:
+The supported profiles and current asserted-state calibration are:
 
-| Profile           | Hardware clear/reset recommendation                                                         | Software interpretation                                                                                          |
-| ----------------- | ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `transition_fast` | Use the shortest reliable device setting, initially 5-15 seconds where hardware supports it | Short zone persistence; assertion is bounded traversal context; rapid stable clear reveals path endpoints sooner |
-| `stay_pir`        | Start near 30 seconds; increase only if measured false clears are excessive                 | Strong fresh local evidence, weak clear evidence, long no-exit residual                                          |
-| `stay_presence`   | Use the device's shortest stable presence/absence reporting                                 | Strong current stay evidence with a finite assertion trust horizon                                               |
-| `entry_boundary`  | Use a short reliable reset consistent with the physical crossing                            | Boundary reacquisition and count context, not long-lived room occupancy                                          |
+| Profile           | Hardware clear/reset recommendation                                                         | Asserted local baseline | Direct source-free acquisition | Software interpretation                                                                                          |
+| ----------------- | ------------------------------------------------------------------------------------------- | ----------------------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| `transition_fast` | Use the shortest reliable device setting, initially 5-15 seconds where hardware supports it | 0.15                    | No                             | Short zone persistence; assertion is bounded traversal context; rapid stable clear reveals path endpoints sooner |
+| `stay_pir`        | Start near 30 seconds; increase only if measured false clears are excessive                 | 0.90                    | Yes                            | Strong current local evidence while asserted, weak clear evidence, long no-exit residual                         |
+| `stay_presence`   | Use the device's shortest stable presence/absence reporting                                 | 0.95                    | Yes                            | Strong current stay evidence while asserted; finite traversal authority                                          |
+| `entry_boundary`  | Use a short reliable reset consistent with the physical crossing                            | 0.10                    | No                             | Boundary reacquisition and count context, not long-lived room occupancy                                          |
 
-These are deployment starting points, not normative constants. Device settings
-must be recorded with the map profile because software timing must reflect actual
-hardware behavior.
+The hardware recommendations are deployment starting points. The asserted local
+baselines and direct-acquisition capabilities are normative current shared
+calibration. Device settings must be recorded with the map profile because
+software timing must reflect actual hardware behavior.
 
 - **REQ-PROFILE-001:** Transition hardware should clear faster than stay-room
   hardware when reliable. This improves endpoint observability but correctness
@@ -361,6 +380,13 @@ hardware behavior.
   through its longer local profile even after a fast transition sensor clears.
 - **REQ-PROFILE-004:** Hardware changes are calibrated changes. Validate them with
   retained traces and shadow metrics before broad deployment.
+- **REQ-PROFILE-005:** A stay-role node backed only by `motion` or `pir` uses
+  `stay_pir`, even when the zone occupancy behavior is sticky. Sticky metadata
+  cannot upgrade motion-only hardware to true presence.
+- **REQ-PROFILE-006:** `stay_presence` requires true presence/mmWave capability
+  or reviewed sticky non-motion hardware, including anchor sensors. Both stay
+  profiles permit direct source-free acquisition when authoritative count is
+  positive; transition and entry profiles do not.
 
 ## 11. Public Contract
 
@@ -386,9 +412,9 @@ inference logic.
 - **REQ-PUBLIC-003:** Automations may consume `active`, optional `prelight`, and
   optional `event.<zone>_arrival` acquired/refreshed events; they must not inspect
   internal thresholds or duplicate graph logic.
-- **REQ-PUBLIC-004:** Legacy projections may exist only during a declared
-  compatibility phase in the migration plan. They are not part of the target
-  contract.
+- **REQ-PUBLIC-004:** Exact-assignment, ownership, support-certificate, and other
+  retired projections are not part of the public contract and must not be
+  reintroduced as occupancy authority.
 
 ## 12. Prediction and Learning
 
@@ -423,9 +449,14 @@ Persist only state needed to reproduce the next decision:
   from current sensor/count snapshots without movement or public edges.
 - **REQ-STATE-003:** Restore advances decay and expiry exactly once to the restore
   frontier. It must not reapply historical observation likelihoods.
-- **REQ-STATE-004:** Migration from the exact-assignment schema preserves public
-  `active` state only as a temporary compatibility seed with a finite expiry. It
-  must not invent zone belief, traversal tokens, or support provenance.
+- **REQ-STATE-004:** The one-time exact-assignment schema-6 importer may preserve
+  public `active` state only as a compatibility seed. It must not invent zone
+  belief, traversal tokens, or support provenance.
+- **REQ-STATE-005:** The current persisted inference schema is
+  `zone-belief-v2`. Older `zone-belief-v1` state is incompatible and must cold
+  bootstrap from current sensor/count snapshots. With positive authoritative
+  count, a currently asserted direct stay sensor may seed its zone `active`
+  without creating traversal tokens or emitting synthetic public events.
 
 ## 14. Explainability and Diagnostics
 
@@ -449,7 +480,7 @@ assignment graph.
 - **REQ-DIAG-002:** Audit retention has fixed time, entry, and byte bounds with
   constant-time FIFO eviction.
 - **REQ-DIAG-003:** A zone active longer than its profile expectation without
-  fresh trustworthy evidence is directly observable as a diagnostic condition.
+  current trustworthy evidence is directly observable as a diagnostic condition.
 
 ## 15. Performance and Determinism
 
@@ -466,7 +497,7 @@ assignment graph.
 
 ## 16. Acceptance Requirements
 
-The target implementation is acceptable only when retained public-contract
+The implementation is acceptable only when retained public-contract
 scenarios and adversarial tests demonstrate:
 
 1. direct room entry and quiet stay without false release;
@@ -474,8 +505,9 @@ scenarios and adversarial tests demonstrate:
    activations and eventual room A release;
 3. two occupants on independent paths and two occupants sharing one room;
 4. a missed transition edge followed by trustworthy source-free reacquisition;
-5. isolated, disconnected, flapping, aliased, stuck-on, unavailable, and
-   out-of-order sensor behavior;
+5. isolated, disconnected, flapping, aliased, unavailable, and out-of-order
+   sensor behavior, including degradation of stuck transition/boundary sensors
+   and continued bounded local evidence from asserted stay sensors;
 6. probability-driven release without globally available assignment provenance;
 7. no threshold chatter at exact boundaries;
 8. restart during assertion, stable clear, traversal, and release dwell;
@@ -503,13 +535,11 @@ scenarios and adversarial tests demonstrate:
   weakened, retimed, skipped, or moved to automation YAML to fit an
   implementation.
 
-## 18. Conflict Rule
+## 18. Superseded Architecture
 
 This specification intentionally replaces exact anonymous count-vector
 occupancy, mandatory fixed-lag global movement assignment, `ArrivalSupported`,
-`ReleaseSafe`, support-certificate renewal, and durable ownership as target
-requirements. Those mechanisms may remain temporarily as migration
-implementation details, but they have no authority over the target behavior.
-
-The migration plan may sequence work and define temporary compatibility. It may
-not add, remove, or reinterpret a requirement in this file.
+`ReleaseSafe`, support-certificate renewal, and durable ownership in the current
+system. Those mechanisms have no authority over current behavior and must not be
+restored. The schema-6 decoder permitted by `REQ-STATE-004` is a bounded data
+importer only and cannot execute retired inference.

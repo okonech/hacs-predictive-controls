@@ -94,16 +94,18 @@ def test_s26_prediction_state_cannot_change_occupancy_or_policy() -> None:
     assert tracker.diagnostics.prediction_probabilities == {}
 
 
-def test_s29_s30_elapsed_time_and_stuck_evidence_eventually_release() -> None:
+def test_s29_s30_elapsed_time_degrades_hall_but_preserves_held_stay() -> None:
     engine = occupied_engine()
 
     result = engine.advance(NOW + timedelta(hours=2))
 
     assert {state.zone: state.active for state in result.snapshot.policy_states} == {
         "hall": False,
-        "room": False,
+        "room": True,
     }
-    assert any(state.health_warning for state in result.snapshot.episode_states)
+    episodes = {state.node_id: state for state in result.snapshot.episode_states}
+    assert episodes["hall"].health_warning
+    assert not episodes["room"].health_warning
 
 
 def test_s29_elapsed_time_and_low_confidence_preserve_public_keep_on() -> None:
@@ -120,14 +122,18 @@ def test_s29_elapsed_time_and_low_confidence_preserve_public_keep_on() -> None:
 
 
 def test_s30_asserted_local_motion_preserves_keep_on_through_expiry() -> None:
-    """Retained incident name; finite trust prevents an indefinite active state."""
+    """A current held room assertion remains strong bounded local evidence."""
 
     result = occupied_engine().advance(NOW + timedelta(hours=2))
 
-    assert not {state.zone: state.active for state in result.snapshot.policy_states}[
+    assert {state.zone: state.active for state in result.snapshot.policy_states}[
         "room"
     ]
-    assert any(state.health_warning for state in result.snapshot.episode_states)
+    room = next(
+        state for state in result.snapshot.episode_states if state.node_id == "room"
+    )
+    assert room.status == "asserted"
+    assert not room.health_warning
 
 
 def test_s31_sustained_room_confidence_survives_untracked_flaps() -> None:

@@ -52,7 +52,7 @@ def test_positive_and_stable_clear_are_one_time_bayes_updates() -> None:
     assert contribution_count(filter_, "local_positive") == 1
 
     duplicate = filter_.apply_positive("episode-1", NOW + timedelta(seconds=2))
-    assert duplicate.probability < positive.probability
+    assert positive.probability < duplicate.probability < 0.9
     assert contribution_count(filter_, "local_positive") == 1
 
     cleared = filter_.apply_stable_clear("episode-1", NOW + timedelta(seconds=3))
@@ -321,7 +321,12 @@ def test_threshold_query_validation_and_long_refinement() -> None:
         filter_.threshold_crossed_at(incompatible, 0.5, NOW)
     with pytest.raises(ValueError, match="invalid"):
         filter_.threshold_crossed_at(asserted, -1.0, NOW)
-    crossed = filter_.threshold_crossed_at(asserted, 0.71, NOW + timedelta(days=36_500))
+    assert (
+        filter_.threshold_crossed_at(asserted, 0.71, NOW + timedelta(days=36_500))
+        is None
+    )
+    cleared = filter_.apply_stable_clear("episode-1", NOW)
+    crossed = filter_.threshold_crossed_at(cleared, 0.3, NOW + timedelta(days=36_500))
     assert crossed is not None
 
 

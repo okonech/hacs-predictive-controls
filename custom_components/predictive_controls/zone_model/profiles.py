@@ -30,7 +30,7 @@ STAY_PIR = SensorProfile(
     assertion_trust_horizon=timedelta(seconds=900),
     post_clear_residual=0.65,
     traversal_context_window=timedelta(seconds=90),
-    single_node_reacquisition=False,
+    single_node_reacquisition=True,
 )
 STAY_PRESENCE = SensorProfile(
     "stay_presence",
@@ -41,7 +41,7 @@ STAY_PRESENCE = SensorProfile(
     assertion_trust_horizon=timedelta(seconds=1800),
     post_clear_residual=0.8,
     traversal_context_window=timedelta(seconds=120),
-    single_node_reacquisition=False,
+    single_node_reacquisition=True,
 )
 ENTRY_BOUNDARY = SensorProfile(
     "entry_boundary",
@@ -83,7 +83,10 @@ BELIEF_PROFILES: Mapping[str, BeliefProfile] = MappingProxyType(
             positive_occupied_likelihood=0.98,
             clear_empty_likelihood=0.75,
             clear_occupied_likelihood=0.55,
-            asserted=DecayCalibration(0.7, timedelta(minutes=10)),
+            # A held room assertion is continuing local evidence.  Its duration
+            # influence saturates at a strong finite belief rather than turning
+            # into absence merely because the device has not emitted an edge.
+            asserted=DecayCalibration(0.9, timedelta(minutes=10)),
             cleared_without_outward=DecayCalibration(0.05, timedelta(minutes=10)),
             cleared_with_outward=DecayCalibration(0.05, timedelta(seconds=30)),
             degraded_asserted=DecayCalibration(0.05, timedelta(minutes=2)),
@@ -96,7 +99,7 @@ BELIEF_PROFILES: Mapping[str, BeliefProfile] = MappingProxyType(
             positive_occupied_likelihood=0.995,
             clear_empty_likelihood=0.7,
             clear_occupied_likelihood=0.58,
-            asserted=DecayCalibration(0.8, timedelta(minutes=20)),
+            asserted=DecayCalibration(0.95, timedelta(minutes=20)),
             cleared_without_outward=DecayCalibration(0.05, timedelta(minutes=45)),
             cleared_with_outward=DecayCalibration(0.05, timedelta(minutes=3)),
             degraded_asserted=DecayCalibration(0.05, timedelta(minutes=5)),
@@ -163,16 +166,16 @@ def profile_assignment_for_node(
         profile_name = "transition_fast"
     elif role == "anchor_sensor" and behavior == "sticky":
         profile_name = "stay_presence"
+    elif role in stay_roles and signal_types & {"motion", "pir"}:
+        # Occupancy behavior controls the zone policy, but it cannot upgrade a
+        # motion-only device into true-presence hardware.  In particular,
+        # bathroom PIRs must clear with the PIR calibration even when the zone
+        # itself is marked sticky.
+        profile_name = "stay_pir"
     elif role in stay_roles and (
         behavior == "sticky" or signal_types & {"mmwave", "occupancy", "presence"}
     ):
         profile_name = "stay_presence"
-    elif (
-        role in stay_roles
-        and behavior == "sustained"
-        and signal_types & {"motion", "pir"}
-    ):
-        profile_name = "stay_pir"
     elif role not in entry_roles | stay_roles | {"anchor_sensor", "transition_gate"}:
         if behavior == "transient":
             profile_name = "transition_fast"

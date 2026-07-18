@@ -73,7 +73,7 @@ def test_engine_count_zero_resets_beliefs_frontier_and_active_state() -> None:
     )
 
 
-def test_engine_timer_advances_health_and_release_without_tick_counting() -> None:
+def test_engine_timer_degrades_transition_but_preserves_held_room() -> None:
     engine = ZoneModelEngine(target_map(), 1, NOW)
     engine.observe(SensorInput("binary_sensor.hall", "on", NOW))
     room_at = NOW + timedelta(seconds=2)
@@ -82,11 +82,51 @@ def test_engine_timer_advances_health_and_release_without_tick_counting() -> Non
     direct = engine.advance(NOW + timedelta(minutes=20))
 
     states = {state.zone: state for state in direct.snapshot.policy_states}
-    assert states["room"].active is False
-    assert ("room", "released") in {
+    assert states["room"].active is True
+    assert ("room", "released") not in {
         (event.zone, event.kind) for event in direct.policy_events
     }
-    assert any(state.health_warning for state in direct.snapshot.episode_states)
+    episodes = {state.node_id: state for state in direct.snapshot.episode_states}
+    assert episodes["hall"].health_warning
+    assert not episodes["room"].health_warning
+
+
+def test_engine_bootstrap_projects_current_stay_assertion_without_public_edge() -> None:
+    engine = ZoneModelEngine(target_map(), 1, NOW)
+
+    snapshot = engine.bootstrap_sensor_snapshot(
+        (
+            SensorInput("binary_sensor.hall", "off", NOW),
+            SensorInput("binary_sensor.room", "on", NOW),
+        ),
+        NOW,
+    )
+
+    assert {state.zone: state.active for state in snapshot.policy_states} == {
+        "hall": False,
+        "room": True,
+    }
+    assert engine.audit_rows == ()
+    assert snapshot.traversal_tokens == ()
+
+    empty_house = ZoneModelEngine(target_map(), 0, NOW)
+    empty_snapshot = empty_house.bootstrap_sensor_snapshot(
+        (SensorInput("binary_sensor.room", "on", NOW),),
+        NOW,
+    )
+    assert all(not state.active for state in empty_snapshot.policy_states)
+
+
+def test_engine_direct_stay_assertion_can_acquire_without_a_hallway_edge() -> None:
+    engine = ZoneModelEngine(target_map(), 1, NOW)
+
+    result = engine.observe(SensorInput("binary_sensor.room", "on", NOW))
+
+    assert result.authorizations[0].authorized
+    assert result.authorizations[0].reason == "source_free_corroborated"
+    assert [(event.zone, event.kind) for event in result.policy_events] == [
+        ("room", "acquired")
+    ]
 
 
 def test_engine_rejects_ambiguous_behavior_or_mixed_profile_zones() -> None:

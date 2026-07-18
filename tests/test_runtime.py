@@ -78,7 +78,7 @@ def test_runtime_restores_target_state_and_rejects_corrupt_state(
     )
     assert restored.restore_stored_state(payload, NOW + timedelta(seconds=3))
     assert restored.confidence.diagnostics.policy_states["office"].active is True
-    assert restored.transition_store_data()["schema"] == "zone-belief-v1"
+    assert restored.transition_store_data()["schema"] == "zone-belief-v2"
 
     rejected = module.PredictiveControlsRuntime(
         _FakeHass(), make_map(), (), transition_window=30, expected_occupants=1
@@ -139,8 +139,9 @@ def test_runtime_start_bootstraps_snapshot_without_public_activation(
     runtime.start()
 
     assert publications == [module.DISPATCH_UPDATE]
-    assert not runtime_automation_summary(runtime).keep_on_zones
-    assert runtime.transition_store_data()["schema"] == "zone-belief-v1"
+    assert runtime_automation_summary(runtime).keep_on_zones == ("office",)
+    assert runtime.last_zone_update is None
+    assert runtime.transition_store_data()["schema"] == "zone-belief-v2"
     assert runtime.latency_metrics["sample_count"] == 1
 
 

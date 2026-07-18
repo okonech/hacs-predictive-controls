@@ -1,15 +1,15 @@
 {
   "schema_version": 1,
-  "scenario_id": "T06-stuck-stay-degrades",
+  "scenario_id": "T06-held-stay-remains-active",
   "requirement_ids": [
-    "REQ-EVID-005",
+    "REQ-EVID-004",
     "REQ-POLICY-003",
-    "REQ-DIAG-003"
+    "REQ-PROFILE-003"
   ],
   "owning_phase": 5,
   "source": {
     "kind": "synthetic_target_contract",
-    "description": "A stay assertion receives longer protection than a transition but health degradation still prevents permanent active ownership.",
+    "description": "A continuously asserted stay sensor remains strong bounded local evidence while its traversal authority expires.",
     "related_tests": [
       "tests/test_acceptance_scenarios.py::test_s30_asserted_local_motion_preserves_keep_on_through_expiry"
     ]
@@ -90,13 +90,13 @@
       "kind": "timer",
       "event_at": "2026-07-18T17:30:02Z",
       "received_at": "2026-07-18T17:30:02Z",
-      "description": "The stay assertion reaches its longer trust horizon."
+      "description": "The stay assertion passes its traversal trust horizon but remains current local evidence."
     },
     {
       "kind": "timer",
       "event_at": "2026-07-18T19:00:00Z",
       "received_at": "2026-07-18T19:00:00Z",
-      "description": "Degraded stay belief reaches release after its longer dwell."
+      "description": "Elapsed time alone still cannot manufacture evidence that the occupant left."
     }
   ],
   "expected_public_timeline": [
@@ -119,23 +119,23 @@
       "active_changes": {},
       "arrival_events": [],
       "health_changes": {
-        "room": true
+        "room": false
       },
-      "reason": "assertion_trust_horizon_exceeded"
+      "reason": "held_stay_saturates"
     },
     {
       "at": "2026-07-18T19:00:00Z",
-      "active_changes": {
+      "active_changes": {},
+      "arrival_events": [],
+      "health_changes": {
         "room": false
       },
-      "arrival_events": [],
-      "health_changes": {},
-      "reason": "degraded_stay_belief_release"
+      "reason": "held_stay_remains_active"
     }
   ],
   "expected_reason_classes": [
     "adjacent_transition_arrival",
-    "assertion_trust_horizon_exceeded",
-    "degraded_stay_belief_release"
+    "held_stay_saturates",
+    "held_stay_remains_active"
   ]
 }

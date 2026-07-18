@@ -359,6 +359,7 @@ class PhysicalEpisodes:
             )
         if (
             state.status == "asserted"
+            and self._profile(state).role != "stay"
             and state.assertion_trust_until is not None
             and now >= state.assertion_trust_until
             and not state.health_warning

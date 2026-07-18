@@ -13,7 +13,7 @@ from custom_components.predictive_controls.panel import (
 
 
 def test_panel_js_url_is_versioned() -> None:
-    assert panel_js_url() == "/predictive_controls/static/panel-v0.2.4.js"
+    assert panel_js_url() == "/predictive_controls/static/panel-v0.2.5.js"
 
 
 def test_panel_unregister_supports_home_assistant_without_frontend(

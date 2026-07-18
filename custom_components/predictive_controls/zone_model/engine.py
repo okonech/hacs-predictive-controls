@@ -10,7 +10,7 @@ from .count import CountContext, apply_count_update
 from .episodes import PhysicalEpisodes
 from .filter import ZoneBeliefFilter
 from .policy import POLICY_CALIBRATIONS, PolicyAuditLog, ZonePolicy
-from .profiles import BELIEF_PROFILES, build_physical_nodes
+from .profiles import BELIEF_PROFILES, SHARED_PROFILES, build_physical_nodes
 from .traversal import TraversalFrontier
 from .types import (
     CountInput,
@@ -185,8 +185,35 @@ class ZoneModelEngine:
                 self._filters[update.state.zone].apply_unavailable(at)
         self._advance_components(at)
         self._frontier.clear(at)
+        self._seed_asserted_stay_policies(at)
         self._updated_at = at
         return self.snapshot
+
+    def _seed_asserted_stay_policies(self, at: datetime) -> None:
+        """Project current stay assertions at bootstrap without public edges."""
+
+        if self._count.state.expected_count <= 0:
+            return
+        asserted_zones = {
+            state.zone
+            for state in self._episodes.states
+            if state.status == "asserted"
+            and state.known_on
+            and SHARED_PROFILES[state.profile_name].role == "stay"
+            and SHARED_PROFILES[state.profile_name].single_node_reacquisition
+        }
+        for zone in sorted(asserted_zones):
+            policy = self._policies[zone]
+            if policy.state.active:
+                continue
+            belief = self._filters[zone].state
+            calibration = POLICY_CALIBRATIONS[belief.profile_name]
+            self._policies[zone] = ZonePolicy(
+                zone,
+                calibration,
+                at,
+                active=True,
+            )
 
     def observe(
         self,
