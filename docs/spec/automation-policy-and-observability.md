@@ -178,13 +178,16 @@ categorical overrides.
   1. $N_z=0$;
   2. every one of the $N$ anonymous positions outside $z$ is injectively matched
     to a distinct admissible support item: a fresh independent local physical-
-    node episode or a finalized causal movement assignment;
+    node episode, its just-finalized non-renewable local certificate under
+    `EVID-015`, or a finalized causal movement assignment whose target episode
+    validity is retained under `EVID-015`;
   3. one physical-node episode or external endpoint accounts for at most one
     occupant unless an explicit independent multiplicity observation exists;
   4. no occupant is accounted by `unlocated`, contextless, prediction-only,
     stale, duplicated, flap-derived, coarsened, or incomplete-overload support;
   5. no unresolved graph-valid competing assignment retains the origin; and
-  6. no current valid sustained room-positive assertion remains in the origin.
+    6. no current valid sustained or sticky room-positive assertion remains in
+      the origin.
 
   Its policy probability is
 
@@ -195,9 +198,10 @@ categorical overrides.
 
   Policy MUST release when finalized $r_z$ passes the `POL-015` threshold. When
   it does, historical ownership alone MUST NOT retain `active`.
-- **POL-017:** Current valid positive evidence from a sustained room-occupancy
-  sensor blocks automatic final-occupant release by graph departure, relocation,
-  or count-accounted support by making `ReleaseSafe` false. Authoritative
+- **POL-017:** Current valid positive evidence from a sustained or sticky
+  room-occupancy sensor blocks automatic final-occupant release by graph
+  departure, relocation, or count-accounted support by making `ReleaseSafe`
+  false. Authoritative
   $N=0$/away and explicit reset MAY override it. Automatic recovery from a
   continuously stuck-on room sensor is intentionally unsupported. `EVID-011`
   and `EVID-018` define the exact event-time deadline at which a stable clear

@@ -37,7 +37,12 @@ from .port import EngineDiagnostics
 from .reducer import FactorChainEventReducer, FactorChainReplayState
 from .replay import RetainedReplayCoordinator
 from .state_space import CompactLogPosterior, StateSpace
-from .support import InjectiveSupportResult, injective_support_result
+from .support import (
+    InjectiveSupportResult,
+    SupportMatchingSlot,
+    SupportRejectionReason,
+    injective_support_result,
+)
 from .types import (
     AugmentedStateKey,
     EndpointAlternative,
@@ -1807,13 +1812,30 @@ def _encode_prediction_lease(lease: PredictionLease) -> dict[str, object]:
 
 
 def _encode_support_result(result: InjectiveSupportResult) -> dict[str, object]:
+    grouped: dict[
+        tuple[
+            int,
+            bool,
+            tuple[SupportMatchingSlot, ...],
+            tuple[SupportRejectionReason, ...],
+        ],
+        list[float],
+    ] = {}
+    for stratum in result.strata:
+        key = (
+            stratum.occupancy_rank,
+            stratum.qualifies,
+            stratum.matching,
+            stratum.reasons,
+        )
+        grouped.setdefault(key, []).append(stratum.probability)
     return {
         "probability": result.probability,
         "strata": [
             {
-                "occupancy_rank": stratum.occupancy_rank,
-                "probability": stratum.probability,
-                "qualifies": stratum.qualifies,
+                "occupancy_rank": occupancy_rank,
+                "probability": math.fsum(probabilities),
+                "qualifies": qualifies,
                 "matching": [
                     {
                         "destination_zone": slot.destination_zone,
@@ -1822,11 +1844,16 @@ def _encode_support_result(result: InjectiveSupportResult) -> dict[str, object]:
                         "endpoint_ids": list(slot.endpoint_ids),
                         "episode_ids": list(slot.episode_ids),
                     }
-                    for slot in stratum.matching
+                    for slot in matching
                 ],
-                "reasons": list(stratum.reasons),
+                "reasons": list(reasons),
             }
-            for stratum in result.strata
+            for (
+                occupancy_rank,
+                qualifies,
+                matching,
+                reasons,
+            ), probabilities in grouped.items()
         ],
     }
 

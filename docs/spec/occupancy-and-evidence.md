@@ -266,13 +266,35 @@ and movement replay evidence.
   Each resulting assignment remains bounded by its own semantic route deadline.
 
   A branch-local support atom retained from the assertion's original joint
-  assignment MAY renew its finite `valid_until` to the current deterministic
-  frontier while one of its episode IDs identifies that same current valid
-  sustained assertion. Renewal MUST preserve the atom's augmented stratum and
-  probability exactly; it MUST NOT create support on another stratum,
-  recalculate evidence, or reconstruct provenance from occupancy marginals.
-  When stable clear makes the episode historical, renewal stops and ordinary
-  support expiration removes the atom.
+  assignment MUST retain the positive target physical episode token that
+  generated its endpoint exactly once: as endpoint provenance for a movement
+  certificate or episode provenance for a local certificate. It MAY renew its
+  finite `valid_until` to the current deterministic frontier while that token
+  identifies the same current valid sustained or sticky assertion. This renewal
+  rule does not expand the
+  sustained-only censored-source extension above or repeat movement evidence or
+  learning. Renewal MUST preserve the atom's augmented stratum and probability
+  exactly; it MUST NOT create support on another stratum, recalculate evidence,
+  or reconstruct provenance from occupancy marginals.
+
+  Both provenance fields remain explicit in policy audit serialization; the
+  token MUST NOT be duplicated across them merely to enable renewal.
+
+  When stable clear makes the episode historical, its already-existing atom MAY
+  receive one final renewal only at the exact deterministic reducer advance in
+  which that episode transitions from current-positive to historical. The atom
+  is available through that transition watermark and expires at every later
+  watermark. Historical episode state MUST NOT renew or recreate it.
+
+  A positive endpoint assignment MAY itself finalize at a deterministic
+  watermark after that same physical episode has stable-cleared. In this narrow
+  case, the exact `stay` branch MAY emit one non-renewable local support
+  certificate only on augmented strata where the original endpoint assignment
+  placed at least one occupant in its destination. The certificate is valid
+  through that assignment-finalization watermark and expires at every later
+  watermark. It is support from the just-finalized positive endpoint, not from
+  clear, elapsed time, a zone marginal, or reconstructed provenance. A
+  continuously asserted node never enters this historical case.
 
 Naive periodic reapplication is rejected because it counts correlated samples
 as independent. An infinite posterior anchor is also rejected: a current

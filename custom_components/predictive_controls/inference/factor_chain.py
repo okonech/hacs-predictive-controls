@@ -405,11 +405,11 @@ class ExactFactorChain:
         watermark: datetime,
         support_factory: SupportCertificateFactory | None = None,
         *,
-        current_sustained_episode_ids: frozenset[str] = frozenset(),
+        renewable_episode_ids: frozenset[str] = frozenset(),
     ) -> tuple[ExactFactorChain, tuple[str, ...]]:
         require_utc(watermark, "Factor-chain compaction watermark")
         base_message = self._base_message.renew_episode_support(
-            current_sustained_episode_ids,
+            renewable_episode_ids,
             watermark,
         ).expire_support(watermark)
         through = 0

@@ -378,8 +378,9 @@ class AugmentedLogMessage:
                         key.contexts,
                         tuple(
                             replace(support, valid_until=frontier)
-                            if support.disposition == "stay"
-                            and not episode_ids.isdisjoint(support.episode_ids)
+                            if not episode_ids.isdisjoint(
+                                (*support.endpoint_ids, *support.episode_ids)
+                            )
                             else support
                             for support in key.supports
                         ),

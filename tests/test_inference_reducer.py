@@ -13,6 +13,7 @@ from custom_components.predictive_controls.inference.association import (
 from custom_components.predictive_controls.inference.reducer import (
     AugmentedEventReducer,
     FactorChainEventReducer,
+    FactorChainReplayState,
 )
 from custom_components.predictive_controls.inference.replay import (
     RetainedObservation,
@@ -463,7 +464,7 @@ def test_unlocated_and_stay_branches_receive_fresh_local_support_only() -> None:
     )
 
 
-def test_stable_clear_prevents_historical_local_support_certificate() -> None:
+def test_historical_local_support_exists_only_at_finalization_frontier() -> None:
     predictive_map = make_map()
     space = StateSpace(predictive_map.zones(), 1)
     compact = FactorChainEventReducer(predictive_map, space)
@@ -477,10 +478,15 @@ def test_stable_clear_prevents_historical_local_support_certificate() -> None:
     )
 
     finalized, _ = compact.advance(observed, NOW + timedelta(seconds=8))
+    expired, _ = compact.advance(finalized, NOW + timedelta(seconds=9))
 
+    assert any(key.supports for key, _ in finalized.chain.base_message.entries)
     assert all(
-        not key.supports for key, _ in finalized.chain.base_message.entries
+        support.valid_until == NOW + timedelta(seconds=8)
+        for key, _ in finalized.chain.base_message.entries
+        for support in key.supports
     )
+    assert all(not key.supports for key, _ in expired.chain.base_message.entries)
 
 
 def test_current_sustained_local_support_renews_then_expires_after_clear() -> None:
@@ -501,7 +507,8 @@ def test_current_sustained_local_support_renews_then_expires_after_clear() -> No
         renewed,
         retained(event("office", 101, "off")),
     )
-    expired, _ = compact.advance(cleared, NOW + timedelta(seconds=107))
+    clear_frontier, _ = compact.advance(cleared, NOW + timedelta(seconds=107))
+    expired, _ = compact.advance(clear_frontier, NOW + timedelta(seconds=108))
 
     first_supports = {
         support
@@ -523,6 +530,12 @@ def test_current_sustained_local_support_renews_then_expires_after_clear() -> No
     assert {support.valid_until for support in renewed_supports} == {
         NOW + timedelta(seconds=100)
     }
+    assert {
+        support.valid_until
+        for key, _ in clear_frontier.chain.base_message.entries
+        for support in key.supports
+        if support.episode_ids
+    } == {NOW + timedelta(seconds=107)}
     assert all(
         not support.episode_ids
         for key, _ in expired.chain.base_message.entries
@@ -530,7 +543,54 @@ def test_current_sustained_local_support_renews_then_expires_after_clear() -> No
     )
 
 
-def test_graph_branch_uses_movement_capacity_not_local_episode_capacity() -> None:
+@pytest.mark.parametrize("behavior", ["sustained", "sticky"])
+def test_target_episode_renews_movement_support_through_clear_frontier_only(
+    behavior: str,
+) -> None:
+    predictive_map = make_map(office_behavior=behavior)
+    space = StateSpace(predictive_map.zones(), 1)
+    compact = FactorChainEventReducer(predictive_map, space)
+    posterior = CompactLogPosterior.certain(
+        space,
+        (0,) * len(space.zones) + (1,),
+    )
+    office_positive = replace(event("office", 2), occupancy_behavior=behavior)
+    observed = compact.reduce(
+        compact.initial_state(posterior),
+        retained(event("hall", 1), office_positive),
+    )
+
+    finalized, _ = compact.advance(observed, NOW + timedelta(seconds=70))
+    renewed, _ = compact.advance(finalized, NOW + timedelta(seconds=100))
+    cleared = compact.reduce(
+        renewed,
+        retained(replace(event("office", 101, "off"), occupancy_behavior=behavior)),
+    )
+    clear_frontier, _ = compact.advance(cleared, NOW + timedelta(seconds=107))
+    expired, _ = compact.advance(clear_frontier, NOW + timedelta(seconds=108))
+    still_expired, _ = compact.advance(expired, NOW + timedelta(seconds=120))
+
+    def movement_supports(state: FactorChainReplayState) -> set[SupportEventAtom]:
+        return {
+            support
+            for key, _ in state.chain.base_message.entries
+            for support in key.supports
+            if support.destination_zone == "office"
+            and support.disposition != "stay"
+        }
+
+    assert movement_supports(finalized)
+    assert {support.valid_until for support in movement_supports(renewed)} == {
+        NOW + timedelta(seconds=100)
+    }
+    assert {
+        support.valid_until for support in movement_supports(clear_frontier)
+    } == {NOW + timedelta(seconds=107)}
+    assert not movement_supports(expired)
+    assert not movement_supports(still_expired)
+
+
+def test_transient_target_episode_does_not_renew_movement_support() -> None:
     predictive_map = make_map()
     space = StateSpace(predictive_map.zones(), 1)
     compact = FactorChainEventReducer(predictive_map, space)
@@ -544,13 +604,21 @@ def test_graph_branch_uses_movement_capacity_not_local_episode_capacity() -> Non
     )
 
     finalized, _ = compact.advance(observed, NOW + timedelta(seconds=70))
+    expired, _ = compact.advance(finalized, NOW + timedelta(seconds=71))
     movement = {
         support
         for key, _ in finalized.chain.base_message.entries
         for support in key.supports
-        if support.disposition != "stay"
+        if support.destination_zone == "hall" and support.disposition != "stay"
+    }
+    later_movement = {
+        support
+        for key, _ in expired.chain.base_message.entries
+        for support in key.supports
+        if support.destination_zone == "hall" and support.disposition != "stay"
     }
 
     assert movement
     assert all(support.endpoint_ids for support in movement)
     assert all(not support.episode_ids for support in movement)
+    assert not later_movement

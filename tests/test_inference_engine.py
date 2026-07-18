@@ -47,6 +47,9 @@ from custom_components.predictive_controls.inference.state_space import (
     StateSpace,
 )
 from custom_components.predictive_controls.inference.support import (
+    InjectiveSupportResult,
+    SupportMatchingSlot,
+    SupportStratumResult,
     injective_support_probability,
 )
 from custom_components.predictive_controls.inference.types import (
@@ -75,6 +78,56 @@ from custom_components.predictive_controls.yaml_config import load_predictive_ma
 from tests.differential_runner import DifferentialRunner
 
 NOW = datetime(2026, 7, 16, tzinfo=UTC)
+
+
+def test_policy_audit_coalesces_only_identical_support_evidence() -> None:
+    first_matching = (
+        SupportMatchingSlot("target", 1, "first", ("endpoint-1",), ()),
+    )
+    second_matching = (
+        SupportMatchingSlot("target", 1, "second", ("endpoint-2",), ()),
+    )
+    result = InjectiveSupportResult(
+        0.75,
+        (
+            SupportStratumResult(1, 0.2, True, first_matching, ()),
+            SupportStratumResult(1, 0.3, True, first_matching, ()),
+            SupportStratumResult(2, 0.4, False, (), ("origin_nonempty",)),
+            SupportStratumResult(2, 0.1, False, (), ("origin_nonempty",)),
+            SupportStratumResult(1, 0.25, True, second_matching, ()),
+        ),
+    )
+
+    encoded = engine_module._encode_support_result(result)  # noqa: SLF001
+    strata = cast(list[dict[str, Any]], encoded["strata"])
+
+    assert encoded["probability"] == 0.75
+    assert [stratum["probability"] for stratum in strata] == [
+        0.5,
+        0.5,
+        0.25,
+    ]
+    assert [stratum["matching"] for stratum in strata] == [
+        [
+            {
+                "destination_zone": "target",
+                "occurrence": 1,
+                "support_event_id": "first",
+                "endpoint_ids": ["endpoint-1"],
+                "episode_ids": [],
+            }
+        ],
+        [],
+        [
+            {
+                "destination_zone": "target",
+                "occurrence": 1,
+                "support_event_id": "second",
+                "endpoint_ids": ["endpoint-2"],
+                "episode_ids": [],
+            }
+        ],
+    ]
 
 
 def make_map() -> PredictiveMap:

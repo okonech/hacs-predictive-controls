@@ -11,6 +11,7 @@ from occupancy_test_utils import (
     assert_count_conserved,
     assert_normalized,
     public_snapshot,
+    run_trace,
 )
 
 from custom_components.predictive_controls.automation_summary import (
@@ -549,3 +550,379 @@ def test_inc_long_held_source_routes_through_hall_to_activate_target() -> None:
 
     assert target_decision.gate_values["threshold"] == pytest.approx(0.8)
     assert snapshot.zones["upstairs_bathroom"].keep_on
+
+
+def test_inc_two_outside_tracks_release_cleared_master_suite_zones() -> None:
+    predictive_map = load_predictive_map(
+        (
+            Path(__file__).resolve().parents[1] / "benchmarks" / "reference-map.yaml"
+        ).read_text()
+    )
+    tracker = ZoneConfidenceEngine(predictive_map, expected_occupants=2)
+
+    def incident_event(
+        node_id: str,
+        timestamp: str,
+        *,
+        state: str = "on",
+        signal_type: str = "motion",
+    ) -> OccupancyEvent:
+        node = predictive_map.nodes[node_id]
+        return OccupancyEvent(
+            entity_id=node.entities[signal_type],
+            node_id=node_id,
+            zone=node.occupancy_zone,
+            floor=node.floor,
+            role=node.role,
+            occupancy_behavior=predictive_map.occupancy_behavior_for_node(node),
+            signal_type=signal_type,
+            state=state,
+            event_at=datetime.fromisoformat(timestamp),
+            reliability=node.initial_weight,
+        )
+
+    events = (
+        incident_event(
+            "stairs_top_sensor",
+            "2026-07-17T19:47:36.733958+00:00",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T19:47:40.758045+00:00",
+            signal_type="target",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T19:47:40.761282+00:00",
+            signal_type="moving_target",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T19:47:40.763970+00:00",
+            signal_type="still_target",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T19:47:40.767072+00:00",
+            signal_type="zone_3_occupancy",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T19:47:41.792385+00:00",
+            state="off",
+            signal_type="moving_target",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T19:47:45.946247+00:00",
+            state="off",
+            signal_type="zone_3_occupancy",
+        ),
+        incident_event(
+            "stairs_top_sensor",
+            "2026-07-17T19:47:46.466285+00:00",
+            state="off",
+        ),
+        incident_event(
+            "office_b_sensor",
+            "2026-07-17T19:47:48.274935+00:00",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T19:47:50.069701+00:00",
+            signal_type="zone_3_occupancy",
+        ),
+        incident_event(
+            "stairs_top_sensor",
+            "2026-07-17T19:47:52.670269+00:00",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T19:47:53.250317+00:00",
+            state="off",
+            signal_type="target",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T19:47:53.253955+00:00",
+            state="off",
+            signal_type="still_target",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T19:47:53.257281+00:00",
+            state="off",
+            signal_type="zone_3_occupancy",
+        ),
+        incident_event(
+            "office_b_sensor",
+            "2026-07-17T19:47:53.922201+00:00",
+            state="off",
+        ),
+        incident_event(
+            "bedroom_entrance_sensor",
+            "2026-07-17T19:47:57.005029+00:00",
+        ),
+        incident_event(
+            "bedroom_closet_sensor",
+            "2026-07-17T19:48:00.429174+00:00",
+        ),
+        incident_event(
+            "stairs_top_sensor",
+            "2026-07-17T19:48:04.875346+00:00",
+            state="off",
+        ),
+        incident_event(
+            "primary_bathroom_sensor",
+            "2026-07-17T19:48:05.494880+00:00",
+        ),
+        incident_event(
+            "stairs_top_sensor",
+            "2026-07-17T19:48:13.433646+00:00",
+        ),
+        incident_event(
+            "stairs_top_sensor",
+            "2026-07-17T19:48:25.223339+00:00",
+            state="off",
+        ),
+        incident_event(
+            "bedroom_entrance_sensor",
+            "2026-07-17T19:48:27.180828+00:00",
+            state="off",
+        ),
+        incident_event(
+            "bedroom_closet_sensor",
+            "2026-07-17T19:48:47.012036+00:00",
+            state="off",
+        ),
+        incident_event(
+            "primary_bathroom_sensor",
+            "2026-07-17T19:48:56.755091+00:00",
+            state="off",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T19:56:11.951986+00:00",
+            signal_type="target",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T19:56:12.388075+00:00",
+            signal_type="moving_target",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T19:56:12.438731+00:00",
+            signal_type="zone_3_occupancy",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T19:56:13.044708+00:00",
+            state="off",
+            signal_type="moving_target",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T19:56:13.048935+00:00",
+            signal_type="still_target",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T19:56:13.052810+00:00",
+            state="off",
+            signal_type="zone_3_occupancy",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T19:56:14.046967+00:00",
+            signal_type="zone_3_occupancy",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T19:56:15.046338+00:00",
+            state="off",
+            signal_type="zone_3_occupancy",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T19:56:16.049011+00:00",
+            signal_type="zone_3_occupancy",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T19:56:19.144896+00:00",
+            state="off",
+            signal_type="zone_3_occupancy",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T19:56:24.449508+00:00",
+            state="off",
+            signal_type="target",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T19:56:24.459352+00:00",
+            state="off",
+            signal_type="still_target",
+        ),
+        incident_event(
+            "stairs_top_sensor",
+            "2026-07-17T20:03:56.035831+00:00",
+        ),
+        incident_event(
+            "stairs_top_sensor",
+            "2026-07-17T20:04:07.551383+00:00",
+            state="off",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T20:04:43.341642+00:00",
+            signal_type="target",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T20:04:43.346066+00:00",
+            signal_type="still_target",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T20:04:44.433043+00:00",
+            signal_type="moving_target",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T20:04:44.436266+00:00",
+            signal_type="zone_3_occupancy",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T20:04:45.442511+00:00",
+            state="off",
+            signal_type="moving_target",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T20:04:53.841694+00:00",
+            state="off",
+            signal_type="target",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T20:04:53.844884+00:00",
+            state="off",
+            signal_type="still_target",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T20:04:53.847708+00:00",
+            state="off",
+            signal_type="zone_3_occupancy",
+        ),
+        incident_event(
+            "stairs_top_sensor",
+            "2026-07-17T20:08:47.015725+00:00",
+        ),
+        incident_event(
+            "office_a_sensor",
+            "2026-07-17T20:08:50.573625+00:00",
+        ),
+        incident_event(
+            "stairs_top_sensor",
+            "2026-07-17T20:08:57.019514+00:00",
+            state="off",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T20:13:12.533116+00:00",
+            signal_type="target",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T20:13:12.539500+00:00",
+            signal_type="moving_target",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T20:13:12.543638+00:00",
+            signal_type="still_target",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T20:13:12.547827+00:00",
+            signal_type="zone_3_occupancy",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T20:13:13.561729+00:00",
+            state="off",
+            signal_type="moving_target",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T20:13:20.926508+00:00",
+            state="off",
+            signal_type="zone_3_occupancy",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T20:13:24.031496+00:00",
+            state="off",
+            signal_type="target",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T20:13:24.041617+00:00",
+            state="off",
+            signal_type="still_target",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T20:47:13.582668+00:00",
+            signal_type="target",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T20:47:13.588092+00:00",
+            signal_type="still_target",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T20:47:13.592557+00:00",
+            signal_type="zone_3_occupancy",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T20:47:22.979740+00:00",
+            state="off",
+            signal_type="target",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T20:47:22.990737+00:00",
+            state="off",
+            signal_type="still_target",
+        ),
+        incident_event(
+            "living_right_sensor",
+            "2026-07-17T20:47:23.000885+00:00",
+            state="off",
+            signal_type="zone_3_occupancy",
+        ),
+    )
+    snapshots = run_trace(tracker, predictive_map, events)
+    tracker.expire_transient_state(
+        datetime.fromisoformat("2026-07-17T20:47:30.119070+00:00")
+    )
+    final = public_snapshot(tracker, predictive_map, events[-1])
+
+    assert any(snapshot.zones["bedroom_closet"].keep_on for snapshot in snapshots)
+    assert any(snapshot.zones["primary_bathroom"].keep_on for snapshot in snapshots)
+    assert tracker.diagnostics.joint_count_marginals["office_a"][1] >= 0.95
+    assert tracker.diagnostics.joint_count_marginals["living_room"][1] >= 0.95
+    assert tracker.diagnostics.joint_count_marginals["bedroom_closet"][0] >= 0.95
+    assert tracker.diagnostics.joint_count_marginals["bedroom_entrance"][0] >= 0.95
+    assert tracker.diagnostics.joint_count_marginals["primary_bathroom"][0] >= 0.95
+    assert not final.zones["bedroom_entrance"].keep_on
+    assert not final.zones["bedroom_closet"].keep_on
+    assert not final.zones["primary_bathroom"].keep_on

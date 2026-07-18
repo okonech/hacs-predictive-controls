@@ -337,6 +337,12 @@ class FactorChainEventReducer:
         episodes = ObservationEpisodes(self._map)
         episodes.restore_snapshot(state.episode_states)
         chain = state.chain
+        previous_current_episode_ids = frozenset(
+            episode_state.episode_id
+            for episode_state in episodes.states
+            if episode_state.current_positive
+            and episode_state.episode_id is not None
+        )
         chain = self._apply_chain_emissions(
             chain,
             tuple(
@@ -355,15 +361,18 @@ class FactorChainEventReducer:
                 through,
                 episodes.states,
             ),
-            current_sustained_episode_ids=frozenset(
-                state.episode_id
-                for state in episodes.states
-                if state.current_positive
-                and state.episode_id is not None
-                and self._map.occupancy_behavior_for_node(
-                    self._map.nodes[state.node_id]
+            renewable_episode_ids=frozenset(
+                episode_state.episode_id
+                for episode_state in episodes.states
+                if episode_state.episode_id is not None
+                and (
+                    episode_state.current_positive
+                    or episode_state.episode_id in previous_current_episode_ids
                 )
-                == "sustained"
+                and self._map.occupancy_behavior_for_node(
+                    self._map.nodes[episode_state.node_id]
+                )
+                in {"sustained", "sticky"}
             ),
         )
         return (
@@ -415,8 +424,11 @@ class FactorChainEventReducer:
         )
         if (
             target_state is None
-            or not target_state.current_positive
             or target_state.episode_id != factor.endpoint.token_id
+            or (
+                not target_state.current_positive
+                and target_state.finalized_at is None
+            )
         ):
             return None
         return SupportEventAtom(

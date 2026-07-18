@@ -128,9 +128,27 @@ contributes no observation or movement evidence.
   MUST NOT release ownership or convert ambiguous mass into a precise track. A
   finite finalized support certificate may remain only while its joint
   probability and evidence validity remain available for policy or learning.
+  Evidence validity includes the one finalization frontier of a positive
+  endpoint whose exact `stay` assignment finalizes after its physical episode
+  stable-cleared under `EVID-015`. That certificate is a lossless marginal of
+  the just-finalized assignment, is not reconstructed after merge, and expires
+  when the watermark next advances beyond its finalization frontier.
   Renewing the finite validity frontier of an existing branch-local certificate
   under `EVID-015` preserves the original finalized joint stratum; it does not
-  create a new assignment, observation, or support event.
+  create a new assignment, observation, or support event. Renewal changes only
+  `valid_until`; it MUST preserve the support event ID, episode and endpoint
+  IDs, augmented occupancy stratum, and exact joint mass. One final renewal at
+  stable clear is valid only on the reducer advance that changes that episode
+  from current-positive to historical, never from a later historical snapshot.
+  Renewal eligibility is independent of assignment disposition and requires an
+  existing certificate's endpoint or episode provenance IDs to intersect the
+  reducer's current renewable episode-token set. Movement certificates retain
+  the generating token in endpoint provenance; local certificates retain it in
+  episode provenance. That set contains only current sustained or sticky target
+  episodes and their exact stable-clear transition frontier; transient and
+  later historical episode IDs cannot renew a certificate. Renewal does not
+  extend an assignment deadline, repeat movement learning, or create a second
+  support item from the target episode.
 - **MOVE-020:** The supported workload MUST declare numeric maximum accepted
   event rate $R_{max}$, instantaneous burst $B_{max}$, active physical-node
   episodes, maximum semantic route duration $D_{max}$, and $L_{late}$. The number
