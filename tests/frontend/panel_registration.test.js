@@ -92,7 +92,7 @@ test("panel defaults to occupancy first and renders requested tab order", async 
     prediction_threshold: 0.6,
     expected_occupants: 2,
   };
-  panel._status = { zone_states: {}, occupancy_diagnostics: { tracks: [] } };
+  panel._status = { zone_states: {}, occupancy_diagnostics: { model: "zone_belief", beliefs: {} } };
 
   panel.render();
 
@@ -101,11 +101,11 @@ test("panel defaults to occupancy first and renders requested tab order", async 
     panel.innerHTML,
     /data-tab="occupancy">Occupancy<\/button>\s*<button[^>]+data-tab="reliability">Reliability<\/button>\s*<button[^>]+data-tab="activity">Activity<\/button>\s*<button[^>]+data-tab="map">Map<\/button>\s*<button[^>]+data-tab="yaml">YAML<\/button>\s*<button[^>]+data-tab="actions">Actions<\/button>\s*<button[^>]+data-tab="settings">Settings<\/button>/,
   );
-  assert.match(panel.innerHTML, /Anonymous Tracks/);
-  assert.match(panel.innerHTML, /No occupants are currently localized/);
+  assert.match(panel.innerHTML, /Zone Beliefs/);
+  assert.match(panel.innerHTML, /No zone belief is available yet/);
 });
 
-test("activity workspace explains edges, rejections, and sampled snapshots", async () => {
+test("activity workspace explains target edges, rejections, and observations", async () => {
   const Panel = await panelConstructor();
   const panel = new Panel();
   panel._hass = {};
@@ -121,78 +121,55 @@ test("activity workspace explains edges, rejections, and sampled snapshots", asy
   panel._statusUpdated = new Date("2026-07-17T12:01:00Z");
   panel._status = {
     occupancy_diagnostics: {
-      joint: {
-        policy: {
-          office: {
-            keep_on: true,
-            reason: "arrival-supported posterior event",
-            last_trusted_at: "2026-07-17T12:00:00Z",
-            last_release_cause: null,
-          },
-          hallway: {
-            keep_on: false,
-            reason: "finalized release-safe posterior event",
-            last_trusted_at: "2026-07-17T11:50:00Z",
-            last_release_cause: "release_safe",
-          },
+      model: "zone_belief",
+      beliefs: { office: 0.81, hallway: 0.18 },
+      policy: {
+        office: {
+          active: true,
+          profile: "stay_pir",
+          pending_release_since: null,
         },
-        arrival_supported_probabilities: { office: 0.84 },
-        release_safe: {
-          available: true,
-          probabilities: { office: 0.12, hallway: 0.97 },
+        hallway: {
+          active: false,
+          profile: "transition_fast",
+          pending_release_since: null,
         },
-        policy_audit_retention: {
-          retention_hours: 12,
-          entry_count: 3,
-          context_compressed_bytes: 24576,
-          oldest_decision_at: "2026-07-17T11:59:30Z",
-          newest_decision_at: "2026-07-17T12:00:30Z",
-        },
-        policy_audit: [
-          {
-            decision_at: "2026-07-17T12:00:00Z",
-            decision: {
-              zone: "office",
-              action: "activate",
-              accepted: true,
-              reason_code: "arrival_supported",
-              gate_values: { probability: 0.84, threshold: 0.8 },
-              evidence_ids: ["episode-office"],
-            },
-            prior_active: false,
-            resulting_active: true,
-            context_complete: true,
-          },
-          {
-            decision_at: "2026-07-17T12:00:15Z",
-            decision: {
-              zone: "hallway",
-              action: "activate",
-              accepted: false,
-              reason_code: "arrival_supported_not_met",
-              gate_values: { probability: 0.31, threshold: 0.8 },
-              evidence_ids: [],
-            },
-            prior_active: false,
-            resulting_active: false,
-            context_complete: false,
-          },
-          {
-            decision_at: "2026-07-17T12:00:30Z",
-            decision: {
-              zone: "office",
-              action: "observe",
-              accepted: true,
-              reason_code: "periodic_sample",
-              gate_values: {},
-              evidence_ids: [],
-            },
-            prior_active: true,
-            resulting_active: true,
-            context_complete: true,
-          },
-        ],
       },
+      policy_audit: [
+        {
+          event_at: "2026-07-17T12:00:00Z",
+          zone: "office",
+          active_before: false,
+          active_after: true,
+          belief_after: 0.81,
+          traversal_reason: "adjacent_current",
+          evidence_ids: ["episode-office"],
+          event_kind: "acquired",
+          reason: "acquired",
+        },
+        {
+          event_at: "2026-07-17T12:00:15Z",
+          zone: "hallway",
+          active_before: false,
+          active_after: false,
+          belief_after: 0.31,
+          traversal_reason: null,
+          evidence_ids: [],
+          event_kind: null,
+          reason: "acquisition_unauthorized",
+        },
+        {
+          event_at: "2026-07-17T12:00:30Z",
+          zone: "office",
+          active_before: true,
+          active_after: true,
+          belief_after: 0.79,
+          traversal_reason: null,
+          evidence_ids: [],
+          event_kind: null,
+          reason: "active_hold",
+        },
+      ],
     },
   };
   panel._tab = "activity";
@@ -200,25 +177,24 @@ test("activity workspace explains edges, rejections, and sampled snapshots", asy
   panel.render();
 
   assert.match(panel.innerHTML, /<main class="activity-layout">/);
+  assert.match(panel.innerHTML, /Belief 81%/);
   assert.match(panel.innerHTML, /1 active zone/);
   assert.match(panel.innerHTML, /Turned on/);
-  assert.match(panel.innerHTML, /Arrival support reached 84% against the 80% threshold/);
-  assert.match(panel.innerHTML, /Exact context/);
+  assert.match(panel.innerHTML, /Acquired at 81% via Adjacent Current/);
+  assert.match(panel.innerHTML, /Zone-local decision/);
   assert.match(panel.innerHTML, /data-activity-filter="edges" aria-pressed="true"/);
-  assert.doesNotMatch(panel.innerHTML, /Arrival support stayed below/);
-  assert.doesNotMatch(panel.innerHTML, /Periodic exact snapshot/);
+  assert.doesNotMatch(panel.innerHTML, /Acquisition Unauthorized/);
 
   panel._activityFilter = "rejected";
   panel.render();
-  assert.match(panel.innerHTML, /Arrival support stayed below the 80% threshold at 31%/);
-  assert.match(panel.innerHTML, /Lightweight decision/);
+  assert.match(panel.innerHTML, /Acquisition Unauthorized at 31%/);
 
-  panel._activityFilter = "snapshots";
+  panel._activityFilter = "observations";
   panel.render();
-  assert.match(panel.innerHTML, /Periodic exact snapshot/);
+  assert.match(panel.innerHTML, /Active Hold at 79%/);
 });
 
-test("activity workspace supports legacy edges and an empty exact state", async () => {
+test("activity workspace handles an empty target state and release edge", async () => {
   const Panel = await panelConstructor();
   const panel = new Panel();
   panel._hass = {};
@@ -227,33 +203,30 @@ test("activity workspace supports legacy edges and an empty exact state", async 
   panel._status = { occupancy_diagnostics: {} };
 
   panel.render();
-  assert.match(panel.innerHTML, /Exact policy activity will appear after the first observation/);
+  assert.match(panel.innerHTML, /Policy activity will appear after the first observation/);
 
-  panel._status.occupancy_diagnostics.joint = {
+  panel._status.occupancy_diagnostics = {
+    model: "zone_belief",
+    beliefs: { entry: 0.05 },
     policy: {},
     policy_audit: [
       {
-        decision_at: "2026-07-17T12:00:00Z",
-        decision: {
-          zone: "entry",
-          action: "release",
-          accepted: true,
-          reason_code: "authoritative_away",
-          gate_values: {},
-          evidence_ids: [],
-        },
-        previous: { keep_on: true },
-        current: { keep_on: false },
-        context: { encoding: "zlib-json-v1", data: "packed" },
+        event_at: "2026-07-17T12:00:00Z",
+        zone: "entry",
+        active_before: true,
+        active_after: false,
+        belief_after: 0.05,
+        evidence_ids: [],
+        event_kind: "released",
+        reason: "count_zero",
       },
     ],
-    policy_audit_retention: { entry_count: 1, context_compressed_bytes: 128 },
   };
   panel.render();
 
   assert.match(panel.innerHTML, /Turned off/);
-  assert.match(panel.innerHTML, /Authoritative away state cleared ownership/);
-  assert.match(panel.innerHTML, /Exact context/);
+  assert.match(panel.innerHTML, /Count Zero at 5%/);
+  assert.match(panel.innerHTML, /Zone-local decision/);
 });
 
 test("activity workspace initially renders at most fifty audit rows", async () => {
@@ -264,24 +237,19 @@ test("activity workspace initially renders at most fifty audit rows", async () =
   panel._tab = "activity";
   panel._status = {
     occupancy_diagnostics: {
-      joint: {
-        policy: {},
-        policy_audit_retention: { entry_count: 55 },
-        policy_audit: Array.from({ length: 55 }, (_, index) => ({
-          decision_at: new Date(Date.UTC(2026, 6, 17, 12, index)).toISOString(),
-          decision: {
-            zone: `zone_${index}`,
-            action: index % 2 ? "activate" : "release",
-            accepted: true,
-            reason_code: index % 2 ? "arrival_supported" : "release_safe",
-            gate_values: { probability: 0.9, threshold: 0.8 },
-            evidence_ids: [],
-          },
-          prior_active: index % 2 === 0,
-          resulting_active: index % 2 === 1,
-          context_complete: true,
-        })),
-      },
+      model: "zone_belief",
+      beliefs: {},
+      policy: {},
+      policy_audit: Array.from({ length: 55 }, (_, index) => ({
+        event_at: new Date(Date.UTC(2026, 6, 17, 12, index)).toISOString(),
+        zone: `zone_${index}`,
+        active_before: index % 2 === 0,
+        active_after: index % 2 === 1,
+        belief_after: 0.9,
+        evidence_ids: [],
+        event_kind: index % 2 ? "acquired" : "released",
+        reason: index % 2 ? "acquired" : "released",
+      })),
     },
   };
 
@@ -348,30 +316,16 @@ test("panel renders live occupancy zones from configured map data", async () => 
       living_left: { kitchen: 7 },
     },
     occupancy_diagnostics: {
+      model: "zone_belief",
       expected_occupants: 2,
-      protected_corridor: ["living_room", "kitchen"],
-      tracks: [
-        {
-          track_id: "track_1",
-          zone: "living_room",
-          confidence: 0.91,
-          active: true,
-          source_entities: ["binary_sensor.living_still"],
-        },
+      beliefs: { living_room: 0.91 },
+      policy: {
+        living_room: { active: true, profile: "stay_presence" },
+      },
+      traversal_frontier: [
+        { token_id: "living_left:episode-1", zone: "living_room" },
       ],
-      inferred_join_slots: [
-        {
-          zone: "living_room",
-          source_zone: "foyer",
-        },
-      ],
-      inferred_departures: [
-        {
-          zone: "office",
-          via_zone: "hall",
-          destination_zone: "kitchen",
-        },
-      ],
+      health_warnings: [],
     },
   };
   panel._statusUpdated = new Date("2026-06-07T12:00:00Z");
@@ -388,19 +342,15 @@ test("panel renders live occupancy zones from configured map data", async () => 
   assert.match(panel.innerHTML, /living_left/);
   assert.match(panel.innerHTML, /Learned Transitions/);
   assert.match(panel.innerHTML, /Expected 2/);
-  assert.match(panel.innerHTML, /Anonymous Tracks/);
-  assert.match(panel.innerHTML, /Current Posterior/);
+  assert.match(panel.innerHTML, /Zone Beliefs/);
+  assert.match(panel.innerHTML, /Independent filtered probabilities/);
   assert.match(panel.innerHTML, /class="track-row"/);
-  assert.match(panel.innerHTML, /track_1/);
-  assert.match(panel.innerHTML, /binary_sensor\.living_still/);
-  assert.match(panel.innerHTML, /Joined/);
-  assert.match(panel.innerHTML, /Departed/);
-  assert.match(panel.innerHTML, /Office/);
-  assert.match(panel.innerHTML, /Kitchen/);
+  assert.match(panel.innerHTML, /stay_presence/);
+  assert.match(panel.innerHTML, /1 traversal token/);
   assert.match(panel.innerHTML, /7/);
 });
 
-test("panel renders repeated reliability issues for proactive review", async () => {
+test("panel renders target sensor health warnings", async () => {
   const Panel = await panelConstructor();
   const panel = new Panel();
   panel._hass = {};
@@ -415,35 +365,18 @@ test("panel renders repeated reliability issues for proactive review", async () 
   panel._statusUpdated = new Date("2026-07-13T12:01:00Z");
   panel._status = {
     occupancy_diagnostics: {
-      tracks: [],
-      reliability: {
-        criteria: { repeat_minimum: 2, flap_window_seconds: 30 },
-        coverage: {
-          observed_event_count: 4,
-          oldest_event_at: "2026-07-13T12:00:00Z",
-          newest_event_at: "2026-07-13T12:00:14Z",
+      model: "zone_belief",
+      processing: { token_count: 1 },
+      episodes: [
+        {
+          node_id: "office_motion",
+          zone: "office",
+          profile: "stay_pir",
+          status: "degraded",
+          health_warning: true,
+          last_event_at: "2026-07-13T12:00:14Z",
         },
-        rejected_motion_captures: [
-          {
-            entity_id: "binary_sensor.office_motion",
-            zone: "office",
-            capture_count: 2,
-            last_capture_at: "2026-07-13T12:00:10Z",
-            reason_counts: { occupied_gate_failed: 2 },
-            max_occupied_marginal: 0.3,
-          },
-        ],
-        low_confidence_flaps: [
-          {
-            entity_id: "binary_sensor.office_motion",
-            zone: "office",
-            pulse_count: 2,
-            last_flap_at: "2026-07-13T12:00:14Z",
-            shortest_pulse_seconds: 4,
-            max_occupied_marginal: 0.3,
-          },
-        ],
-      },
+      ],
     },
   };
   panel._tab = "reliability";
@@ -451,15 +384,12 @@ test("panel renders repeated reliability issues for proactive review", async () 
   panel.render();
 
   assert.match(panel.innerHTML, /<main class="reliability-layout">/);
-  assert.match(panel.innerHTML, /Repeated Rejected Motion/);
-  assert.match(panel.innerHTML, /Low-Confidence Flaps/);
-  assert.match(panel.innerHTML, /binary_sensor\.office_motion/);
+  assert.match(panel.innerHTML, /Sensor Health/);
+  assert.match(panel.innerHTML, /<strong>1<\/strong><span>Health warnings<\/span>/);
+  assert.match(panel.innerHTML, /office_motion/);
   assert.match(panel.innerHTML, /Office/);
-  assert.match(panel.innerHTML, /2 rejected/);
-  assert.match(panel.innerHTML, /2 pulses/);
-  assert.match(panel.innerHTML, /Occupied Gate Failed/);
-  assert.match(panel.innerHTML, /Peak occupied 30%/);
-  assert.match(panel.innerHTML, /4 observed events/);
+  assert.match(panel.innerHTML, /Degraded/);
+  assert.match(panel.innerHTML, /stay_pir/);
 });
 
 test("panel renders cross-floor zone adjacency as a graph edge", async () => {

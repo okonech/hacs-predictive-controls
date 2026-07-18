@@ -1,0 +1,153 @@
+{
+  "schema_version": 1,
+  "scenario_id": "T03-two-occupants-open-transition",
+  "requirement_ids": [
+    "REQ-GOAL-006",
+    "REQ-TRAV-002",
+    "REQ-COUNT-005"
+  ],
+  "owning_phase": 4,
+  "source": {
+    "kind": "synthetic_target_contract",
+    "description": "Two independent fresh room episodes use one still-open transition context without identity assignment.",
+    "related_tests": [
+      "tests/test_occupancy_scenarios.py::test_s03_asserted_transition_supports_second_occupant_route"
+    ]
+  },
+  "topology": {
+    "zones": [
+      "hallway",
+      "room_a",
+      "room_b"
+    ],
+    "nodes": {
+      "hallway_motion": {
+        "zone": "hallway",
+        "role": "transition",
+        "profile": "transition_fast",
+        "entity_id": "binary_sensor.hallway_motion",
+        "adjacent": [
+          "room_a_motion",
+          "room_b_motion"
+        ]
+      },
+      "room_a_motion": {
+        "zone": "room_a",
+        "role": "stay",
+        "profile": "stay_pir",
+        "entity_id": "binary_sensor.room_a_motion",
+        "adjacent": [
+          "hallway_motion"
+        ]
+      },
+      "room_b_motion": {
+        "zone": "room_b",
+        "role": "stay",
+        "profile": "stay_pir",
+        "entity_id": "binary_sensor.room_b_motion",
+        "adjacent": [
+          "hallway_motion"
+        ]
+      }
+    }
+  },
+  "hardware_timing": {
+    "transition_fast": {
+      "burst_correlation_seconds": 3,
+      "stable_clear_seconds": 5,
+      "hardware_hold_seconds": 15,
+      "assertion_trust_seconds": 60,
+      "post_clear_residual": 0.1,
+      "traversal_context_seconds": 45
+    },
+    "stay_pir": {
+      "burst_correlation_seconds": 3,
+      "stable_clear_seconds": 5,
+      "hardware_hold_seconds": 30,
+      "assertion_trust_seconds": 900,
+      "post_clear_residual": 0.65,
+      "traversal_context_seconds": 90
+    }
+  },
+  "authoritative_count": 2,
+  "initial_state": {
+    "beliefs": {
+      "hallway": 0.05,
+      "room_a": 0.05,
+      "room_b": 0.05
+    },
+    "active": {
+      "hallway": false,
+      "room_a": false,
+      "room_b": false
+    }
+  },
+  "inputs": [
+    {
+      "kind": "sensor",
+      "node_id": "hallway_motion",
+      "state": "on",
+      "event_at": "2026-07-18T14:00:00Z",
+      "received_at": "2026-07-18T14:00:00Z",
+      "description": "The shared transition episode opens."
+    },
+    {
+      "kind": "sensor",
+      "node_id": "room_a_motion",
+      "state": "on",
+      "event_at": "2026-07-18T14:00:02Z",
+      "received_at": "2026-07-18T14:00:02Z",
+      "description": "The first independent room episode arrives."
+    },
+    {
+      "kind": "sensor",
+      "node_id": "room_b_motion",
+      "state": "on",
+      "event_at": "2026-07-18T14:00:05Z",
+      "received_at": "2026-07-18T14:00:05Z",
+      "description": "The second independent room episode arrives while the hallway remains open."
+    }
+  ],
+  "expected_public_timeline": [
+    {
+      "at": "2026-07-18T14:00:00Z",
+      "active_changes": {},
+      "arrival_events": [],
+      "health_changes": {},
+      "reason": "transition_context_only"
+    },
+    {
+      "at": "2026-07-18T14:00:02Z",
+      "active_changes": {
+        "room_a": true
+      },
+      "arrival_events": [
+        {
+          "zone": "room_a",
+          "event_type": "acquired"
+        }
+      ],
+      "health_changes": {},
+      "reason": "first_independent_front"
+    },
+    {
+      "at": "2026-07-18T14:00:05Z",
+      "active_changes": {
+        "room_b": true
+      },
+      "arrival_events": [
+        {
+          "zone": "room_b",
+          "event_type": "acquired"
+        }
+      ],
+      "health_changes": {},
+      "reason": "second_independent_front_same_transition"
+    }
+  ],
+  "expected_reason_classes": [
+    "transition_context_only",
+    "first_independent_front",
+    "second_independent_front_same_transition"
+  ]
+}

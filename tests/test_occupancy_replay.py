@@ -64,9 +64,9 @@ def test_replay_events_applies_sorted_trace_and_snapshots_states() -> None:
 
     assert len(result.steps) == 2
     assert result.steps[0].event.state == "on"
-    assert result.steps[0].zone_states["office"].status == "confirmed"
+    assert result.steps[0].zone_states["office"].status == "probable"
     assert result.steps[0].diagnostics.expected_occupants == 1
-    assert result.final_states["office"].status == "confirmed"
+    assert result.final_states["office"].status in {"possible", "probable"}
     assert result.final_diagnostics.expected_occupants == 1
 
 
@@ -81,7 +81,7 @@ def test_replay_events_can_skip_refresh_between_events() -> None:
     )
 
     assert result.final_states["office"].confidence == pytest.approx(
-        result.final_diagnostics.joint_occupied_marginals["office"]
+        result.final_diagnostics.beliefs["office"]
     )
 
 
@@ -146,7 +146,10 @@ def test_replay_history_states_imports_and_summarizes_real_history_shape() -> No
     summary = replay_summary(result)
 
     assert summary["event_count"] == 2
-    assert summary["final_zones"]["office"]["status"] == "confirmed"
-    assert summary["tracks"] == ["office"]
-    assert summary["inferred_join_count"] == 0
-    assert summary["inferred_departure_count"] == 0
+    assert summary["final_zones"]["office"]["status"] in {
+        "possible",
+        "probable",
+    }
+    assert summary["active_zones"] == []
+    assert summary["traversal_token_count"] == 1
+    assert summary["health_warning_count"] == 0

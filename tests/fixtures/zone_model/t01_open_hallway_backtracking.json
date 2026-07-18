@@ -1,0 +1,177 @@
+{
+  "schema_version": 1,
+  "scenario_id": "T01-open-hallway-backtracking",
+  "requirement_ids": [
+    "REQ-EVID-007",
+    "REQ-TRAV-003",
+    "REQ-POLICY-001"
+  ],
+  "owning_phase": 4,
+  "source": {
+    "kind": "synthetic_target_contract",
+    "description": "One occupant enters room A and then room B while the shared transition sensor remains asserted.",
+    "related_tests": [
+      "tests/test_occupancy_scenarios.py"
+    ]
+  },
+  "topology": {
+    "zones": [
+      "hallway",
+      "room_a",
+      "room_b"
+    ],
+    "nodes": {
+      "hallway_motion": {
+        "zone": "hallway",
+        "role": "transition",
+        "profile": "transition_fast",
+        "entity_id": "binary_sensor.hallway_motion",
+        "adjacent": [
+          "room_a_motion",
+          "room_b_motion"
+        ]
+      },
+      "room_a_motion": {
+        "zone": "room_a",
+        "role": "stay",
+        "profile": "stay_pir",
+        "entity_id": "binary_sensor.room_a_motion",
+        "adjacent": [
+          "hallway_motion"
+        ]
+      },
+      "room_b_motion": {
+        "zone": "room_b",
+        "role": "stay",
+        "profile": "stay_pir",
+        "entity_id": "binary_sensor.room_b_motion",
+        "adjacent": [
+          "hallway_motion"
+        ]
+      }
+    }
+  },
+  "hardware_timing": {
+    "transition_fast": {
+      "burst_correlation_seconds": 3,
+      "stable_clear_seconds": 5,
+      "hardware_hold_seconds": 15,
+      "assertion_trust_seconds": 60,
+      "post_clear_residual": 0.1,
+      "traversal_context_seconds": 45
+    },
+    "stay_pir": {
+      "burst_correlation_seconds": 3,
+      "stable_clear_seconds": 5,
+      "hardware_hold_seconds": 30,
+      "assertion_trust_seconds": 900,
+      "post_clear_residual": 0.65,
+      "traversal_context_seconds": 90
+    }
+  },
+  "authoritative_count": 1,
+  "initial_state": {
+    "beliefs": {
+      "hallway": 0.05,
+      "room_a": 0.05,
+      "room_b": 0.05
+    },
+    "active": {
+      "hallway": false,
+      "room_a": false,
+      "room_b": false
+    }
+  },
+  "inputs": [
+    {
+      "kind": "sensor",
+      "node_id": "hallway_motion",
+      "state": "on",
+      "event_at": "2026-07-18T12:00:00Z",
+      "received_at": "2026-07-18T12:00:00Z",
+      "description": "The transition episode opens."
+    },
+    {
+      "kind": "sensor",
+      "node_id": "room_a_motion",
+      "state": "on",
+      "event_at": "2026-07-18T12:00:02Z",
+      "received_at": "2026-07-18T12:00:02Z",
+      "description": "Room A receives a fresh adjacent arrival."
+    },
+    {
+      "kind": "sensor",
+      "node_id": "room_a_motion",
+      "state": "off",
+      "event_at": "2026-07-18T12:00:20Z",
+      "received_at": "2026-07-18T12:00:20Z",
+      "description": "Room A clears while the hallway remains asserted."
+    },
+    {
+      "kind": "sensor",
+      "node_id": "room_b_motion",
+      "state": "on",
+      "event_at": "2026-07-18T12:00:25Z",
+      "received_at": "2026-07-18T12:00:25Z",
+      "description": "Room B receives a distinct fresh arrival through the same open hallway."
+    },
+    {
+      "kind": "timer",
+      "event_at": "2026-07-18T12:02:00Z",
+      "received_at": "2026-07-18T12:02:00Z",
+      "description": "Advance stable clear, departure decay, and release dwell."
+    }
+  ],
+  "expected_public_timeline": [
+    {
+      "at": "2026-07-18T12:00:00Z",
+      "active_changes": {},
+      "arrival_events": [],
+      "health_changes": {},
+      "reason": "transition_context_only"
+    },
+    {
+      "at": "2026-07-18T12:00:02Z",
+      "active_changes": {
+        "room_a": true
+      },
+      "arrival_events": [
+        {
+          "zone": "room_a",
+          "event_type": "acquired"
+        }
+      ],
+      "health_changes": {},
+      "reason": "adjacent_transition_arrival"
+    },
+    {
+      "at": "2026-07-18T12:00:25Z",
+      "active_changes": {
+        "room_b": true
+      },
+      "arrival_events": [
+        {
+          "zone": "room_b",
+          "event_type": "acquired"
+        }
+      ],
+      "health_changes": {},
+      "reason": "open_transition_distinct_target"
+    },
+    {
+      "at": "2026-07-18T12:02:00Z",
+      "active_changes": {
+        "room_a": false
+      },
+      "arrival_events": [],
+      "health_changes": {},
+      "reason": "departure_conditioned_belief_release"
+    }
+  ],
+  "expected_reason_classes": [
+    "transition_context_only",
+    "adjacent_transition_arrival",
+    "open_transition_distinct_target",
+    "departure_conditioned_belief_release"
+  ]
+}

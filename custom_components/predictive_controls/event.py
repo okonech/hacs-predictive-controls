@@ -7,8 +7,8 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DISPATCH_UPDATE, DOMAIN
-from .occupancy_state import PolicyDecision
 from .runtime import PredictiveControlsRuntime
+from .zone_model.types import PolicyEvent
 
 
 async def async_setup_entry(
@@ -18,8 +18,7 @@ async def async_setup_entry(
 ) -> None:
     runtime: PredictiveControlsRuntime = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
-        ZoneArrivalEvent(runtime, entry.entry_id, zone)
-        for zone in runtime.map.zones()
+        ZoneArrivalEvent(runtime, entry.entry_id, zone) for zone in runtime.map.zones()
     )
 
 
@@ -54,40 +53,22 @@ class ZoneArrivalEvent(EventEntity):
         self.async_write_ha_state()
 
     def _project_decisions(self, *, emit: bool) -> None:
-        for decision in self.runtime.confidence.diagnostics.joint_policy_decisions:
-            event_type = self._event_type(decision)
-            if event_type is None:
+        for event in self.runtime.confidence.diagnostics.policy_events:
+            if event.zone != self.zone or event.kind == "released":
                 continue
-            for episode_id in decision.evidence_ids:
-                if episode_id in self._seen_episode_ids:
-                    continue
-                self._seen_episode_ids.add(episode_id)
-                if emit:
-                    self._trigger_event(
-                        event_type,
-                        {
-                            "zone": self.zone,
-                            "episode_id": episode_id,
-                            "arrival_supported_probability": decision.gate_values.get(
-                                "probability"
-                            ),
-                            "accepted_at": (
-                                None
-                                if self.runtime.last_occupancy_event is None
-                                    else (
-                                        self.runtime.last_occupancy_event.event_at
-                                        .isoformat()
-                                    )
-                            ),
-                            "reason": decision.reason_code,
-                        },
-                    )
+            episode_id = event.episode_id
+            if episode_id is None or episode_id in self._seen_episode_ids:
+                continue
+            self._seen_episode_ids.add(episode_id)
+            if emit:
+                self._trigger_event(event.kind, self._event_payload(event))
 
-    def _event_type(self, decision: PolicyDecision) -> str | None:
-        if decision.zone != self.zone or decision.action != "activate":
-            return None
-        if decision.accepted and decision.reason_code == "arrival_supported":
-            return "acquired"
-        if not decision.accepted and decision.reason_code == "already_active":
-            return "refreshed"
-        return None
+    def _event_payload(self, event: PolicyEvent) -> dict[str, object]:
+        return {
+            "zone": event.zone,
+            "episode_id": event.episode_id,
+            "accepted_at": event.event_at.isoformat(),
+            "belief": event.belief,
+            "authorization_reason": event.authorization_reason,
+            "policy_reason": event.policy_reason,
+        }

@@ -19,12 +19,10 @@ from .confidence import ZoneConfidenceEngine, ZoneState, ZoneUpdate
 from .const import (
     DISPATCH_DIAGNOSTIC_UPDATE,
     DISPATCH_UPDATE,
-    PRODUCT_MAX_OCCUPANTS,
 )
 from .events import OccupancyEvent, event_from_entity
 from .markov import MarkovChain, Prediction
 from .model import PredictiveMap
-from .occupancy_persistence import restore_occupancy_state
 from .occupancy_settings import (
     authoritative_occupants_from_state_value,
     tracked_entity_ids,
@@ -47,8 +45,7 @@ class PredictiveControlsRuntime:
         expected_occupants_entity: str | None = None,
         transition_store: Any | None = None,
         transition_counts: dict[str, dict[str, float]] | None = None,
-        activation_risk_threshold: float = 0.80,
-        release_risk_threshold: float = 0.95,
+        **_legacy_options: object,
     ) -> None:
         self.hass = hass
         self.map = predictive_map
@@ -62,8 +59,6 @@ class PredictiveControlsRuntime:
         self.confidence = ZoneConfidenceEngine(
             predictive_map,
             expected_occupants=self.configured_expected_occupants,
-            activation_risk_threshold=activation_risk_threshold,
-            release_risk_threshold=release_risk_threshold,
         )
         self._prediction_probabilities: dict[str, float] = {}
         self._last_prediction_source_node: str | None = None
@@ -103,7 +98,7 @@ class PredictiveControlsRuntime:
 
     @property
     def zone_states(self) -> dict[str, ZoneState]:
-        return self.confidence.joint_states
+        return self.confidence.states
 
     @property
     def recent_occupancy_events(self) -> tuple[OccupancyEvent, ...]:
@@ -111,12 +106,7 @@ class PredictiveControlsRuntime:
 
     @property
     def transition_counts(self) -> dict[str, dict[str, float]]:
-        return {
-            source: dict(targets)
-            for source, targets in (
-                self.confidence.diagnostics.joint_route_transition_counts.items()
-            )
-        }
+        return self.confidence.prediction_chain.counts
 
     @property
     def expected_occupants(self) -> int:
@@ -150,9 +140,10 @@ class PredictiveControlsRuntime:
     @property
     def problem_reasons(self) -> tuple[str, ...]:
         reasons: list[str] = []
-        performance = self.confidence.diagnostics.joint_performance
-        if bool(performance.get("overloaded", False)):
-            reasons.append("association_overload")
+        if any(
+            state.health_warning for state in self.confidence.diagnostics.episode_states
+        ):
+            reasons.append("sensor_health_degraded")
         if self._invalid_authoritative_count:
             reasons.append("invalid_authoritative_count")
         if self._restore_rejected:
@@ -162,7 +153,7 @@ class PredictiveControlsRuntime:
     @property
     def problem_sources(self) -> tuple[str, ...]:
         sources = {
-            "association_overload": "movement_association",
+            "sensor_health_degraded": "physical_sensor_episode",
             "invalid_authoritative_count": (
                 self.expected_occupants_entity or "configured_expected_occupants"
             ),
@@ -190,37 +181,16 @@ class PredictiveControlsRuntime:
             return False
         now = _as_utc(now)
         self._sync_expected_occupants(now)
-        if stored_state.get("schema") == "exact-augmented-v6":
-            try:
-                self.confidence.restore_joint_state(stored_state)
-            except (TypeError, ValueError) as exc:
-                self._restore_rejected = True
-                self.confidence.reject_joint_restore(str(exc))
-                _LOGGER.warning("Rejected stored exact inference: %s", exc)
-                return False
+        if self.confidence.restore_state(stored_state, now):
             self._restored_state = True
             self._restore_rejected = False
             return True
-        try:
-            restored = restore_occupancy_state(
-                stored_state,
-                self.map,
-                self.expected_occupants,
-                now,
-            )
-        except ValueError as exc:
-            self._restore_rejected = True
-            self.confidence.reject_joint_restore(str(exc))
-            _LOGGER.warning("Rejected stored occupancy inference: %s", exc)
-            return False
-        self.confidence.migrate_legacy_joint_state(
-            restored.policy_states,
-            restored.transition_counts,
-            restored.route_counts,
+        self._restore_rejected = True
+        _LOGGER.warning(
+            "Rejected stored zone-belief inference: %s",
+            self.confidence.diagnostics.restore_reason,
         )
-        self._restored_state = True
-        self._restore_rejected = False
-        return True
+        return False
 
     def start(self) -> None:
         startup_started_ns = perf_counter_ns()
@@ -245,7 +215,7 @@ class PredictiveControlsRuntime:
         snapshot = self._current_snapshot(now)
         started_ns = perf_counter_ns()
         try:
-            self.confidence.bootstrap_joint_state(
+            self.confidence.bootstrap_state(
                 tuple(snapshot),
                 cold_start=not self._restored_state,
             )
@@ -274,14 +244,12 @@ class PredictiveControlsRuntime:
         await self.async_save_transition_counts()
 
     async def async_save_transition_counts(self) -> None:
-        if self._transition_store is None:
-            return
-        await self._transition_store.async_save(self.transition_store_data())
+        if self._transition_store is not None:
+            await self._transition_store.async_save(self.transition_store_data())
 
     def schedule_transition_count_save(self) -> None:
-        if self._transition_store is None:
-            return
-        self._transition_store.async_delay_save(self.transition_store_data, 1)
+        if self._transition_store is not None:
+            self._transition_store.async_delay_save(self.transition_store_data, 1)
 
     @callback
     def _async_state_changed(self, event: Event) -> None:
@@ -296,21 +264,7 @@ class PredictiveControlsRuntime:
             return
 
         if str(entity_id) == self.expected_occupants_entity:
-            was_unsupported = (
-                self.confidence.requested_expected_occupants
-                > PRODUCT_MAX_OCCUPANTS
-            )
             if self._sync_expected_occupants(now):
-                if (
-                    was_unsupported
-                    and 1
-                    <= self.confidence.requested_expected_occupants
-                    <= PRODUCT_MAX_OCCUPANTS
-                ):
-                    self.confidence.bootstrap_joint_state(
-                        self._current_snapshot(now),
-                        cold_start=True,
-                    )
                 self.schedule_transition_count_save()
             async_dispatcher_send(self.hass, DISPATCH_UPDATE)
             return
@@ -453,7 +407,7 @@ class PredictiveControlsRuntime:
         return decisions
 
     def _node_prediction_probabilities(self) -> dict[str, float]:
-        zone_probabilities = self.confidence.joint_prediction_probabilities
+        zone_probabilities = self.confidence.prediction_probabilities
         return {
             node_id: zone_probabilities[node.occupancy_zone]
             for node_id, node in self.map.nodes.items()
@@ -479,8 +433,8 @@ class PredictiveControlsRuntime:
                 now,
                 allow_unsupported_state=True,
             )
-            if event is not None:
-                snapshot.append(event)
+            assert event is not None
+            snapshot.append(event)
         return tuple(snapshot)
 
     def _sync_expected_occupants(self, now: datetime | None = None) -> bool:

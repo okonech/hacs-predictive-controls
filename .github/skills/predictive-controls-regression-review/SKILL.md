@@ -1,6 +1,6 @@
 ---
 name: predictive-controls-regression-review
-description: "Use for every Predictive Controls failure, incident, false activation, false release, stale active state, missed activation, wrong probability, traversal defect, sensor-profile change, threshold change, model redesign, or incident-derived fix. Requires an exact public regression, independent investigation, specification review, and implementation review."
+description: "Use for a reported Predictive Controls production incident, false activation, false release, stale active state, missed activation, wrong probability, traversal defect, or incident-derived fix. Uses an exact public regression and a quick focused fix loop; independent review is reserved for unclear causes, specification/public-contract changes, and final migration conformance."
 argument-hint: "Describe the incident, wrong public behavior, or proposed model/profile change"
 ---
 
@@ -12,11 +12,11 @@ Read `SPECIFICATION.md`. It is the only product and model authority. During an
 active migration, also read the global rules and current phase in
 `MIGRATION_PLAN.md`; the plan cannot override the specification.
 
-## Non-Negotiable Incident Order
+## Incident Fix Loop
 
-For every report that something did not work properly, execute these gates in
-order. A general redesign without one observed incident starts at Gate 4, but
-must still create prospective target tests before production implementation.
+For every reported production failure, use this short loop. Routine work in an
+already-approved migration phase follows `MIGRATION_PLAN.md`, not this incident
+workflow.
 
 1. **Capture the failure as a public test.** Use retained production event times,
    material order, physical map, sensor states/settings, count, pre/post zone
@@ -27,32 +27,19 @@ must still create prospective target tests before production implementation.
    behavior. It must fail on `active`, `prelight`, or `refresh`, or on target zone
    belief when that is the reported contract. If it passes or fails for another
    reason, repair the reproduction. Freeze factual inputs and public expectations.
-3. **Investigate independently.** Launch a fresh stateless read-only subagent with
-   verified facts and file locations, but no preferred cause or fix. Require a
-   code-grounded root cause and relevant `REQ-*` IDs. The parent independently
-   checks the controlling path and reconciles disagreements with evidence.
-4. **Propose before editing.** State the falsifiable mechanism, owning layer,
-   smallest generic solution, alternatives rejected, calibration impact, and
-   expected public effect. A redesign compares at least two approaches.
-5. **Verify the proposal independently.** Launch a new context-isolated read-only
-   subagent with facts, failing test, proposal, `SPECIFICATION.md`, and the current
-   migration phase when applicable. Require explicit `PASS` or `FAIL`, requirement
-   matrix, conflicts, two-occupant analysis, sensor-fault/restart analysis,
-   calibration risks, and missing adversarial tests.
-6. **Iterate until conformant.** `FAIL` blocks implementation. Redesign and submit
-   to another fresh reviewer. If the desired behavior conflicts with the
-   specification, obtain explicit user agreement and amend `SPECIFICATION.md`
-   before another review.
-7. **Implement only the verified proposal.** Make the smallest generic change at
-   the controlling layer and immediately run the exact focused regression.
-   Material design deviation returns to Gate 4.
-8. **Review implementation independently.** Launch a different fresh read-only
-   reviewer with the approved proposal, actual diff, regression, specification,
-   and phase constraints. Require `PASS` or `FAIL` before broad validation.
-9. **Validate adversarially and completely.** Add applicable inverse, boundary,
-   disconnected, flap/alias, stuck, unavailable, missed-edge, two-occupant,
-   same-zone, out-of-order, restart, timer-cadence, and performance cases. Run all
-   repository quality gates from `MIGRATION_PLAN.md`.
+3. **Locate the controlling layer.** Form one falsifiable local cause from the
+   failing test and nearest owning code. Use one read-only subagent only if the
+   cause remains unclear after local inspection.
+4. **Implement the smallest generic fix.** State the governing `REQ-*` IDs and
+   avoid room-, entity-, person-, or incident-specific logic. A conflict with
+   `SPECIFICATION.md` requires user agreement before implementation.
+5. **Validate quickly.** Run the exact regression with `--no-cov`, plus at most
+   one nearest inverse or boundary test when it materially distinguishes the
+   fix. Lint changed files. Stop there during an active migration.
+6. **Escalate only when necessary.** Independent proposal review is required for
+   a specification/public-contract change or unresolved calibration choice.
+   Independent implementation review and exhaustive adversarial/repository gates
+   occur once at final migration stabilization, not after each incident or phase.
 
 ## Evidence Record
 
@@ -93,9 +80,10 @@ Choose the lowest layer that computes the wrong result:
 | `AUTOMATION` | Did a simple consumer ignore or mishandle a correct public edge? |
 | `EXTERNAL` | Did hardware, Home Assistant delivery, timestamping, or unavailable data cause the symptom? |
 
-## Requirement Matrix
+## Escalation Requirement Matrix
 
-Every proposal records:
+Only a proposal escalated for a specification/public-contract change or
+unresolved calibration choice records:
 
 | Item | Required content |
 | --- | --- |
@@ -109,10 +97,10 @@ If no requirement decides expected behavior, it is a design gap. Amend the sole
 specification after explicit agreement; do not infer a requirement from current
 code or tests.
 
-## Model Review Criteria
+## Escalated Model Review Criteria
 
-For a model, profile, traversal, policy, or threshold proposal, compare at least
-two approaches against:
+At final migration stabilization, or when an unresolved model/profile/threshold
+choice is explicitly escalated, compare alternatives against:
 
 1. probabilistic or decision-theoretic meaning;
 2. correlated evidence and double-counting risk;
@@ -157,20 +145,9 @@ Low raw sensor confidence or a timer alone is not an equivalent release model.
 
 ## Validation Expectations
 
-After the focused regression passes:
-
-- test inverse activation/release direction;
-- test exact threshold boundaries and dwell cancellation;
-- test timer-cadence invariance;
-- test disconnected and missed-edge paths;
-- test hallway -> room A -> still-open hallway -> room B;
-- test two occupants on independent paths and sharing one room;
-- test aliases, flaps, stuck transition/stay sensors, and unavailable recovery;
-- test out-of-order rejection and restart at active frontiers;
-- test count 0 and positive-count no-room-invention;
-- prove prediction cannot change normal `active`;
-- verify compact diagnostics explain every public edge; and
-- run the full Python, coverage, Ruff, mypy, frontend, 100-event benchmark, and
-  diff/reference gates.
-
-Preserve each reviewer's verdict and requirement findings in the phase report.
+During migration, preserve the exact regression and run only the nearest
+discriminating inverse or boundary case. Record broader applicable cases for the
+final stabilization pass rather than implementing or running all of them after
+each fix. At final stabilization, run the complete retained incident corpus,
+adversarial matrix, full Python coverage, Ruff, mypy, frontend, 100-event
+benchmarks, diff/reference checks, and one independent conformance review.

@@ -99,9 +99,15 @@ def replay_summary(result: ReplayResult) -> dict[str, Any]:
             for zone, state in sorted(result.final_states.items())
             if state.confidence > 0
         },
-        "tracks": [track.zone for track in result.final_diagnostics.tracks],
-        "inferred_join_count": len(result.final_diagnostics.inferred_join_slots),
-        "inferred_departure_count": len(result.final_diagnostics.inferred_departures),
+        "active_zones": [
+            zone
+            for zone, state in sorted(result.final_diagnostics.policy_states.items())
+            if state.active
+        ],
+        "traversal_token_count": len(result.final_diagnostics.traversal_tokens),
+        "health_warning_count": sum(
+            state.health_warning for state in result.final_diagnostics.episode_states
+        ),
     }
 
 

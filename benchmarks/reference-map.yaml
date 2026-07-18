@@ -1,6 +1,6 @@
 version: 1
 source: sanitized_reference_map
-purpose: Reproducible 16-zone performance fixture for two-occupant inference.
+purpose: Reproducible 16-zone performance fixture for graph-local occupancy.
 
 floors:
   - basement

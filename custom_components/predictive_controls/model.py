@@ -305,11 +305,7 @@ class PredictiveMap:
         self, source_node_id: str, target_node_id: str
     ) -> float | None:
         source = self.nodes.get(source_node_id)
-        return (
-            None
-            if source is None
-            else source.transition_seconds.get(target_node_id)
-        )
+        return None if source is None else source.transition_seconds.get(target_node_id)
 
     def zone_neighbors(self, zone: str) -> tuple[str, ...]:
         neighbors: set[str] = set()

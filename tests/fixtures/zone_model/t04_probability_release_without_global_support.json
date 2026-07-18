@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "scenario_id": "T04-probability-release-without-global-support",
+  "requirement_ids": [
+    "REQ-GOAL-002",
+    "REQ-POLICY-002",
+    "REQ-POLICY-007"
+  ],
+  "owning_phase": 5,
+  "source": {
+    "kind": "synthetic_target_contract",
+    "description": "A cleared stay zone releases after filtered belief and dwell without global assignment support.",
+    "related_tests": [
+      "tests/test_acceptance_scenarios.py::test_s29_elapsed_time_and_low_confidence_preserve_public_keep_on"
+    ]
+  },
+  "topology": {
+    "zones": [
+      "hallway",
+      "room"
+    ],
+    "nodes": {
+      "hallway_motion": {
+        "zone": "hallway",
+        "role": "transition",
+        "profile": "transition_fast",
+        "entity_id": "binary_sensor.hallway_motion",
+        "adjacent": [
+          "room_motion"
+        ]
+      },
+      "room_motion": {
+        "zone": "room",
+        "role": "stay",
+        "profile": "stay_pir",
+        "entity_id": "binary_sensor.room_motion",
+        "adjacent": [
+          "hallway_motion"
+        ]
+      }
+    }
+  },
+  "hardware_timing": {
+    "transition_fast": {
+      "burst_correlation_seconds": 3,
+      "stable_clear_seconds": 5,
+      "hardware_hold_seconds": 15,
+      "assertion_trust_seconds": 60,
+      "post_clear_residual": 0.1,
+      "traversal_context_seconds": 45
+    },
+    "stay_pir": {
+      "burst_correlation_seconds": 3,
+      "stable_clear_seconds": 5,
+      "hardware_hold_seconds": 30,
+      "assertion_trust_seconds": 900,
+      "post_clear_residual": 0.65,
+      "traversal_context_seconds": 90
+    }
+  },
+  "authoritative_count": 1,
+  "initial_state": {
+    "beliefs": {
+      "hallway": 0.05,
+      "room": 0.05
+    },
+    "active": {
+      "hallway": false,
+      "room": false
+    }
+  },
+  "inputs": [
+    {
+      "kind": "sensor",
+      "node_id": "hallway_motion",
+      "state": "on",
+      "event_at": "2026-07-18T15:00:00Z",
+      "received_at": "2026-07-18T15:00:00Z",
+      "description": "The adjacent transition opens."
+    },
+    {
+      "kind": "sensor",
+      "node_id": "room_motion",
+      "state": "on",
+      "event_at": "2026-07-18T15:00:02Z",
+      "received_at": "2026-07-18T15:00:02Z",
+      "description": "The room acquires active state."
+    },
+    {
+      "kind": "sensor",
+      "node_id": "room_motion",
+      "state": "off",
+      "event_at": "2026-07-18T15:00:32Z",
+      "received_at": "2026-07-18T15:00:32Z",
+      "description": "The room PIR clears."
+    },
+    {
+      "kind": "sensor",
+      "node_id": "hallway_motion",
+      "state": "off",
+      "event_at": "2026-07-18T15:00:40Z",
+      "received_at": "2026-07-18T15:00:40Z",
+      "description": "The old transition episode clears."
+    },
+    {
+      "kind": "sensor",
+      "node_id": "hallway_motion",
+      "state": "on",
+      "event_at": "2026-07-18T15:01:20Z",
+      "received_at": "2026-07-18T15:01:20Z",
+      "description": "A distinct outward hallway episode accelerates room decay."
+    },
+    {
+      "kind": "timer",
+      "event_at": "2026-07-18T15:10:00Z",
+      "received_at": "2026-07-18T15:10:00Z",
+      "description": "Advance filtered belief below the lower threshold and satisfy release dwell."
+    }
+  ],
+  "expected_public_timeline": [
+    {
+      "at": "2026-07-18T15:00:00Z",
+      "active_changes": {},
+      "arrival_events": [],
+      "health_changes": {},
+      "reason": "transition_context_only"
+    },
+    {
+      "at": "2026-07-18T15:00:02Z",
+      "active_changes": {
+        "room": true
+      },
+      "arrival_events": [
+        {
+          "zone": "room",
+          "event_type": "acquired"
+        }
+      ],
+      "health_changes": {},
+      "reason": "adjacent_transition_arrival"
+    },
+    {
+      "at": "2026-07-18T15:10:00Z",
+      "active_changes": {
+        "room": false
+      },
+      "arrival_events": [],
+      "health_changes": {},
+      "reason": "filtered_belief_release_without_global_support"
+    }
+  ],
+  "expected_reason_classes": [
+    "transition_context_only",
+    "adjacent_transition_arrival",
+    "filtered_belief_release_without_global_support"
+  ]
+}

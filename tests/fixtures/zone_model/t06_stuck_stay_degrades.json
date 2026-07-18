@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "scenario_id": "T06-stuck-stay-degrades",
+  "requirement_ids": [
+    "REQ-EVID-005",
+    "REQ-POLICY-003",
+    "REQ-DIAG-003"
+  ],
+  "owning_phase": 5,
+  "source": {
+    "kind": "synthetic_target_contract",
+    "description": "A stay assertion receives longer protection than a transition but health degradation still prevents permanent active ownership.",
+    "related_tests": [
+      "tests/test_acceptance_scenarios.py::test_s30_asserted_local_motion_preserves_keep_on_through_expiry"
+    ]
+  },
+  "topology": {
+    "zones": [
+      "hallway",
+      "room"
+    ],
+    "nodes": {
+      "hallway_motion": {
+        "zone": "hallway",
+        "role": "transition",
+        "profile": "transition_fast",
+        "entity_id": "binary_sensor.hallway_motion",
+        "adjacent": [
+          "room_presence"
+        ]
+      },
+      "room_presence": {
+        "zone": "room",
+        "role": "stay",
+        "profile": "stay_presence",
+        "entity_id": "binary_sensor.room_presence",
+        "adjacent": [
+          "hallway_motion"
+        ]
+      }
+    }
+  },
+  "hardware_timing": {
+    "transition_fast": {
+      "burst_correlation_seconds": 3,
+      "stable_clear_seconds": 5,
+      "hardware_hold_seconds": 15,
+      "assertion_trust_seconds": 60,
+      "post_clear_residual": 0.1,
+      "traversal_context_seconds": 45
+    },
+    "stay_presence": {
+      "burst_correlation_seconds": 3,
+      "stable_clear_seconds": 10,
+      "hardware_hold_seconds": 5,
+      "assertion_trust_seconds": 1800,
+      "post_clear_residual": 0.8,
+      "traversal_context_seconds": 120
+    }
+  },
+  "authoritative_count": 1,
+  "initial_state": {
+    "beliefs": {
+      "hallway": 0.05,
+      "room": 0.05
+    },
+    "active": {
+      "hallway": false,
+      "room": false
+    }
+  },
+  "inputs": [
+    {
+      "kind": "sensor",
+      "node_id": "hallway_motion",
+      "state": "on",
+      "event_at": "2026-07-18T17:00:00Z",
+      "received_at": "2026-07-18T17:00:00Z",
+      "description": "The adjacent hallway context opens."
+    },
+    {
+      "kind": "sensor",
+      "node_id": "room_presence",
+      "state": "on",
+      "event_at": "2026-07-18T17:00:02Z",
+      "received_at": "2026-07-18T17:00:02Z",
+      "description": "The stay-presence zone acquires active state and then remains asserted."
+    },
+    {
+      "kind": "timer",
+      "event_at": "2026-07-18T17:30:02Z",
+      "received_at": "2026-07-18T17:30:02Z",
+      "description": "The stay assertion reaches its longer trust horizon."
+    },
+    {
+      "kind": "timer",
+      "event_at": "2026-07-18T19:00:00Z",
+      "received_at": "2026-07-18T19:00:00Z",
+      "description": "Degraded stay belief reaches release after its longer dwell."
+    }
+  ],
+  "expected_public_timeline": [
+    {
+      "at": "2026-07-18T17:00:02Z",
+      "active_changes": {
+        "room": true
+      },
+      "arrival_events": [
+        {
+          "zone": "room",
+          "event_type": "acquired"
+        }
+      ],
+      "health_changes": {},
+      "reason": "adjacent_transition_arrival"
+    },
+    {
+      "at": "2026-07-18T17:30:02Z",
+      "active_changes": {},
+      "arrival_events": [],
+      "health_changes": {
+        "room": true
+      },
+      "reason": "assertion_trust_horizon_exceeded"
+    },
+    {
+      "at": "2026-07-18T19:00:00Z",
+      "active_changes": {
+        "room": false
+      },
+      "arrival_events": [],
+      "health_changes": {},
+      "reason": "degraded_stay_belief_release"
+    }
+  ],
+  "expected_reason_classes": [
+    "adjacent_transition_arrival",
+    "assertion_trust_horizon_exceeded",
+    "degraded_stay_belief_release"
+  ]
+}

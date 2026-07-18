@@ -12,12 +12,11 @@ requirements. [`MIGRATION_PLAN.md`](MIGRATION_PLAN.md) is the step-by-step AI
 agent handoff for implementing those requirements; it is not a second design
 authority.
 
-Release `0.2.1` still runs the existing exact anonymous-assignment engine and
-Store schema 6. The approved target replaces that engine with graph-local
-per-zone probability filters, bounded traversal context, and hysteretic
-probability-driven `active` decisions. Until the migration cutover phase is
-completed, source code and historical changelog entries may describe the
-deployed exact engine rather than the target architecture.
+The integration now runs graph-local per-zone probability filters, bounded
+anonymous traversal context, and hysteretic probability-driven `active`
+decisions. Store schema 7 reads schema-6 state once to seed public active state,
+then persists only target-model state. Historical changelog entries may still
+describe the retired architecture.
 
 ## Installation
 
@@ -95,12 +94,11 @@ The normal automation surface is intentionally small:
 | `binary_sensor.home_active`                 | Logical OR of per-zone `active` states                   |
 | `binary_sensor.predictive_controls_problem` | Diagnostic integration problem state; never policy input |
 
-Optional probability and path diagnostics are disabled by default. The target
-migration keeps the stable `active`, `prelight`, and `home_active` IDs, adds a
+Optional probability and path diagnostics are disabled by default. The current
+surface keeps the stable `active`, `prelight`, and `home_active` IDs, adds a
 deduplicated `refreshed` type on optional `event.<zone>_arrival` for accepted
-evidence while already active, and
-replaces exact support-probability diagnostics with zone-belief and policy
-diagnostics.
+evidence while already active, and exposes zone belief, authorization reason,
+release dwell, sensor health, and bounded policy audit diagnostics.
 
 `active` is policy intent, not actual light state. A controlled light or switch
 must never feed occupancy inference.

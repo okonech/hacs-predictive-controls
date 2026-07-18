@@ -16,7 +16,7 @@ from custom_components.predictive_controls.entity_registry import (
     expected_entity_unique_ids,
 )
 from custom_components.predictive_controls.model import PredictiveMap
-from custom_components.predictive_controls.occupancy_state import PolicyDecision
+from custom_components.predictive_controls.zone_model.types import PolicyEvent
 
 
 @dataclass(frozen=True)
@@ -99,10 +99,10 @@ def test_sensor_platform_exports_only_automation_facing_entities(
         "entry123_kitchen_diagnostic_confidence",
         "entry123_living_room_occupancy_probability",
         "entry123_kitchen_occupancy_probability",
-        "entry123_living_room_arrival_supported_probability",
-        "entry123_kitchen_arrival_supported_probability",
-        "entry123_living_room_release_safe_probability",
-        "entry123_kitchen_release_safe_probability",
+        "entry123_living_room_authorization_reason",
+        "entry123_kitchen_authorization_reason",
+        "entry123_living_room_release_dwell",
+        "entry123_kitchen_release_dwell",
     }
 
 
@@ -227,6 +227,31 @@ def test_authoritative_count_sensor_remains_immediate_and_edge_gated(
     assert entity.state_write_count == 1
 
 
+def test_zone_detail_sensors_cover_present_and_absent_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sensor_module, _, _ = load_platform_modules(monkeypatch)
+    diagnostics = SimpleNamespace(authorizations=(), policy_states={})
+    runtime = SimpleNamespace(confidence=SimpleNamespace(diagnostics=diagnostics))
+    reason = sensor_module.ZoneAuthorizationReasonSensor(runtime, "entry", "room")
+    dwell = sensor_module.ZoneReleaseDwellSensor(runtime, "entry", "room")
+    assert reason.native_value is None
+    assert dwell.native_value is None
+
+    diagnostics.authorizations = (
+        SimpleNamespace(target_zone="room", reason="adjacent_current"),
+        SimpleNamespace(target_zone="other", reason="ignored"),
+    )
+    diagnostics.policy_states = {
+        "room": SimpleNamespace(
+            pending_release_since=datetime(2026, 7, 15, 12, tzinfo=UTC),
+            last_evaluated_at=datetime(2026, 7, 15, 12, 0, 10, tzinfo=UTC),
+        )
+    }
+    assert reason.native_value == "adjacent_current"
+    assert dwell.native_value == 10.0
+
+
 def test_event_platform_exports_optional_arrival_entities(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -245,14 +270,15 @@ def test_arrival_event_deduplicates_episode_ids(
 ) -> None:
     _, _, event_module = load_platform_modules(monkeypatch)
     diagnostics = SimpleNamespace(
-        joint_policy_decisions=(
-            PolicyDecision(
+        policy_events=(
+            PolicyEvent(
+                "acquired",
+                datetime(2026, 7, 15, 12, tzinfo=UTC),
                 "living_room",
-                "activate",
-                True,
-                "arrival_supported",
-                {"probability": 0.9},
-                ("living_motion@2026-07-15T12:00:00+00:00",),
+                "living_motion@2026-07-15T12:00:00+00:00",
+                0.9,
+                "adjacent_current",
+                "acquired",
             ),
         )
     )
@@ -273,12 +299,42 @@ def test_arrival_event_deduplicates_episode_ids(
             {
                 "zone": "living_room",
                 "episode_id": "living_motion@2026-07-15T12:00:00+00:00",
-                "arrival_supported_probability": 0.9,
                 "accepted_at": "2026-07-15T12:00:00+00:00",
-                "reason": "arrival_supported",
+                "belief": 0.9,
+                "authorization_reason": "adjacent_current",
+                "policy_reason": "acquired",
             },
         )
     ]
+    silent = event_module.ZoneArrivalEvent(runtime, "entry123", "living_room")
+    silent._project_decisions(emit=False)  # noqa: SLF001
+    assert getattr(silent, "triggered_events", []) == []
+
+
+def test_arrival_event_filters_nonlocal_release_and_missing_episode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, _, event_module = load_platform_modules(monkeypatch)
+    at = datetime(2026, 7, 15, 12, tzinfo=UTC)
+    diagnostics = SimpleNamespace(
+        policy_events=(
+            PolicyEvent("acquired", at, "other", "other:1", 0.8, None, "acquired"),
+            PolicyEvent(
+                "released", at, "living_room", "living:1", 0.1, None, "released"
+            ),
+            SimpleNamespace(kind="acquired", zone="living_room", episode_id=None),
+        )
+    )
+    entity = event_module.ZoneArrivalEvent(
+        SimpleNamespace(confidence=SimpleNamespace(diagnostics=diagnostics)),
+        "entry123",
+        "living_room",
+    )
+    entity.hass = object()
+    asyncio.run(entity.async_added_to_hass())
+    entity._handle_update()  # noqa: SLF001
+    assert getattr(entity, "triggered_events", []) == []
+    assert entity.state_write_count == 1
 
 
 def test_cleanup_registry_expected_ids_match_platform_exports(
@@ -289,15 +345,19 @@ def test_cleanup_registry_expected_ids_match_platform_exports(
     )
     predictive_map = make_map()
 
-    exported_ids = platform_unique_ids(
-        sensor_module,
-        predictive_map,
-    ) | platform_unique_ids(
-        binary_sensor_module,
-        predictive_map,
-    ) | platform_unique_ids(
-        event_module,
-        predictive_map,
+    exported_ids = (
+        platform_unique_ids(
+            sensor_module,
+            predictive_map,
+        )
+        | platform_unique_ids(
+            binary_sensor_module,
+            predictive_map,
+        )
+        | platform_unique_ids(
+            event_module,
+            predictive_map,
+        )
     )
 
     assert expected_entity_unique_ids("entry123", predictive_map) == exported_ids

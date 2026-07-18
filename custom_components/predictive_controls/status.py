@@ -1,38 +1,19 @@
 from __future__ import annotations
 
-import json
-import math
-from datetime import datetime
-from typing import Any, cast
-
-from .inference.policy import (
-    POLICY_AUDIT_MAX_BYTES,
-    POLICY_AUDIT_MAX_ENTRIES,
-    POLICY_AUDIT_RETENTION,
-)
-from .policy_audit import (
-    packed_policy_audit_context_size,
-    stored_policy_audit_context_payload,
-)
-from .reliability import (
-    RELIABILITY_FLAP_WINDOW,
-    RELIABILITY_REPEAT_MINIMUM,
-    PolicyReliabilitySummary,
-    summarize_policy_reliability,
-)
+from typing import Any
 
 
 def runtime_status_payload(runtime: Any) -> dict[str, Any]:
-    """Serialize live runtime status for diagnostics and WebSocket clients."""
+    """Serialize live target state for diagnostics and WebSocket clients."""
 
+    diagnostics = runtime.confidence.diagnostics
     payload = {
         "zone_states": {
             zone: zone_state_payload(state)
             for zone, state in runtime.zone_states.items()
         },
         "recent_occupancy_events": [
-            occupancy_event_payload(event)
-            for event in runtime.recent_occupancy_events
+            occupancy_event_payload(event) for event in runtime.recent_occupancy_events
         ],
         "last_source_node": runtime.last_source_node,
         "last_prediction": None
@@ -43,32 +24,21 @@ def runtime_status_payload(runtime: Any) -> dict[str, Any]:
         },
         "probabilities": runtime.probabilities,
         "transition_counts": runtime.transition_counts,
-        "expected_occupants": getattr(runtime, "expected_occupants", 0),
+        "expected_occupants": runtime.expected_occupants,
         "authoritative_count": {
-            "source": getattr(runtime, "expected_occupants_entity", "")
+            "source": runtime.expected_occupants_entity
             or "configured_expected_occupants",
-            "requested": getattr(
-                runtime.confidence,
-                "requested_expected_occupants",
-                getattr(runtime, "expected_occupants", 0),
-            ),
-            "accepted": getattr(runtime, "expected_occupants", 0),
-            "available": getattr(runtime, "authoritative_count_available", True),
+            "requested": runtime.confidence.requested_expected_occupants,
+            "accepted": runtime.expected_occupants,
+            "available": runtime.authoritative_count_available,
             "invalid": "invalid_authoritative_count"
             in getattr(runtime, "problem_reasons", ()),
-            "unsupported": getattr(
-                runtime.confidence.diagnostics,
-                "joint_unsupported_count",
-                None,
-            ),
+            "unsupported": diagnostics.unsupported_count,
         },
-        "occupancy_diagnostics": tracker_diagnostics_payload(
-            runtime.confidence.diagnostics
-        ),
+        "occupancy_diagnostics": tracker_diagnostics_payload(diagnostics),
     }
-    latency_metrics = getattr(runtime, "latency_metrics", None)
-    if latency_metrics is not None:
-        payload["latency"] = latency_metrics
+    if getattr(runtime, "latency_metrics", None) is not None:
+        payload["latency"] = runtime.latency_metrics
     return payload
 
 
@@ -77,469 +47,136 @@ def zone_state_payload(state: Any) -> dict[str, Any]:
         "confidence": state.confidence,
         "status": state.status,
         "occupancy_behavior": state.occupancy_behavior,
-        "active_since": state.active_since.isoformat()
-        if state.active_since is not None
-        else None,
-        "last_evidence_at": state.last_evidence_at.isoformat()
-        if state.last_evidence_at is not None
-        else None,
-        "last_clear_at": state.last_clear_at.isoformat()
-        if state.last_clear_at is not None
-        else None,
+        "active_since": _iso(state.active_since),
+        "last_evidence_at": _iso(state.last_evidence_at),
+        "last_clear_at": _iso(state.last_clear_at),
         "last_node_id": state.last_node_id,
         "reason": state.reason,
-        "explanation": dict(getattr(state, "explanation", {})),
+        "explanation": dict(state.explanation),
     }
 
 
 def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
-    legacy_policy_audit = tuple(getattr(diagnostics, "joint_policy_audit", ()))
-    target_policy_audit = tuple(
-        getattr(diagnostics, "joint_target_policy_audit", ())
-    )
-    policy_audit = target_policy_audit or legacy_policy_audit
-    payload = {
+    return {
+        "model": "zone_belief",
         "expected_occupants": diagnostics.expected_occupants,
-        "reliability": reliability_payload(
-            summarize_policy_reliability(legacy_policy_audit)
-        ),
-        "protected_tracks": list(diagnostics.protected_tracks),
-        "protected_corridor": list(diagnostics.protected_corridor),
-        "inferred_join_slots": [
-            join_slot_payload(slot) for slot in diagnostics.inferred_join_slots
+        "requested_occupants": diagnostics.requested_occupants,
+        "unsupported_count": diagnostics.unsupported_count,
+        "beliefs": dict(diagnostics.beliefs),
+        "policy": {
+            zone: {
+                "active": state.active,
+                "profile": state.profile_name,
+                "last_evaluated_at": state.last_evaluated_at.isoformat(),
+                "pending_release_since": _iso(state.pending_release_since),
+            }
+            for zone, state in diagnostics.policy_states.items()
+        },
+        "episodes": [
+            {
+                "node_id": state.node_id,
+                "zone": state.zone,
+                "profile": state.profile_name,
+                "episode_id": state.episode_id,
+                "status": state.status,
+                "last_event_at": _iso(state.last_event_at),
+                "health_warning": state.health_warning,
+            }
+            for state in diagnostics.episode_states
         ],
-        "inferred_departures": [
-            departure_payload(departure)
-            for departure in diagnostics.inferred_departures
+        "traversal_frontier": [
+            {
+                "token_id": token.token_id,
+                "node_id": token.node_id,
+                "zone": token.zone,
+                "episode_id": token.episode_id,
+                "accepted_at": token.accepted_at.isoformat(),
+                "valid_until": token.valid_until.isoformat(),
+            }
+            for token in diagnostics.traversal_tokens
         ],
-        "entry_plausibilities": [
-            entry_plausibility_payload(plausibility)
-            for plausibility in diagnostics.entry_plausibilities
+        "authorizations": [
+            {
+                "target_node_id": item.target_node_id,
+                "target_zone": item.target_zone,
+                "target_episode_id": item.target_episode_id,
+                "authorized_at": item.authorized_at.isoformat(),
+                "authorized": item.authorized,
+                "reason": item.reason,
+                "source_token_ids": [token.token_id for token in item.source_tokens],
+            }
+            for item in diagnostics.authorizations
         ],
-        "activation_plausibilities": [
-            activation_plausibility_payload(plausibility)
-            for plausibility in diagnostics.activation_plausibilities
+        "recent_policy_events": [
+            {
+                "kind": item.kind,
+                "event_at": item.event_at.isoformat(),
+                "zone": item.zone,
+                "episode_id": item.episode_id,
+                "belief": item.belief,
+                "authorization_reason": item.authorization_reason,
+                "policy_reason": item.policy_reason,
+            }
+            for item in diagnostics.policy_events
         ],
-        "prediction_hints": diagnostics.prediction_hints,
-        "dwell_seconds": diagnostics.dwell_seconds,
-        "tracks": [track_payload(track) for track in diagnostics.tracks],
-    }
-    joint_posterior = getattr(diagnostics, "joint_posterior", ())
-    joint_provenance = getattr(diagnostics, "joint_last_provenance", None)
-    if (
-        joint_posterior
-        or joint_provenance is not None
-        or bool(getattr(diagnostics, "joint_occupied_marginals", {}))
-    ):
-        oldest_decision_at = cast(
-            datetime | None,
-            min(
-                (entry.decision_at for entry in policy_audit),
-                default=None,
-            ),
-        )
-        newest_decision_at = cast(
-            datetime | None,
-            max(
-                (entry.decision_at for entry in policy_audit),
-                default=None,
-            ),
-        )
-        payload["joint"] = {
-            "hypotheses": [
+        "policy_audit": [
+            policy_decision_payload(row) for row in diagnostics.policy_audit
+        ],
+        "prediction": {
+            "probabilities": dict(diagnostics.prediction_probabilities),
+            "leases": [
                 {
-                    "probability": math.exp(hypothesis.log_probability),
-                    "positions": [
-                        {
-                            "zone": position.zone,
-                            "incoming_zone": position.incoming_zone,
-                            "entered_at": position.entered_at.isoformat()
-                            if position.entered_at is not None
-                            else None,
-                        }
-                        for position in hypothesis.key.positions
-                    ],
-                }
-                for hypothesis in joint_posterior
-            ],
-            "occupied_marginals": getattr(
-                diagnostics,
-                "joint_occupied_marginals",
-                {},
-            ),
-            "count_marginals": getattr(diagnostics, "joint_count_marginals", {}),
-            "posterior_entropy": getattr(
-                diagnostics,
-                "joint_posterior_entropy",
-                0.0,
-            ),
-            "pruned_probability": getattr(
-                diagnostics,
-                "joint_pruned_probability",
-                0.0,
-            ),
-            "performance": getattr(diagnostics, "joint_performance", {}),
-            "requested_occupants": getattr(
-                diagnostics,
-                "joint_requested_occupants",
-                diagnostics.expected_occupants,
-            ),
-            "unsupported_count": getattr(
-                diagnostics,
-                "joint_unsupported_count",
-                None,
-            ),
-            "policy": {
-                zone: {
-                    "keep_on": state.keep_on,
-                    "activation_expires_at": state.activation_expires_at.isoformat()
-                    if state.activation_expires_at is not None
-                    else None,
-                    "last_trusted_at": state.last_trusted_at.isoformat()
-                    if state.last_trusted_at is not None
-                    else None,
-                    "last_release_cause": None
-                    if state.last_release_cause is None
-                    else state.last_release_cause.value,
-                    "recovery_eligible": state.recovery_eligible,
-                    "reason": state.reason,
-                    "evidence_ids": list(state.evidence_ids),
-                }
-                for zone, state in getattr(
-                    diagnostics,
-                    "joint_policy_states",
-                    {},
-                ).items()
-            },
-            "policy_decisions": [
-                {
-                    "zone": decision.zone,
-                    "action": decision.action,
-                    "accepted": decision.accepted,
-                    "reason_code": decision.reason_code,
-                    "gate_values": dict(decision.gate_values),
-                    "evidence_ids": list(decision.evidence_ids),
-                }
-                for decision in getattr(
-                    diagnostics,
-                    "joint_policy_decisions",
-                    (),
-                )
-            ],
-            "policy_audit": [
-                policy_audit_entry_payload(entry)
-                for entry in policy_audit
-            ],
-            "policy_audit_retention": {
-                "retention_hours": int(
-                    POLICY_AUDIT_RETENTION.total_seconds() // 3600
-                ),
-                "max_entries": POLICY_AUDIT_MAX_ENTRIES,
-                "max_context_compressed_bytes": POLICY_AUDIT_MAX_BYTES,
-                "context_compressed_bytes": sum(
-                    policy_audit_entry_size(entry)
-                    for entry in policy_audit
-                ),
-                "entry_count": len(policy_audit),
-                "oldest_decision_at": oldest_decision_at.isoformat()
-                if oldest_decision_at is not None
-                else None,
-                "newest_decision_at": newest_decision_at.isoformat()
-                if newest_decision_at is not None
-                else None,
-            },
-            "movement_evidence": [
-                {
-                    "path_key": list(evidence.path_key),
-                    "origin_zone": evidence.origin_zone,
-                    "source_zone": evidence.source_zone,
-                    "target_zone": evidence.target_zone,
-                    "coherent_probability": evidence.coherent_probability,
-                    "source_node_id": evidence.source_node_id,
-                    "target_node_id": evidence.target_node_id,
-                    "via_zone": evidence.via_zone,
-                    "via_node_id": evidence.via_node_id,
-                    "evidence_ids": list(evidence.evidence_ids),
-                    "disposition": evidence.disposition,
-                }
-                for evidence in getattr(
-                    diagnostics,
-                    "joint_movement_evidence",
-                    (),
-                )
-            ],
-            "directional_contexts": [
-                {
-                    "positions": [position.zone for position in key.positions],
-                    "contexts": [
-                        {
-                            "origin_zone": context.origin_zone,
-                            "previous_node_id": context.previous_node_id,
-                            "current_node_id": context.current_node_id,
-                            "started_at": context.started_at.isoformat()
-                            if context.started_at is not None
-                            else None,
-                            "last_event_at": context.last_event_at.isoformat()
-                            if context.last_event_at is not None
-                            else None,
-                            "evidence_ids": list(context.evidence_ids),
-                            "probability": math.exp(context.log_probability),
-                            "disposition": context.disposition,
-                        }
-                        for context in contexts
-                    ],
-                }
-                for key, contexts in getattr(
-                    diagnostics,
-                    "joint_directional_contexts",
-                    {},
-                ).items()
-            ],
-            "prediction_leases": [
-                {
-                    "path_key": list(lease.path_key),
+                    "source_node_id": lease.source_node_id,
+                    "current_node_id": lease.current_node_id,
+                    "target_node_id": lease.target_node_id,
                     "target_zone": lease.target_zone,
                     "probability": lease.probability,
+                    "created_at": lease.created_at.isoformat(),
                     "expires_at": lease.expires_at.isoformat(),
                     "reason": lease.reason,
                 }
-                for lease in getattr(diagnostics, "joint_prediction_leases", ())
+                for lease in diagnostics.prediction_leases
             ],
-            "prediction_hints": getattr(
-                diagnostics,
-                "joint_prediction_hints",
-                {},
-            ),
-            "route_learning": {
-                "last_match": getattr(
-                    diagnostics,
-                    "joint_route_diagnostics",
-                    {},
-                ),
-                "statistics": [
-                    {
-                        "prefix": list(prefix),
-                        "targets": dict(sorted(targets.items())),
-                    }
-                    for prefix, targets in sorted(
-                        getattr(
-                            diagnostics,
-                            "joint_route_statistics",
-                            {},
-                        ).items()
-                    )
-                ],
-            },
-            "last_provenance": None
-            if joint_provenance is None
-            else {
-                "event_id": joint_provenance.event_id,
-                "evidence_episode_id": joint_provenance.evidence_episode_id,
-                "entity_id": joint_provenance.entity_id,
-                "node_id": joint_provenance.node_id,
-                "zone": joint_provenance.zone,
-                "state": joint_provenance.state,
-                "signal_type": joint_provenance.signal_type,
-                "reliability": joint_provenance.reliability,
-                "log_likelihood_by_count": list(
-                    joint_provenance.log_likelihood_by_count
-                ),
-                "disposition": joint_provenance.disposition,
-            },
-            "restore": {
-                "status": getattr(
-                    diagnostics,
-                    "joint_restore_status",
-                    "not_attempted",
-                ),
-                "reason": getattr(diagnostics, "joint_restore_reason", None),
-            },
-            "arrival_supported_probabilities": getattr(
-                diagnostics,
-                "joint_arrival_supported_probabilities",
-                {},
-            ),
-            "release_safe": {
-                "available": getattr(
-                    diagnostics,
-                    "joint_release_safe_available",
-                    False,
-                ),
-                "probabilities": getattr(
-                    diagnostics,
-                    "joint_release_safe_probabilities",
-                    {},
-                ),
-            },
-        }
-    return payload
-
-
-def target_policy_audit_entry_payload(entry: Any) -> dict[str, Any]:
-    return {
-        "decision_at": entry.decision_at.isoformat(),
-        "decision": {
-            "zone": entry.decision.zone,
-            "action": entry.decision.action,
-            "accepted": entry.decision.accepted,
-            "reason_code": entry.decision.reason_code,
-            "gate_values": dict(entry.decision.gate_values),
-            "evidence_ids": list(entry.decision.evidence_ids),
         },
-        "prior_active": entry.prior_active,
-        "resulting_active": entry.resulting_active,
-        "context_complete": entry.context is not None,
-        "context": stored_policy_audit_context_payload(entry.context),
-    }
-
-
-def policy_audit_entry_payload(entry: Any) -> dict[str, Any]:
-    if hasattr(entry, "prior_active"):
-        return target_policy_audit_entry_payload(entry)
-    return {
-        "decision_at": entry.decision_at.isoformat(),
-        "source": entry.source,
-        "trigger": {
-            "event_id": entry.trigger_event_id,
-            "entity_id": entry.trigger_entity_id,
-            "zone": entry.trigger_zone,
-            "state": entry.trigger_state,
-            "disposition": entry.trigger_disposition,
+        "event_disposition": diagnostics.event_disposition,
+        "restore": {
+            "status": diagnostics.restore_status,
+            "reason": diagnostics.restore_reason,
         },
-        "decision": {
-            "zone": entry.decision.zone,
-            "action": entry.decision.action,
-            "accepted": entry.decision.accepted,
-            "reason_code": entry.decision.reason_code,
-            "gate_values": dict(entry.decision.gate_values),
-            "evidence_ids": list(entry.decision.evidence_ids),
-        },
-        "previous": {
-            "keep_on": entry.previous_keep_on,
-            "reason": entry.previous_reason,
-            "release_cause": None
-            if entry.previous_release_cause is None
-            else entry.previous_release_cause.value,
-        },
-        "current": {
-            "keep_on": entry.current_keep_on,
-            "reason": entry.current_reason,
-            "release_cause": None
-            if entry.current_release_cause is None
-            else entry.current_release_cause.value,
-        },
-        "context": stored_policy_audit_context_payload(entry.context),
-    }
-
-
-def policy_audit_entry_size(entry: Any) -> int:
-    if not hasattr(entry, "prior_active"):
-        return packed_policy_audit_context_size(entry.context)
-    return packed_policy_audit_context_size(entry.context) + len(
-        json.dumps(
-            target_policy_audit_entry_payload(entry),
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode()
-    )
-
-
-def reliability_payload(summary: PolicyReliabilitySummary) -> dict[str, Any]:
-    """Serialize retained audit patterns for proactive reliability review."""
-
-    return {
-        "criteria": {
-            "repeat_minimum": RELIABILITY_REPEAT_MINIMUM,
-            "flap_window_seconds": int(
-                RELIABILITY_FLAP_WINDOW.total_seconds()
-            ),
-        },
-        "coverage": {
-            "observed_event_count": summary.observed_event_count,
-            "oldest_event_at": summary.oldest_event_at.isoformat()
-            if summary.oldest_event_at is not None
-            else None,
-            "newest_event_at": summary.newest_event_at.isoformat()
-            if summary.newest_event_at is not None
-            else None,
-        },
-        "rejected_motion_captures": [
-            {
-                "entity_id": item.entity_id,
-                "zone": item.zone,
-                "capture_count": item.capture_count,
-                "last_capture_at": item.last_capture_at.isoformat(),
-                "reason_counts": dict(item.reason_counts),
-                "max_occupied_marginal": item.max_occupied_marginal,
-            }
-            for item in summary.rejected_motion_captures
-        ],
-        "low_confidence_flaps": [
-            {
-                "entity_id": item.entity_id,
-                "zone": item.zone,
-                "pulse_count": item.pulse_count,
-                "last_flap_at": item.last_flap_at.isoformat(),
-                "shortest_pulse_seconds": item.shortest_pulse_seconds,
-                "max_occupied_marginal": item.max_occupied_marginal,
-            }
-            for item in summary.low_confidence_flaps
+        "processing": dict(diagnostics.processing),
+        "health_warnings": [
+            state.node_id
+            for state in diagnostics.episode_states
+            if state.health_warning
         ],
     }
 
 
-def track_payload(track: Any) -> dict[str, Any]:
+def policy_decision_payload(row: Any) -> dict[str, Any]:
     return {
-        "track_id": track.track_id,
-        "zone": track.zone,
-        "confidence": track.confidence,
-        "active": track.active,
-        "last_evidence_at": track.last_evidence_at.isoformat()
-        if track.last_evidence_at is not None
-        else None,
-        "source_entities": list(track.source_entities),
-    }
-
-
-def join_slot_payload(slot: Any) -> dict[str, Any]:
-    return {
-        "zone": slot.zone,
-        "source_zone": slot.source_zone,
-        "source_node_id": slot.source_node_id,
-        "event_at": slot.event_at.isoformat(),
-        "expires_at": slot.expires_at.isoformat(),
-    }
-
-
-def departure_payload(departure: Any) -> dict[str, Any]:
-    return {
-        "zone": departure.zone,
-        "via_zone": departure.via_zone,
-        "via_node_id": departure.via_node_id,
-        "destination_zone": departure.destination_zone,
-        "event_at": departure.event_at.isoformat(),
-        "expires_at": departure.expires_at.isoformat(),
-    }
-
-
-def entry_plausibility_payload(plausibility: Any) -> dict[str, Any]:
-    return {
-        "zone": plausibility.zone,
-        "source_zone": plausibility.source_zone,
-        "source_node_id": plausibility.source_node_id,
-        "event_at": plausibility.event_at.isoformat(),
-        "expires_at": plausibility.expires_at.isoformat(),
-    }
-
-
-def activation_plausibility_payload(plausibility: Any) -> dict[str, Any]:
-    return {
-        "zone": plausibility.zone,
-        "reason": plausibility.reason,
-        "source_zone": plausibility.source_zone,
-        "source_node_id": plausibility.source_node_id,
-        "event_at": plausibility.event_at.isoformat(),
-        "expires_at": plausibility.expires_at.isoformat(),
+        "event_at": row.event_at.isoformat(),
+        "processing_at": row.processing_at.isoformat(),
+        "zone": row.zone,
+        "node_id": row.node_id,
+        "episode_id": row.episode_id,
+        "profile": row.profile_name,
+        "belief_before": row.belief_before,
+        "belief_after": row.belief_after,
+        "active_before": row.active_before,
+        "active_after": row.active_after,
+        "local_evidence_kind": row.local_evidence_kind,
+        "local_trustworthy": row.local_trustworthy,
+        "authorization_authorized": row.authorization_authorized,
+        "traversal_reason": row.traversal_reason,
+        "evidence_ids": list(row.evidence_ids),
+        "count_zero": row.count_zero,
+        "health_warning": row.health_warning,
+        "on_threshold": row.on_threshold,
+        "off_threshold": row.off_threshold,
+        "release_dwell_seconds": row.release_dwell.total_seconds(),
+        "pending_release_since": _iso(row.pending_release_since),
+        "event_kind": row.event_kind,
+        "reason": row.reason,
     }
 
 
@@ -556,3 +193,7 @@ def occupancy_event_payload(event: Any) -> dict[str, Any]:
         "event_at": event.event_at.isoformat(),
         "reliability": event.reliability,
     }
+
+
+def _iso(value: Any) -> str | None:
+    return None if value is None else value.isoformat()

@@ -651,13 +651,21 @@ def test_integration_setup_unload_and_reload(
 
     entry = Entry()
     assert asyncio.run(integration.async_setup_entry(hass, entry))
-    assert stores[0].version == 6
+    assert stores[0].version == 7
     assert stores[0].key == "predictive_controls_entry_transitions"
     assert ("restore", legacy_payload) in calls
     with pytest.raises(NotImplementedError):
         asyncio.run(
             stores[0]._async_migrate_func(0, 1, legacy_payload)  # noqa: SLF001
         )
+    migrated_v5 = asyncio.run(
+        stores[0]._async_migrate_func(  # noqa: SLF001
+            5,
+            0,
+            {"schema": "prototype-augmented-v5"},
+        )
+    )
+    assert migrated_v5["schema"] == "exact-augmented-v6"
     second = Entry()
     second.entry_id = "entry2"
     assert asyncio.run(integration.async_setup_entry(hass, second))

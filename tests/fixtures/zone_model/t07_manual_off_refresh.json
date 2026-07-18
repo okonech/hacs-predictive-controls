@@ -1,0 +1,177 @@
+{
+  "schema_version": 1,
+  "scenario_id": "T07-manual-off-refresh",
+  "requirement_ids": [
+    "REQ-POLICY-005",
+    "REQ-PUBLIC-002",
+    "REQ-PUBLIC-003"
+  ],
+  "owning_phase": 5,
+  "source": {
+    "kind": "synthetic_target_contract",
+    "description": "An external output change is ignored by belief, while a later distinct accepted episode emits one refresh without a false active edge.",
+    "related_tests": [
+      "tests/test_entity_platforms.py",
+      "tests/test_acceptance_scenarios.py::test_s31_sustained_room_confidence_survives_untracked_flaps"
+    ]
+  },
+  "topology": {
+    "zones": [
+      "hallway",
+      "room"
+    ],
+    "nodes": {
+      "hallway_motion": {
+        "zone": "hallway",
+        "role": "transition",
+        "profile": "transition_fast",
+        "entity_id": "binary_sensor.hallway_motion",
+        "adjacent": [
+          "room_motion"
+        ]
+      },
+      "room_motion": {
+        "zone": "room",
+        "role": "stay",
+        "profile": "stay_pir",
+        "entity_id": "binary_sensor.room_motion",
+        "adjacent": [
+          "hallway_motion"
+        ]
+      }
+    }
+  },
+  "hardware_timing": {
+    "transition_fast": {
+      "burst_correlation_seconds": 3,
+      "stable_clear_seconds": 5,
+      "hardware_hold_seconds": 15,
+      "assertion_trust_seconds": 60,
+      "post_clear_residual": 0.1,
+      "traversal_context_seconds": 45
+    },
+    "stay_pir": {
+      "burst_correlation_seconds": 3,
+      "stable_clear_seconds": 5,
+      "hardware_hold_seconds": 30,
+      "assertion_trust_seconds": 900,
+      "post_clear_residual": 0.65,
+      "traversal_context_seconds": 90
+    }
+  },
+  "authoritative_count": 1,
+  "initial_state": {
+    "beliefs": {
+      "hallway": 0.05,
+      "room": 0.05
+    },
+    "active": {
+      "hallway": false,
+      "room": false
+    }
+  },
+  "inputs": [
+    {
+      "kind": "sensor",
+      "node_id": "hallway_motion",
+      "state": "on",
+      "event_at": "2026-07-18T18:00:00Z",
+      "received_at": "2026-07-18T18:00:00Z",
+      "description": "The adjacent hallway context opens."
+    },
+    {
+      "kind": "sensor",
+      "node_id": "room_motion",
+      "state": "on",
+      "event_at": "2026-07-18T18:00:02Z",
+      "received_at": "2026-07-18T18:00:02Z",
+      "description": "The first room episode acquires active state."
+    },
+    {
+      "kind": "external_output",
+      "zone": "room",
+      "state": "off",
+      "event_at": "2026-07-18T18:00:30Z",
+      "received_at": "2026-07-18T18:00:30Z",
+      "description": "The controlled output is manually switched off and is not model evidence."
+    },
+    {
+      "kind": "sensor",
+      "node_id": "room_motion",
+      "state": "off",
+      "event_at": "2026-07-18T18:00:35Z",
+      "received_at": "2026-07-18T18:00:35Z",
+      "description": "The first room episode clears."
+    },
+    {
+      "kind": "timer",
+      "event_at": "2026-07-18T18:00:40Z",
+      "received_at": "2026-07-18T18:00:40Z",
+      "description": "The room clear becomes stable without releasing active."
+    },
+    {
+      "kind": "sensor",
+      "node_id": "room_motion",
+      "state": "on",
+      "event_at": "2026-07-18T18:01:10Z",
+      "received_at": "2026-07-18T18:01:10Z",
+      "description": "A distinct room episode is accepted while active remains on."
+    },
+    {
+      "kind": "sensor",
+      "node_id": "room_motion",
+      "state": "on",
+      "event_at": "2026-07-18T18:01:11Z",
+      "received_at": "2026-07-18T18:01:11Z",
+      "description": "A duplicate callback in the same episode cannot emit another refresh."
+    }
+  ],
+  "expected_public_timeline": [
+    {
+      "at": "2026-07-18T18:00:02Z",
+      "active_changes": {
+        "room": true
+      },
+      "arrival_events": [
+        {
+          "zone": "room",
+          "event_type": "acquired"
+        }
+      ],
+      "health_changes": {},
+      "reason": "adjacent_transition_arrival"
+    },
+    {
+      "at": "2026-07-18T18:00:30Z",
+      "active_changes": {},
+      "arrival_events": [],
+      "health_changes": {},
+      "reason": "external_output_state_ignored"
+    },
+    {
+      "at": "2026-07-18T18:01:10Z",
+      "active_changes": {},
+      "arrival_events": [
+        {
+          "zone": "room",
+          "event_type": "refreshed"
+        }
+      ],
+      "health_changes": {},
+      "reason": "distinct_episode_refresh"
+    },
+    {
+      "at": "2026-07-18T18:01:11Z",
+      "active_changes": {},
+      "arrival_events": [],
+      "health_changes": {},
+      "reason": "same_episode_refresh_deduplicated"
+    }
+  ],
+  "expected_reason_classes": [
+    "adjacent_transition_arrival",
+    "external_output_state_ignored",
+    "distinct_episode_refresh",
+    "same_episode_refresh_deduplicated"
+  ]
+}

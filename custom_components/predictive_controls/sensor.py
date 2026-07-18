@@ -31,11 +31,11 @@ async def async_setup_entry(
         for zone in runtime.map.zones()
     )
     entities.extend(
-        ZoneArrivalSupportedProbabilitySensor(runtime, entry.entry_id, zone)
+        ZoneAuthorizationReasonSensor(runtime, entry.entry_id, zone)
         for zone in runtime.map.zones()
     )
     entities.extend(
-        ZoneReleaseSafeProbabilitySensor(runtime, entry.entry_id, zone)
+        ZoneReleaseDwellSensor(runtime, entry.entry_id, zone)
         for zone in runtime.map.zones()
     )
     async_add_entities(entities)
@@ -99,9 +99,7 @@ class AuthoritativeOccupantCountSensor(RuntimeSensor):
         return {
             "source": self.runtime.expected_occupants_entity
             or "configured_expected_occupants",
-            "requested_count": (
-                self.runtime.confidence.requested_expected_occupants
-            ),
+            "requested_count": (self.runtime.confidence.requested_expected_occupants),
         }
 
 
@@ -164,10 +162,9 @@ class DiagnosticEntryPathPlausibleZonesSensor(ZoneListSensor):
 
     @property
     def zones(self) -> tuple[str, ...]:
-        return (
-            runtime_automation_summary(self.runtime)
-            .diagnostic_entry_path_plausible_zones
-        )
+        return runtime_automation_summary(
+            self.runtime
+        ).diagnostic_entry_path_plausible_zones
 
 
 class ZoneDiagnosticConfidenceSensor(RuntimeSensor):
@@ -238,82 +235,71 @@ class ZoneOccupancyProbabilitySensor(ZoneProbabilitySensor):
 
     @property
     def native_value(self) -> float:
-        probability = self.runtime.confidence.diagnostics.joint_occupied_marginals.get(
+        probability = self.runtime.confidence.diagnostics.beliefs.get(
             self.zone,
             0.0,
         )
         return round(probability * 100, 1)
 
 
-class ZoneArrivalSupportedProbabilitySensor(ZoneProbabilitySensor):
+class ZoneAuthorizationReasonSensor(RuntimeSensor):
     def __init__(
         self, runtime: PredictiveControlsRuntime, entry_id: str, zone: str
     ) -> None:
-        super().__init__(
-            runtime,
-            entry_id,
-            zone,
-            "arrival_supported_probability",
-            "Arrival Supported Probability",
-        )
+        super().__init__(runtime, entry_id)
+        self.zone = zone
+        self._attr_name = f"{zone.replace('_', ' ').title()} Authorization Reason"
+        self._attr_unique_id = f"{entry_id}_{zone}_authorization_reason"
 
     @property
-    def available(self) -> bool:
-        return (
-            self.zone
-            in self.runtime.confidence.diagnostics.joint_arrival_supported_probabilities
-        )
-
-    @property
-    def native_value(self) -> float | None:
-        probability = self.runtime.confidence.diagnostics
-        if not self.available:
-            return None
-        return round(
-            probability.joint_arrival_supported_probabilities[self.zone] * 100,
-            1,
-        )
+    def native_value(self) -> str | None:
+        for authorization in reversed(
+            self.runtime.confidence.diagnostics.authorizations
+        ):
+            if authorization.target_zone == self.zone:
+                return authorization.reason
+        return None
 
 
-class ZoneReleaseSafeProbabilitySensor(ZoneProbabilitySensor):
+class ZoneReleaseDwellSensor(RuntimeSensor):
     def __init__(
         self, runtime: PredictiveControlsRuntime, entry_id: str, zone: str
     ) -> None:
-        super().__init__(
-            runtime,
-            entry_id,
-            zone,
-            "release_safe_probability",
-            "Release Safe Probability",
-        )
-
-    @property
-    def available(self) -> bool:
-        diagnostics = self.runtime.confidence.diagnostics
-        policy_state = diagnostics.joint_policy_states.get(self.zone)
-        return bool(
-            diagnostics.joint_release_safe_available
-            and policy_state is not None
-            and policy_state.keep_on
-            and self.zone in diagnostics.joint_release_safe_probabilities
-        )
+        super().__init__(runtime, entry_id)
+        self.zone = zone
+        self._attr_name = f"{zone.replace('_', ' ').title()} Release Dwell"
+        self._attr_unique_id = f"{entry_id}_{zone}_release_dwell"
+        self._attr_native_unit_of_measurement = "s"
 
     @property
     def native_value(self) -> float | None:
         diagnostics = self.runtime.confidence.diagnostics
-        if not self.available:
+        policy = diagnostics.policy_states.get(self.zone)
+        if policy is None or policy.pending_release_since is None:
             return None
-        return round(
-            diagnostics.joint_release_safe_probabilities[self.zone] * 100,
-            1,
+        return max(
+            0.0,
+            (policy.last_evaluated_at - policy.pending_release_since).total_seconds(),
         )
 
     @property
     def extra_state_attributes(self) -> dict[str, object]:
+        policy = self.runtime.confidence.diagnostics.policy_states.get(self.zone)
+        decision = next(
+            (
+                row
+                for row in reversed(self.runtime.confidence.diagnostics.policy_audit)
+                if row.zone == self.zone
+            ),
+            None,
+        )
         return {
-            "finalization_available": (
-                self.runtime.confidence.diagnostics.joint_release_safe_available
-            )
+            "pending_since": (
+                None
+                if policy is None or policy.pending_release_since is None
+                else policy.pending_release_since.isoformat()
+            ),
+            "required_seconds": (
+                None if decision is None else decision.release_dwell.total_seconds()
+            ),
         }
-
-

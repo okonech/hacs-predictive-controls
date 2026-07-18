@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "scenario_id": "T05-stuck-transition-degrades",
+  "requirement_ids": [
+    "REQ-EVID-005",
+    "REQ-TRAV-004",
+    "REQ-POLICY-004"
+  ],
+  "owning_phase": 5,
+  "source": {
+    "kind": "synthetic_target_contract",
+    "description": "A transition assertion exceeds its trust horizon, loses neighboring authority, reports health, and cannot remain active indefinitely.",
+    "related_tests": [
+      "tests/test_reliability.py"
+    ]
+  },
+  "topology": {
+    "zones": [
+      "entry",
+      "hallway"
+    ],
+    "nodes": {
+      "entry_motion": {
+        "zone": "entry",
+        "role": "entry",
+        "profile": "entry_boundary",
+        "entity_id": "binary_sensor.entry_motion",
+        "adjacent": [
+          "hallway_motion"
+        ]
+      },
+      "hallway_motion": {
+        "zone": "hallway",
+        "role": "transition",
+        "profile": "transition_fast",
+        "entity_id": "binary_sensor.hallway_motion",
+        "adjacent": [
+          "entry_motion"
+        ]
+      }
+    }
+  },
+  "hardware_timing": {
+    "entry_boundary": {
+      "burst_correlation_seconds": 3,
+      "stable_clear_seconds": 5,
+      "hardware_hold_seconds": 10,
+      "assertion_trust_seconds": 45,
+      "post_clear_residual": 0.05,
+      "traversal_context_seconds": 30
+    },
+    "transition_fast": {
+      "burst_correlation_seconds": 3,
+      "stable_clear_seconds": 5,
+      "hardware_hold_seconds": 15,
+      "assertion_trust_seconds": 60,
+      "post_clear_residual": 0.1,
+      "traversal_context_seconds": 45
+    }
+  },
+  "authoritative_count": 1,
+  "initial_state": {
+    "beliefs": {
+      "entry": 0.05,
+      "hallway": 0.05
+    },
+    "active": {
+      "entry": false,
+      "hallway": false
+    }
+  },
+  "inputs": [
+    {
+      "kind": "sensor",
+      "node_id": "entry_motion",
+      "state": "on",
+      "event_at": "2026-07-18T16:00:00Z",
+      "received_at": "2026-07-18T16:00:00Z",
+      "description": "Boundary evidence opens the path."
+    },
+    {
+      "kind": "sensor",
+      "node_id": "hallway_motion",
+      "state": "on",
+      "event_at": "2026-07-18T16:00:02Z",
+      "received_at": "2026-07-18T16:00:02Z",
+      "description": "The hallway acquires active state and then remains asserted."
+    },
+    {
+      "kind": "timer",
+      "event_at": "2026-07-18T16:01:02Z",
+      "received_at": "2026-07-18T16:01:02Z",
+      "description": "The hallway assertion reaches its trust horizon."
+    },
+    {
+      "kind": "timer",
+      "event_at": "2026-07-18T16:10:00Z",
+      "received_at": "2026-07-18T16:10:00Z",
+      "description": "Degraded transition belief reaches release after dwell."
+    }
+  ],
+  "expected_public_timeline": [
+    {
+      "at": "2026-07-18T16:00:02Z",
+      "active_changes": {
+        "hallway": true
+      },
+      "arrival_events": [
+        {
+          "zone": "hallway",
+          "event_type": "acquired"
+        }
+      ],
+      "health_changes": {},
+      "reason": "boundary_transition_arrival"
+    },
+    {
+      "at": "2026-07-18T16:01:02Z",
+      "active_changes": {},
+      "arrival_events": [],
+      "health_changes": {
+        "hallway": true
+      },
+      "reason": "assertion_trust_horizon_exceeded"
+    },
+    {
+      "at": "2026-07-18T16:10:00Z",
+      "active_changes": {
+        "hallway": false
+      },
+      "arrival_events": [],
+      "health_changes": {},
+      "reason": "degraded_transition_belief_release"
+    }
+  ],
+  "expected_reason_classes": [
+    "boundary_transition_arrival",
+    "assertion_trust_horizon_exceeded",
+    "degraded_transition_belief_release"
+  ]
+}

@@ -11,18 +11,14 @@ from homeassistant.helpers import selector
 
 from .const import (
     CONF_ACTIONS_YAML,
-    CONF_ACTIVATION_RISK_THRESHOLD,
     CONF_EXPECTED_OCCUPANTS,
     CONF_EXPECTED_OCCUPANTS_ENTITY,
     CONF_MAP_YAML,
     CONF_PREDICTION_THRESHOLD,
-    CONF_RELEASE_RISK_THRESHOLD,
     CONF_TRANSITION_WINDOW,
-    DEFAULT_ACTIVATION_RISK_THRESHOLD,
     DEFAULT_EXPECTED_OCCUPANTS,
     DEFAULT_EXPECTED_OCCUPANTS_ENTITY,
     DEFAULT_PREDICTION_THRESHOLD,
-    DEFAULT_RELEASE_RISK_THRESHOLD,
     DEFAULT_TRANSITION_WINDOW,
     DOMAIN,
     PRODUCT_MAX_OCCUPANTS,
@@ -50,8 +46,6 @@ def _options_schema(
     prediction_threshold: float = DEFAULT_PREDICTION_THRESHOLD,
     expected_occupants: int = DEFAULT_EXPECTED_OCCUPANTS,
     expected_occupants_entity: str = DEFAULT_EXPECTED_OCCUPANTS_ENTITY,
-    activation_risk_threshold: float = DEFAULT_ACTIVATION_RISK_THRESHOLD,
-    release_risk_threshold: float = DEFAULT_RELEASE_RISK_THRESHOLD,
 ) -> vol.Schema:
     return vol.Schema(
         {
@@ -64,14 +58,6 @@ def _options_schema(
                 CONF_PREDICTION_THRESHOLD, default=prediction_threshold
             ): float,
             vol.Required(CONF_EXPECTED_OCCUPANTS, default=expected_occupants): int,
-            vol.Required(
-                CONF_ACTIVATION_RISK_THRESHOLD,
-                default=activation_risk_threshold,
-            ): float,
-            vol.Required(
-                CONF_RELEASE_RISK_THRESHOLD,
-                default=release_risk_threshold,
-            ): float,
             vol.Optional(
                 CONF_EXPECTED_OCCUPANTS_ENTITY,
                 default=expected_occupants_entity,
@@ -88,19 +74,6 @@ def _validate_options(data: dict[str, Any]) -> None:
     threshold = float(data[CONF_PREDICTION_THRESHOLD])
     if not 0 <= threshold <= 1:
         raise ValueError("Prediction threshold must be between 0 and 1")
-    activation_threshold = float(
-        data.get(
-            CONF_ACTIVATION_RISK_THRESHOLD,
-            DEFAULT_ACTIVATION_RISK_THRESHOLD,
-        )
-    )
-    release_threshold = float(
-        data.get(CONF_RELEASE_RISK_THRESHOLD, DEFAULT_RELEASE_RISK_THRESHOLD)
-    )
-    if not 0 <= activation_threshold <= 1:
-        raise ValueError("Activation risk threshold must be between 0 and 1")
-    if not 0 <= release_threshold <= 1:
-        raise ValueError("Release risk threshold must be between 0 and 1")
     expected_occupants = int(data[CONF_EXPECTED_OCCUPANTS])
     if not 0 <= expected_occupants <= PRODUCT_MAX_OCCUPANTS:
         raise ValueError("Expected occupants must be between zero and two")
@@ -135,8 +108,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_PREDICTION_THRESHOLD: DEFAULT_PREDICTION_THRESHOLD,
                 CONF_EXPECTED_OCCUPANTS: DEFAULT_EXPECTED_OCCUPANTS,
                 CONF_EXPECTED_OCCUPANTS_ENTITY: DEFAULT_EXPECTED_OCCUPANTS_ENTITY,
-                CONF_ACTIVATION_RISK_THRESHOLD: DEFAULT_ACTIVATION_RISK_THRESHOLD,
-                CONF_RELEASE_RISK_THRESHOLD: DEFAULT_RELEASE_RISK_THRESHOLD,
             },
         )
 
@@ -176,18 +147,6 @@ class OptionsFlow(config_entries.OptionsFlow):
                     expected_occupants_entity=str(
                         user_input.get(CONF_EXPECTED_OCCUPANTS_ENTITY, "")
                     ),
-                    activation_risk_threshold=float(
-                        user_input.get(
-                            CONF_ACTIVATION_RISK_THRESHOLD,
-                            DEFAULT_ACTIVATION_RISK_THRESHOLD,
-                        )
-                    ),
-                    release_risk_threshold=float(
-                        user_input.get(
-                            CONF_RELEASE_RISK_THRESHOLD,
-                            DEFAULT_RELEASE_RISK_THRESHOLD,
-                        )
-                    ),
                 ),
                 errors=errors,
             )
@@ -209,14 +168,6 @@ class OptionsFlow(config_entries.OptionsFlow):
                 expected_occupants_entity=options.get(
                     CONF_EXPECTED_OCCUPANTS_ENTITY,
                     DEFAULT_EXPECTED_OCCUPANTS_ENTITY,
-                ),
-                activation_risk_threshold=options.get(
-                    CONF_ACTIVATION_RISK_THRESHOLD,
-                    DEFAULT_ACTIVATION_RISK_THRESHOLD,
-                ),
-                release_risk_threshold=options.get(
-                    CONF_RELEASE_RISK_THRESHOLD,
-                    DEFAULT_RELEASE_RISK_THRESHOLD,
                 ),
             ),
         )

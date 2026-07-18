@@ -154,33 +154,21 @@ function formatOccupiedPeak(value) {
     : "Occupied confidence unavailable";
 }
 
-function policyJoint(status) {
-  return status?.occupancy_diagnostics?.joint || null;
+function policyModel(status) {
+  const diagnostics = status?.occupancy_diagnostics;
+  return diagnostics?.model === "zone_belief" ? diagnostics : null;
 }
 
 function auditTransition(entry) {
-  if (Object.prototype.hasOwnProperty.call(entry || {}, "prior_active")) {
-    return [Boolean(entry.prior_active), Boolean(entry.resulting_active)];
-  }
-  return [
-    Boolean(entry?.previous?.keep_on),
-    Boolean(entry?.current?.keep_on),
-  ];
+  return [Boolean(entry?.active_before), Boolean(entry?.active_after)];
 }
 
 function auditKind(entry) {
   const [priorActive, resultingActive] = auditTransition(entry);
   if (priorActive !== resultingActive) return "edges";
-  if (entry?.decision?.accepted === false) return "rejected";
-  if (
-    entry?.decision?.action === "observe"
-    && entry?.decision?.reason_code === "periodic_sample"
-  ) return "snapshots";
+  if (entry?.reason === "acquisition_unauthorized") return "rejected";
+  if (!entry?.event_kind) return "observations";
   return "other";
-}
-
-function auditHasExactContext(entry) {
-  return entry?.context_complete === true || Boolean(entry?.context);
 }
 
 function formatPercent(value) {
@@ -198,22 +186,12 @@ function formatBytes(value) {
 }
 
 function decisionExplanation(decision) {
-  const gates = decision?.gate_values || {};
-  const probability = formatPercent(gates.probability);
-  const threshold = formatPercent(gates.threshold);
-  const explanations = {
-    arrival_supported: `Arrival support reached ${probability} against the ${threshold} threshold`,
-    arrival_supported_not_met: `Arrival support stayed below the ${threshold} threshold at ${probability}`,
-    release_safe: `Finalized release safety reached ${probability} against the ${threshold} threshold`,
-    release_safe_not_met: gates.available === false
-      ? "Finalized release safety is not available yet"
-      : `Release safety stayed below the ${threshold} threshold at ${probability}`,
-    authoritative_away: "Authoritative away state cleared ownership",
-    already_active: `Ownership was already active with ${probability} arrival support`,
-    periodic_sample: "Periodic exact snapshot",
-  };
-  return explanations[decision?.reason_code]
-    || labelFromValue(decision?.reason_code || decision?.action || "policy observation");
+  const probability = formatPercent(decision?.belief_after);
+  const reason = labelFromValue(decision?.reason || "policy observation");
+  const traversal = decision?.traversal_reason
+    ? ` via ${labelFromValue(decision.traversal_reason)}`
+    : "";
+  return `${reason} at ${probability}${traversal}`;
 }
 
 function defaultBehaviorForRole(role) {
@@ -788,78 +766,51 @@ class PredictiveControlsPanel extends HTMLElement {
 
   renderOccupancyDiagnostics() {
     const diagnostics = this._status?.occupancy_diagnostics;
-    const tracks = diagnostics?.tracks || [];
     const expected = Number(diagnostics?.expected_occupants || this._status?.expected_occupants || 0);
     if (!diagnostics) {
       return `
         <section class="track-section">
-          <div class="section-head">
-            <div class="section-title"><h3>Anonymous Tracks</h3><small>Current Posterior</small></div>
-            <strong>0 localized</strong>
-          </div>
-          <p class="empty-state">No occupants are currently localized.</p>
+          <div class="section-head"><div class="section-title"><h3>Zone Beliefs</h3><small>Current filtered state</small></div></div>
+          <p class="empty-state">No zone belief is available yet.</p>
         </section>
       `;
     }
-    const joins = diagnostics.inferred_join_slots || [];
-    const departures = diagnostics.inferred_departures || [];
+    const beliefs = Object.entries(diagnostics.beliefs || {}).sort(([left], [right]) =>
+      this.zoneLabel(left).localeCompare(this.zoneLabel(right)),
+    );
+    const active = Object.values(diagnostics.policy || {}).filter((state) => state?.active).length;
+    const tokens = diagnostics.traversal_frontier || [];
+    const warnings = diagnostics.health_warnings || [];
     return `
       <section class="track-section">
         <div class="section-head">
-          <div class="section-title"><h3>Anonymous Tracks</h3><small>Current Posterior</small></div>
-          <strong>${tracks.length}${expected ? ` of ${expected}` : ""} localized</strong>
+          <div class="section-title"><h3>Zone Beliefs</h3><small>Independent filtered probabilities</small></div>
+          <strong>${beliefs.length} configured</strong>
         </div>
         <div class="track-list">
-          ${tracks.length
-        ? tracks.map((track) => this.renderTrackDiagnostic(track)).join("")
-        : `<p class="empty-state">No occupants are currently localized.</p>`}
+          ${beliefs.length ? beliefs.map(([zone, belief]) => `
+            <article class="track-row">
+              <div><strong>${escapeHtml(this.zoneLabel(zone))}</strong><span>${diagnostics.policy?.[zone]?.active ? "Active" : "Inactive"}</span></div>
+              <div class="track-state"><strong>${escapeHtml(formatPercent(belief))}</strong><span>${escapeHtml(diagnostics.policy?.[zone]?.profile || "unprofiled")}</span></div>
+            </article>
+          `).join("") : `<p class="empty-state">No zone belief is available yet.</p>`}
         </div>
       </section>
       <section class="diagnostics-panel">
         <div class="diagnostics-strip">
           <span>Expected ${expected || "auto"}</span>
-          <span>${tracks.length} ${tracks.length === 1 ? "track" : "tracks"}</span>
-          <span>${(diagnostics.protected_corridor || []).length} corridor zones</span>
-          <span>${joins.length} joined</span>
-          <span>${departures.length} departed</span>
-        </div>
-        <div class="diagnostics-list">
-          ${joins.map((slot) => `<p><strong>Joined</strong><span>${escapeHtml(labelFromValue(slot.zone))} from ${escapeHtml(labelFromValue(slot.source_zone))}</span></p>`).join("")}
-          ${departures.map((departure) => `<p><strong>Departed</strong><span>${escapeHtml(labelFromValue(departure.zone))} via ${escapeHtml(labelFromValue(departure.via_zone))} toward ${escapeHtml(labelFromValue(departure.destination_zone))}</span></p>`).join("")}
+          <span>${active} active ${active === 1 ? "zone" : "zones"}</span>
+          <span>${tokens.length} traversal ${tokens.length === 1 ? "token" : "tokens"}</span>
+          <span>${warnings.length} health ${warnings.length === 1 ? "warning" : "warnings"}</span>
         </div>
       </section>
     `;
   }
 
-  renderTrackDiagnostic(track) {
-    const entities = (track.source_entities || []).join(", ");
-    return `
-      <article class="track-row">
-        <div>
-          <strong>${escapeHtml(track.track_id)}</strong>
-          <span>${escapeHtml(labelFromValue(track.zone))}</span>
-        </div>
-        <div class="track-state">
-          <strong>${Math.round(Number(track.confidence || 0) * 100)}%</strong>
-          <span>${track.active ? "Asserted" : "Inferred"}</span>
-        </div>
-        <small>${entities ? escapeHtml(entities) : "No asserted source"}</small>
-      </article>
-    `;
-  }
-
   renderReliability() {
-    const reliability = this._status?.occupancy_diagnostics?.reliability || {};
-    const captures = reliability.rejected_motion_captures || [];
-    const flaps = reliability.low_confidence_flaps || [];
-    const coverage = reliability.coverage || {};
-    const criteria = reliability.criteria || {};
-    const rejectedCount = captures.reduce((total, item) => total + Number(item.capture_count || 0), 0);
-    const pulseCount = flaps.reduce((total, item) => total + Number(item.pulse_count || 0), 0);
-    const sources = new Set([
-      ...captures.map((item) => item.entity_id),
-      ...flaps.map((item) => item.entity_id),
-    ]).size;
+    const diagnostics = this._status?.occupancy_diagnostics || {};
+    const episodes = diagnostics.episodes || [];
+    const warnings = episodes.filter((item) => item.health_warning);
     return `
       <main class="reliability-layout">
         <section class="occupancy-toolbar">
@@ -871,32 +822,25 @@ class PredictiveControlsPanel extends HTMLElement {
         </section>
         <section class="reliability-summary">
           <div class="reliability-metrics">
-            <div><strong>${rejectedCount}</strong><span>Rejected captures</span></div>
-            <div><strong>${pulseCount}</strong><span>Low-confidence pulses</span></div>
-            <div><strong>${sources}</strong><span>Sources for review</span></div>
+            <div><strong>${episodes.length}</strong><span>Physical nodes</span></div>
+            <div><strong>${warnings.length}</strong><span>Health warnings</span></div>
+            <div><strong>${Number(diagnostics.processing?.token_count || 0)}</strong><span>Traversal tokens</span></div>
           </div>
-          <p>${Number(coverage.observed_event_count || 0)} observed events &middot; ${escapeHtml(formatTimestamp(coverage.oldest_event_at))} to ${escapeHtml(formatTimestamp(coverage.newest_event_at))} &middot; ${Number(criteria.repeat_minimum || 2)}+ occurrences &middot; pulses up to ${Number(criteria.flap_window_seconds || 30)}s</p>
+          <p>Finite assertion trust makes stuck or unavailable physical sensors directly observable.</p>
         </section>
         <section class="reliability-section">
           <div class="section-head">
-            <h3>Repeated Rejected Motion</h3>
-            <small>${captures.length} ${captures.length === 1 ? "source" : "sources"}</small>
+            <h3>Sensor Health</h3>
+            <small>${warnings.length} ${warnings.length === 1 ? "warning" : "warnings"}</small>
           </div>
           <div class="reliability-list">
-            ${captures.length
-        ? captures.map((item) => this.renderRejectedCapture(item)).join("")
-        : `<p class="empty-state">No repeated rejected motion in retained coverage.</p>`}
-          </div>
-        </section>
-        <section class="reliability-section">
-          <div class="section-head">
-            <h3>Low-Confidence Flaps</h3>
-            <small>${flaps.length} ${flaps.length === 1 ? "source" : "sources"}</small>
-          </div>
-          <div class="reliability-list">
-            ${flaps.length
-        ? flaps.map((item) => this.renderLowConfidenceFlap(item)).join("")
-        : `<p class="empty-state">No repeated low-confidence flaps in retained coverage.</p>`}
+            ${warnings.length ? warnings.map((item) => `
+              <article class="reliability-row">
+                <div class="reliability-row-head"><strong>${escapeHtml(item.node_id)}</strong><span>${escapeHtml(this.zoneLabel(item.zone))}</span></div>
+                <p>${escapeHtml(labelFromValue(item.status))} &middot; ${escapeHtml(item.profile)}</p>
+                <small>Last event ${escapeHtml(formatTimestamp(item.last_event_at))}</small>
+              </article>
+            `).join("") : `<p class="empty-state">No sensor health warnings.</p>`}
           </div>
         </section>
       </main>
@@ -904,10 +848,10 @@ class PredictiveControlsPanel extends HTMLElement {
   }
 
   renderActivity() {
-    const joint = policyJoint(this._status);
-    const policy = joint?.policy || {};
-    const audit = Array.isArray(joint?.policy_audit) ? joint.policy_audit : [];
-    const activeCount = Object.values(policy).filter((state) => state?.keep_on).length;
+    const model = policyModel(this._status);
+    const policy = model?.policy || {};
+    const audit = Array.isArray(model?.policy_audit) ? model.policy_audit : [];
+    const activeCount = Object.values(policy).filter((state) => state?.active).length;
     this._activityFilter = this._activityFilter || "edges";
     this._auditLimit = this._auditLimit || 50;
     return `
@@ -919,46 +863,45 @@ class PredictiveControlsPanel extends HTMLElement {
           </div>
           <button data-action="refresh-status">Refresh</button>
         </section>
-        ${joint ? `
-          ${this.renderPolicyOwnership(policy, joint, activeCount)}
-          ${this.renderAuditRetention(joint.policy_audit_retention || {}, activeCount)}
+        ${model ? `
+          ${this.renderPolicyOwnership(policy, model, activeCount)}
+          ${this.renderAuditRetention(audit, activeCount)}
           ${this.renderPolicyAudit(audit)}
         ` : `
           <section class="activity-empty">
-            <h3>Waiting for exact activity</h3>
-            <p>Exact policy activity will appear after the first observation.</p>
+            <h3>Waiting for zone-belief activity</h3>
+            <p>Policy activity will appear after the first observation.</p>
           </section>
         `}
       </main>
     `;
   }
 
-  renderPolicyOwnership(policy, joint, activeCount) {
+  renderPolicyOwnership(policy, model, activeCount) {
     const entries = Object.entries(policy).sort(([left], [right]) =>
       this.zoneLabel(left).localeCompare(this.zoneLabel(right)),
     );
-    const releaseProbabilities = joint?.release_safe?.probabilities || {};
-    const arrivalProbabilities = joint?.arrival_supported_probabilities || {};
+    const beliefs = model?.beliefs || {};
     return `
       <section class="ownership-section">
         <div class="section-head">
           <div class="section-title">
             <h3>Current Ownership</h3>
-            <small>Durable production state</small>
+            <small>Hysteretic zone-belief projection</small>
           </div>
           <strong>${activeCount} active ${activeCount === 1 ? "zone" : "zones"}</strong>
         </div>
         <div class="ownership-grid">
           ${entries.length ? entries.map(([zone, state]) => `
-            <article class="ownership-row ${state.keep_on ? "is-active" : ""}">
+            <article class="ownership-row ${state.active ? "is-active" : ""}">
               <div class="ownership-name">
                 <span class="state-indicator" aria-hidden="true"></span>
-                <div><strong>${escapeHtml(this.zoneLabel(zone))}</strong><small>${state.keep_on ? "Active ownership" : "Inactive"}</small></div>
+                <div><strong>${escapeHtml(this.zoneLabel(zone))}</strong><small>${state.active ? "Active" : "Inactive"}</small></div>
               </div>
-              <p>${escapeHtml(state.reason || (state.keep_on ? "Policy ownership is active" : "No active policy ownership"))}</p>
+              <p>${state.pending_release_since ? `Release dwell since ${escapeHtml(formatTimestamp(state.pending_release_since))}` : "No release dwell pending"}</p>
               <div class="ownership-probabilities">
-                <span>Arrival ${escapeHtml(formatPercent(arrivalProbabilities[zone]))}</span>
-                <span>Release safe ${escapeHtml(formatPercent(releaseProbabilities[zone]))}</span>
+                <span>Belief ${escapeHtml(formatPercent(beliefs[zone]))}</span>
+                <span>${escapeHtml(state.profile || "unprofiled")}</span>
               </div>
             </article>
           `).join("") : `<p class="empty-state">No zone ownership state is available yet.</p>`}
@@ -967,13 +910,14 @@ class PredictiveControlsPanel extends HTMLElement {
     `;
   }
 
-  renderAuditRetention(retention, activeCount) {
+  renderAuditRetention(audit, activeCount) {
+    const oldest = audit.length ? audit[0].event_at : null;
+    const newest = audit.length ? audit[audit.length - 1].event_at : null;
     return `
       <section class="activity-metrics">
         <div><strong>${activeCount}</strong><span>Active now</span></div>
-        <div><strong>${Number(retention.entry_count || 0).toLocaleString()}</strong><span>Retained decisions</span></div>
-        <div><strong>${escapeHtml(formatBytes(retention.context_compressed_bytes))}</strong><span>Exact context</span></div>
-        <p>${Number(retention.retention_hours || 12)} hour window &middot; ${escapeHtml(formatTimestamp(retention.oldest_decision_at))} to ${escapeHtml(formatTimestamp(retention.newest_decision_at))}</p>
+        <div><strong>${audit.length.toLocaleString()}</strong><span>Retained decisions</span></div>
+        <p>Bounded audit &middot; ${escapeHtml(formatTimestamp(oldest))} to ${escapeHtml(formatTimestamp(newest))}</p>
       </section>
     `;
   }
@@ -981,7 +925,7 @@ class PredictiveControlsPanel extends HTMLElement {
   renderPolicyAudit(audit) {
     const filter = this._activityFilter;
     const ordered = [...audit].sort(
-      (left, right) => new Date(right.decision_at || 0) - new Date(left.decision_at || 0),
+      (left, right) => new Date(right.event_at || 0) - new Date(left.event_at || 0),
     );
     const filtered = filter === "all"
       ? ordered
@@ -990,7 +934,7 @@ class PredictiveControlsPanel extends HTMLElement {
     const labels = {
       edges: "Production edges",
       rejected: "Rejected decisions",
-      snapshots: "Exact snapshots",
+      observations: "Policy observations",
       all: "All retained",
     };
     return `
@@ -1010,28 +954,25 @@ class PredictiveControlsPanel extends HTMLElement {
   }
 
   renderAuditEntry(entry) {
-    const decision = entry?.decision || {};
     const [priorActive, resultingActive] = auditTransition(entry);
     const kind = auditKind(entry);
     const title = kind === "edges"
       ? (resultingActive ? "Turned on" : "Turned off")
       : kind === "rejected"
         ? "Decision rejected"
-        : kind === "snapshots"
-          ? "Periodic exact snapshot"
-          : labelFromValue(decision.action || "Observation");
-    const evidenceCount = Array.isArray(decision.evidence_ids) ? decision.evidence_ids.length : 0;
+        : "Policy observation";
+    const evidenceCount = Array.isArray(entry.evidence_ids) ? entry.evidence_ids.length : 0;
     return `
       <article class="audit-row kind-${kind}">
         <div class="audit-marker" aria-hidden="true"></div>
         <div class="audit-content">
           <div class="audit-row-head">
-            <div><strong>${escapeHtml(title)}</strong><span>${escapeHtml(this.zoneLabel(decision.zone))}</span></div>
-            <time>${escapeHtml(formatTimestamp(entry.decision_at))}</time>
+            <div><strong>${escapeHtml(title)}</strong><span>${escapeHtml(this.zoneLabel(entry.zone))}</span></div>
+            <time>${escapeHtml(formatTimestamp(entry.event_at))}</time>
           </div>
-          <p>${escapeHtml(decisionExplanation(decision))}</p>
+          <p>${escapeHtml(decisionExplanation(entry))}</p>
           <div class="audit-meta">
-            <span class="context-badge ${auditHasExactContext(entry) ? "exact" : "lightweight"}">${auditHasExactContext(entry) ? "Exact context" : "Lightweight decision"}</span>
+            <span class="context-badge lightweight">Zone-local decision</span>
             ${kind === "edges" ? `<span>${priorActive ? "On" : "Off"} to ${resultingActive ? "On" : "Off"}</span>` : ""}
             ${evidenceCount ? `<span>${evidenceCount} evidence ${evidenceCount === 1 ? "item" : "items"}</span>` : ""}
           </div>
@@ -1307,8 +1248,6 @@ class PredictiveControlsPanel extends HTMLElement {
       <main class="single-panel settings">
         <label>Transition window seconds<input data-setting="transition_window_seconds" type="number" min="1" value="${this._config.transition_window_seconds}" /></label>
         <label>Prediction threshold<input data-setting="prediction_threshold" type="number" min="0" max="1" step="0.01" value="${this._config.prediction_threshold}" /></label>
-        <label>Activation risk threshold<input data-setting="activation_risk_threshold" type="number" min="0" max="1" step="0.01" value="${this._config.activation_risk_threshold ?? 0.8}" /></label>
-        <label>Release risk threshold<input data-setting="release_risk_threshold" type="number" min="0" max="1" step="0.01" value="${this._config.release_risk_threshold ?? 0.95}" /></label>
         <label>Expected occupants<input data-setting="expected_occupants" type="number" min="0" max="2" step="1" value="${this._config.expected_occupants || 0}" /></label>
         <label>Expected occupants entity<input data-setting="expected_occupants_entity" type="text" value="${escapeHtml(this._config.expected_occupants_entity || "")}" /></label>
         <section class="maintenance-section">
@@ -1536,8 +1475,6 @@ class PredictiveControlsPanel extends HTMLElement {
         actions_yaml: this._config.actions_yaml,
         transition_window_seconds: Number(this._config.transition_window_seconds),
         prediction_threshold: Number(this._config.prediction_threshold),
-        activation_risk_threshold: Number(this._config.activation_risk_threshold ?? 0.8),
-        release_risk_threshold: Number(this._config.release_risk_threshold ?? 0.95),
         expected_occupants: Number(this._config.expected_occupants || 0),
         expected_occupants_entity: this._config.expected_occupants_entity || "",
       });
@@ -1660,7 +1597,7 @@ class PredictiveControlsPanel extends HTMLElement {
       .audit-marker { width:10px; height:10px; margin-top:5px; border-radius:50%; background:var(--disabled-text-color); }
       .kind-edges .audit-marker { background:var(--primary-color); }
       .kind-rejected .audit-marker { background:var(--warning-color, #f2a900); }
-      .kind-snapshots .audit-marker { background:var(--info-color, #4797ff); }
+      .kind-observations .audit-marker { background:var(--info-color, #4797ff); }
       .audit-content { min-width:0; }
       .audit-row-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
       .audit-row-head div { min-width:0; display:flex; flex-wrap:wrap; gap:5px 10px; }
@@ -1669,7 +1606,6 @@ class PredictiveControlsPanel extends HTMLElement {
       .audit-content p { margin:7px 0 9px; }
       .audit-meta { display:flex; flex-wrap:wrap; gap:6px 12px; font-size:12px; }
       .context-badge { border:1px solid var(--divider-color); border-radius:999px; padding:2px 7px; }
-      .context-badge.exact { border-color:var(--info-color, #4797ff); color:var(--primary-text-color); }
       .show-more { width:100%; margin-top:10px; }
       .activity-empty h3 { margin-top:0; }
       .floor-section, .transition-section { overflow:auto; }

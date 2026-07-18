@@ -4,23 +4,38 @@
 
 ### Changed
 
-- Added an Activity workspace that shows current zone ownership and concise
-	policy explanations, with separate production-edge, rejected-decision, exact
-	snapshot, and complete-history filters. Retained activity renders newest first
-	in bounded 50-row pages and never expands compressed exact contexts in the
-	browser.
-- Removed the `0.2.0` compatibility entities for per-zone `keep_on`,
-	`activation_plausible`, and `prelight_plausible`, whole-home `home_keep_on`,
-	and the aggregate activation/keep-on zone lists. Config-entry setup deletes
-	existing registry rows for those exact retired IDs.
+- Replaced exact whole-home occupant assignment and support certificates with
+  graph-local per-zone beliefs, finite physical episodes, anonymous traversal
+  tokens, and probability-driven Schmitt policy hysteresis.
+- Made the zone-belief engine the sole runtime, entity, WebSocket, diagnostics,
+  automation-summary, and persistence authority. Store schema 7 retains a
+  read-only schema-6 migration seed without executing legacy inference.
+- Reworked the Activity and occupancy workspaces around target beliefs, policy
+  edges, traversal authorization, prediction leases, and sensor-health warnings.
+- Retained optional prediction as isolated 30-second graph-adjacent leases using
+  bounded anonymous Markov counts. Prediction cancels on newer target evidence
+  or count zero and never feeds occupancy or normal `active`.
+- Replaced the performance artifact with the 100-event target benchmark and
+  bounded token, audit, persistence, and callback-latency gates.
+
+### Removed
+
+- Removed the exact inference package, fixed-lag association, factor chain,
+  global assignment/support state, legacy policy/route/dwell layers, shadow
+  comparator, and their internal-only tests.
+- Removed retired compatibility diagnostics/entities and unused historical panel
+  bundles. Stable `active`, `prelight`, `home_active`, problem, and arrival event
+  IDs remain on the public automation surface.
 
 ### Fixed
 
-- Allowed a currently asserted sustained room source to support a later
-	interval-censored arrival through an open transient gate, while preserving the
-	finite source interval for ordinary direct movement. This prevents an
-	unrelated interleaved endpoint from suppressing a coherent arrival without
-	letting old room assertions authorize late direct moves.
+- Made decay, threshold crossing, release dwell, traversal expiry, stuck-sensor
+  degradation, and restore advancement independent of timer callback cadence.
+- Preserved atomic state on rejected restores, including malformed prediction
+  state, and cancel prediction leases when newer physical target evidence
+  contradicts or resolves them.
+- Corrected schema-6 seeding, untouched-zone restore, traversal-token reuse,
+  outward context, stale input, unavailable sensor, and manual-refresh behavior.
 
 ## 0.2.0 release candidate
 

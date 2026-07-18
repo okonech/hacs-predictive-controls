@@ -5,11 +5,11 @@ from typing import Any
 from homeassistant.helpers.storage import Store
 
 _DEVELOPMENT_EXACT_SCHEMA = "prototype-augmented-v5"
-_TARGET_EXACT_SCHEMA = "exact-augmented-v6"
+_LEGACY_EXACT_SCHEMA = "exact-augmented-v6"
 
 
 class PredictiveControlsStore(Store):
-    """Persist inference state across supported Predictive Controls schemas."""
+    """Persist zone-belief state across the schema-6 cutover."""
 
     async def _async_migrate_func(
         self,
@@ -18,11 +18,11 @@ class PredictiveControlsStore(Store):
         old_data: dict[str, Any],
     ) -> dict[str, Any]:
         del old_minor_version
-        if old_major_version not in {1, 2, 3, 4, 5}:
+        if old_major_version not in {1, 2, 3, 4, 5, 6}:
             raise NotImplementedError
         if (
             old_major_version == 5
             and old_data.get("schema") == _DEVELOPMENT_EXACT_SCHEMA
         ):
-            return {**old_data, "schema": _TARGET_EXACT_SCHEMA}
+            return {**old_data, "schema": _LEGACY_EXACT_SCHEMA}
         return old_data

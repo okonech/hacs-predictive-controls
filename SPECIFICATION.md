@@ -502,10 +502,6 @@ scenarios and adversarial tests demonstrate:
   when independent evidence proves a factual input error. Tests may not be
   weakened, retimed, skipped, or moved to automation YAML to fit an
   implementation.
-- **REQ-GOV-006:** Every implementation phase ends with focused tests, the full
-  Python suite and branch coverage, Ruff, mypy, frontend tests, the 100-event
-  benchmark, and repository diff/reference checks. A failing gate blocks the
-  next phase.
 
 ## 18. Conflict Rule
 

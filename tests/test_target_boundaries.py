@@ -1,0 +1,259 @@
+from __future__ import annotations
+
+from copy import deepcopy
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+
+import pytest
+
+from custom_components.predictive_controls.automation_summary import (
+    _explanation,
+    _status,
+    _top_prediction,
+)
+from custom_components.predictive_controls.occupancy_settings import (
+    authoritative_occupants_from_state_value,
+)
+from custom_components.predictive_controls.occupancy_tracker import (
+    OccupancyTracker,
+    TrackerConfig,
+    _as_utc,
+    _status_for_probability,
+)
+from custom_components.predictive_controls.zone_model.engine import ZoneModelEngine
+from custom_components.predictive_controls.zone_model.persistence import (
+    target_map_fingerprint,
+)
+from custom_components.predictive_controls.zone_model.types import (
+    CountInput,
+    SensorInput,
+)
+from tests.test_confidence import event
+from tests.test_zone_model_engine import target_map
+
+NOW = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
+
+
+def test_summary_and_facade_scalar_boundaries() -> None:
+    assert _as_utc(datetime(2026, 7, 18, 12, 0)).tzinfo is UTC
+    assert _top_prediction({"a": 0.4, "b": 0.4}) == ("b", 0.4)
+    assert _explanation(("a", "b", "c", "d"), "next_zone", 0.75) == (
+        "Probably occupied: A, B, C +1 more. Next likely zone: Next Zone (75%)."
+    )
+    assert [_status(value) for value in (0.9, 0.7, 0.4, 0.1, 0.0)] == [
+        "confirmed",
+        "probable",
+        "possible",
+        "suspect",
+        "rejected",
+    ]
+    assert [_status_for_probability(value) for value in (0.9, 0.7, 0.4, 0.1, 0.0)] == [
+        "confirmed",
+        "probable",
+        "possible",
+        "suspect",
+        "rejected",
+    ]
+    assert authoritative_occupants_from_state_value(None) is None
+
+
+def test_tracker_validation_bootstrap_advancement_and_transient_expiry() -> None:
+    with pytest.raises(ValueError, match="non-negative"):
+        OccupancyTracker(target_map(), TrackerConfig(-1))
+    tracker = OccupancyTracker(target_map(), TrackerConfig(1))
+    with pytest.raises(ValueError, match="non-negative"):
+        tracker.reconcile_expected_occupants(-1, NOW)
+    with pytest.raises(ValueError, match="above two"):
+        tracker.reject_unsupported_count(2, NOW)
+
+    tracker.bootstrap_state(
+        (event("hall", "hall", "off", NOW),),
+        cold_start=True,
+    )
+    tracker.bootstrap_state((), cold_start=False)
+    tracker.bootstrap_state(
+        (event("hall", "hall", "off", NOW + timedelta(seconds=1)),),
+        cold_start=False,
+    )
+    assert tracker.expire_transient_state(NOW + timedelta(seconds=2)) is False
+    tracker.observe(event("hall", "hall", "on", NOW + timedelta(seconds=3)))
+    assert tracker.expire_transient_state(NOW + timedelta(minutes=2)) is True
+
+
+def test_tracker_empty_store_schema6_migration_and_prediction_restore_failure() -> None:
+    empty = OccupancyTracker(target_map(), TrackerConfig(1))
+    assert empty.occupancy_store_data(NOW)["schema"] == "zone-belief-v1"
+    tracker = OccupancyTracker(target_map(), TrackerConfig(1))
+    schema6 = {
+        "schema": "exact-augmented-v6",
+        "map_fingerprint": target_map_fingerprint(target_map()),
+        "occupants": 1,
+        "policy": {
+            "states": {
+                "hall": {"keep_on": False},
+                "room": {"keep_on": True},
+            }
+        },
+    }
+    assert tracker.restore_state(schema6, NOW)
+    assert tracker.diagnostics.restore_status == "schema6_pending"
+    tracker.bootstrap_state(
+        (
+            event("hall", "hall", "off", NOW),
+            event("room", "room", "on", NOW),
+        ),
+        cold_start=False,
+    )
+    assert tracker.diagnostics.restore_status == "schema6_migrated"
+
+    payload = tracker.occupancy_store_data(NOW)
+    invalid_prediction = deepcopy(payload)
+    invalid_prediction["prediction"] = []
+    rejected = OccupancyTracker(target_map(), TrackerConfig(1))
+    rejected.observe(event("hall", "hall", "on", NOW))
+    before = rejected.diagnostics.beliefs
+    assert not rejected.restore_state(invalid_prediction, NOW)
+    assert rejected.diagnostics.restore_status == "rejected"
+    assert rejected.diagnostics.beliefs == before
+
+    without_prediction = deepcopy(payload)
+    without_prediction.pop("prediction")
+    assert OccupancyTracker(target_map(), TrackerConfig(1)).restore_state(
+        without_prediction, NOW
+    )
+
+
+def test_tracker_refresh_builds_timer_updates_and_recent_event_bound() -> None:
+    tracker = OccupancyTracker(target_map(), TrackerConfig(1))
+    for index in range(26):
+        state = "on" if index % 2 == 0 else "off"
+        tracker.observe(
+            event("hall", "hall", state, NOW + timedelta(seconds=index * 10))
+        )
+    assert len(tracker.recent_events) == 25
+    updates = tracker.refresh_active(NOW + timedelta(hours=1))
+    assert updates
+    assert all(update.event.entity_id == "timer.zone_model" for update in updates)
+    assert tracker.state_for_zone("missing").zone == "missing"
+    assert tracker.refresh_active(NOW + timedelta(hours=1)) == ()
+
+
+def test_tracker_prebootstrap_reason_and_snapshot_sort_guards() -> None:
+    tracker = OccupancyTracker(target_map(), TrackerConfig(1))
+    assert tracker._policy_reason("room") == "no evidence"  # noqa: SLF001
+    snapshot = ZoneModelEngine(target_map(), 1, NOW).snapshot
+    with pytest.raises(ValueError, match="unique and sorted"):
+        replace(snapshot, belief_states=tuple(reversed(snapshot.belief_states)))
+    with pytest.raises(ValueError, match="unique and sorted"):
+        replace(snapshot, current_token_ids=("same", "same"))
+
+
+def test_engine_validation_stale_count_and_unavailable_paths() -> None:
+    with pytest.raises(ValueError, match="active seed"):
+        ZoneModelEngine(target_map(), 1, NOW, active_seed={"missing": True})
+    with pytest.raises(ValueError, match="active seed"):
+        ZoneModelEngine(target_map(), 1, NOW, active_seed={"room": 1})  # type: ignore[dict-item]
+
+    engine = ZoneModelEngine(target_map(), 1, NOW)
+    with pytest.raises(ValueError, match="share one frontier"):
+        engine.bootstrap_sensor_snapshot(
+            (SensorInput("binary_sensor.hall", "off", NOW + timedelta(seconds=1)),),
+            NOW,
+        )
+    unavailable = engine.observe(SensorInput("binary_sensor.hall", "unavailable", NOW))
+    episode_by_node = {
+        state.node_id: state for state in unavailable.snapshot.episode_states
+    }
+    assert episode_by_node["hall"].alias_states == (
+        ("binary_sensor.hall", "unavailable"),
+    )
+    stale_count = engine.observe_count(
+        CountInput("stale", 1, True, NOW - timedelta(seconds=1))
+    )
+    assert stale_count.disposition == "stale"
+    stale_advance = engine.advance(NOW - timedelta(seconds=1))
+    assert stale_advance.disposition == "stale"
+    with pytest.raises(ValueError, match="cannot precede"):
+        engine.advance(
+            NOW + timedelta(seconds=2),
+            processing_at=NOW + timedelta(seconds=1),
+        )
+
+
+def test_engine_restore_rejects_time_zone_and_audit_incompatibility() -> None:
+    engine = ZoneModelEngine(target_map(), 1, NOW)
+    engine.observe(SensorInput("binary_sensor.hall", "on", NOW))
+    snapshot = engine.snapshot
+    with pytest.raises(ValueError, match="predates"):
+        ZoneModelEngine.restore(
+            target_map(), snapshot, engine.audit_rows, NOW - timedelta(seconds=1)
+        )
+    with pytest.raises(ValueError, match="zones"):
+        ZoneModelEngine.restore(
+            target_map(),
+            replace(snapshot, belief_states=snapshot.belief_states[:-1]),
+            engine.audit_rows,
+            NOW,
+        )
+    incompatible = replace(
+        engine.audit_rows[0],
+        zone="missing",
+    )
+    with pytest.raises(ValueError, match="audit row"):
+        ZoneModelEngine.restore(target_map(), snapshot, (incompatible,), NOW)
+    future = replace(
+        engine.audit_rows[0],
+        event_at=NOW + timedelta(seconds=1),
+        processing_at=NOW + timedelta(seconds=1),
+    )
+    with pytest.raises(ValueError, match="audit row"):
+        ZoneModelEngine.restore(target_map(), snapshot, (future,), NOW)
+
+
+def test_engine_duplicate_count_and_pending_episode_effects() -> None:
+    engine = ZoneModelEngine(target_map(), 1, NOW)
+    engine.observe(SensorInput("binary_sensor.hall", "on", NOW))
+    engine.observe(SensorInput("binary_sensor.hall", "off", NOW + timedelta(seconds=1)))
+    count_engine = ZoneModelEngine(target_map(), 0, NOW)
+    result = count_engine.observe_count(
+        CountInput("same", 1, True, NOW + timedelta(seconds=10))
+    )
+    assert result.disposition == "accepted"
+    duplicate = count_engine.observe_count(
+        CountInput("same", 1, True, NOW + timedelta(seconds=11))
+    )
+    assert duplicate.disposition == "duplicate"
+
+
+def test_engine_bootstrap_unavailable_recovery_and_pending_count_effects() -> None:
+    unavailable = ZoneModelEngine(target_map(), 1, NOW)
+    unavailable.bootstrap_sensor_snapshot(
+        (SensorInput("binary_sensor.hall", "unavailable", NOW),), NOW
+    )
+    hall_belief = {state.zone: state for state in unavailable.snapshot.belief_states}[
+        "hall"
+    ]
+    assert hall_belief.context == "unavailable"
+
+    recovered = ZoneModelEngine(target_map(), 1, NOW)
+    recovered.observe(SensorInput("binary_sensor.hall", "on", NOW))
+    recovered.advance(NOW + timedelta(minutes=20))
+    recovered.observe(
+        SensorInput("binary_sensor.hall", "unavailable", NOW + timedelta(minutes=21))
+    )
+    result = recovered.observe(
+        SensorInput("binary_sensor.hall", "on", NOW + timedelta(minutes=22))
+    )
+    assert not {state.node_id: state for state in result.snapshot.episode_states}[
+        "hall"
+    ].health_warning
+
+    pending = ZoneModelEngine(target_map(), 1, NOW)
+    pending.observe(SensorInput("binary_sensor.hall", "on", NOW))
+    pending.observe(
+        SensorInput("binary_sensor.hall", "off", NOW + timedelta(seconds=1))
+    )
+    counted = pending.observe_count(
+        CountInput("increase", 2, True, NOW + timedelta(seconds=6))
+    )
+    assert counted.disposition == "accepted"

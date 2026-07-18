@@ -17,10 +17,10 @@ AGGREGATE_BINARY_SENSOR_SUFFIXES = (
 )
 
 ZONE_SENSOR_SUFFIXES = (
-    "arrival_supported_probability",
+    "authorization_reason",
     "diagnostic_confidence",
     "occupancy_probability",
-    "release_safe_probability",
+    "release_dwell",
 )
 
 ZONE_BINARY_SENSOR_SUFFIXES = (
@@ -39,8 +39,10 @@ LEGACY_AGGREGATE_SUFFIXES = (
 
 LEGACY_ZONE_SUFFIXES = (
     "activation_plausible",
+    "arrival_supported_probability",
     "keep_on",
     "prelight_plausible",
+    "release_safe_probability",
 )
 
 
@@ -92,9 +94,7 @@ async def async_remove_legacy_entities(
 
     from homeassistant.helpers import entity_registry as er
 
-    legacy_unique_ids = {
-        f"{entry_id}_{suffix}" for suffix in LEGACY_AGGREGATE_SUFFIXES
-    }
+    legacy_unique_ids = {f"{entry_id}_{suffix}" for suffix in LEGACY_AGGREGATE_SUFFIXES}
     for zone in predictive_map.zones():
         legacy_unique_ids.update(
             f"{entry_id}_{zone}_{suffix}" for suffix in LEGACY_ZONE_SUFFIXES

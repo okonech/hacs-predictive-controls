@@ -17,14 +17,19 @@ Before changing behavior in a matched file:
 1. Read `SPECIFICATION.md` and map the change to its `REQ-*` IDs.
 2. During migration, read only the active phase in `MIGRATION_PLAN.md` plus its
    global execution and validation rules.
-3. Use `.github/skills/predictive-controls-regression-review/SKILL.md` for every
-   reported failure, incident, profile/threshold change, or model redesign.
+3. Use `.github/skills/predictive-controls-regression-review/SKILL.md` for a
+   reported production failure or incident. Routine implementation of an
+   already-approved migration phase follows the quick loop in `MIGRATION_PLAN.md`.
 4. For an incident, add and prove the exact-timestamp public regression before
    diagnosing or editing production behavior.
-5. Use fresh context-isolated read-only subagents for independent investigation,
-   proposal review against `SPECIFICATION.md`, and implementation conformance.
-6. Run the focused test immediately after the first production edit, then all
-   phase quality gates before widening scope.
+5. Use an independent read-only subagent only when root cause is unclear, the
+   proposal changes `SPECIFICATION.md` or a public contract, or final migration
+   conformance is being reviewed. Do not require proposal and implementation
+   reviewers for each planned phase.
+6. After a coherent edit batch, run the smallest focused test with `--no-cov`
+   and lint the changed files. Defer full pytest/coverage, repository mypy,
+   frontend, benchmarks, diff checks, broad adversarial expansion, and final
+   conformance review until all migration implementation phases are complete.
 
 Do not add room/entity/person-specific model logic, count timer callbacks as
 independent evidence, let prediction or policy feed zone belief, normalize

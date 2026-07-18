@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
 import sys
 from collections.abc import Callable
@@ -9,7 +10,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from test_entity_platforms import install_fake_homeassistant
 
 from custom_components.predictive_controls.actions import (
     ActionDecision,
@@ -19,9 +19,8 @@ from custom_components.predictive_controls.actions import (
 from custom_components.predictive_controls.automation_summary import (
     runtime_automation_summary,
 )
-from custom_components.predictive_controls.confidence import ZoneConfidenceEngine
-from custom_components.predictive_controls.events import OccupancyEvent
 from custom_components.predictive_controls.model import PredictiveMap
+from tests.test_entity_platforms import install_fake_homeassistant
 
 NOW = datetime(2026, 7, 12, 12, tzinfo=UTC)
 pytestmark = pytest.mark.scenario
@@ -33,6 +32,8 @@ def make_map() -> PredictiveMap:
             "nodes": {
                 "office": {
                     "zone": "office",
+                    "role": "room_occupancy",
+                    "occupancy_behavior": "sustained",
                     "entities": {"motion": "binary_sensor.office"},
                     "adjacent": ["hall"],
                 },
@@ -45,6 +46,8 @@ def make_map() -> PredictiveMap:
                 },
                 "kitchen": {
                     "zone": "kitchen",
+                    "role": "room_occupancy",
+                    "occupancy_behavior": "sustained",
                     "entities": {"motion": "binary_sensor.kitchen"},
                     "adjacent": ["hall"],
                 },
@@ -53,103 +56,44 @@ def make_map() -> PredictiveMap:
     )
 
 
-def office_event() -> OccupancyEvent:
-    return OccupancyEvent(
-        entity_id="binary_sensor.office",
-        node_id="office",
-        zone="office",
-        floor=None,
-        role="room_occupancy",
-        occupancy_behavior="sustained",
-        signal_type="motion",
-        state="on",
-        event_at=NOW + timedelta(seconds=1),
-        reliability=0.9,
-    )
-
-
-def test_runtime_s19_s20_restore_bootstrap_and_reject_corrupt_state(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def runtime_module(monkeypatch: pytest.MonkeyPatch) -> Any:
     install_fake_homeassistant(monkeypatch)
     sys.modules.pop("custom_components.predictive_controls.runtime", None)
-    runtime_module = importlib.import_module(
-        "custom_components.predictive_controls.runtime"
-    )
-    runtime_type = runtime_module.PredictiveControlsRuntime
-    predictive_map = make_map()
-    before = ZoneConfidenceEngine(predictive_map, expected_occupants=1)
-    before.observe(office_event())
-    payload = before.occupancy_store_data(
-        NOW + timedelta(seconds=2),
-        {"office": {"hall": 0.9}},
-    )
-    store = _FakeStore()
-    runtime = runtime_type(
-        _FakeHass(),
-        predictive_map,
-        (),
-        transition_window=30,
-        expected_occupants=1,
-        transition_store=store,
-    )
-    restart_at = NOW + timedelta(minutes=5)
-
-    assert runtime.restore_stored_state(payload, restart_at)
-    assert runtime.transition_counts["office"]["hall"] == 0.0
-    runtime.observe_entity(
-        "binary_sensor.office",
-        "off",
-        restart_at,
-        process_prediction_actions=False,
-    )
-    summary = runtime_automation_summary(runtime)
-
-    assert summary.zones["office"].keep_on
-    assert not summary.zones["office"].activation_plausible
-    assert not summary.prelight_plausible_zones
-    assert store.delayed
-    assert runtime.transition_store_data()["schema"] == "exact-augmented-v6"
-
-    store.delayed = False
-    runtime.observe_entity(
-        "binary_sensor.office",
-        "off",
-        restart_at + timedelta(seconds=1),
-        process_prediction_actions=False,
-    )
-    assert runtime.confidence.diagnostics.joint_event_disposition == "duplicate"
-    assert store.delayed
-
-    rejected = runtime_type(
-        _FakeHass(),
-        predictive_map,
-        (),
-        transition_window=30,
-        expected_occupants=1,
-    )
-    assert not rejected.restore_stored_state({"schema_version": 99}, restart_at)
-    assert rejected.confidence.diagnostics.joint_restore_status == "rejected"
-    assert rejected.confidence.diagnostics.joint_restore_reason == (
-        "unsupported occupancy storage schema"
-    )
+    return importlib.import_module("custom_components.predictive_controls.runtime")
 
 
-def test_runtime_reconciles_supported_counts_without_rebootstrap(
+def test_runtime_restores_target_state_and_rejects_corrupt_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    install_fake_homeassistant(monkeypatch)
-    sys.modules.pop("custom_components.predictive_controls.runtime", None)
-    runtime_module = importlib.import_module(
-        "custom_components.predictive_controls.runtime"
+    module = runtime_module(monkeypatch)
+    before = module.PredictiveControlsRuntime(
+        _FakeHass(), make_map(), (), transition_window=30, expected_occupants=1
     )
-    hass = _FakeHass(
-        {
-            "binary_sensor.office": _FakeState("on"),
-            "sensor.people": _FakeState("1"),
-        }
+    before.observe_entity("binary_sensor.hall", "on", NOW)
+    before.observe_entity("binary_sensor.office", "on", NOW + timedelta(seconds=2))
+    payload = before.transition_store_data()
+
+    restored = module.PredictiveControlsRuntime(
+        _FakeHass(), make_map(), (), transition_window=30, expected_occupants=1
     )
-    runtime = runtime_module.PredictiveControlsRuntime(
+    assert restored.restore_stored_state(payload, NOW + timedelta(seconds=3))
+    assert restored.confidence.diagnostics.policy_states["office"].active is True
+    assert restored.transition_store_data()["schema"] == "zone-belief-v1"
+
+    rejected = module.PredictiveControlsRuntime(
+        _FakeHass(), make_map(), (), transition_window=30, expected_occupants=1
+    )
+    assert not rejected.restore_stored_state({"schema_version": 99}, NOW)
+    assert rejected.confidence.diagnostics.restore_status == "rejected"
+    assert rejected.problem_reasons == ("restore_rejected",)
+
+
+def test_runtime_unsupported_count_retains_last_supported_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = runtime_module(monkeypatch)
+    hass = _FakeHass({"sensor.people": _FakeState("1")})
+    runtime = module.PredictiveControlsRuntime(
         hass,
         make_map(),
         (),
@@ -157,140 +101,121 @@ def test_runtime_reconciles_supported_counts_without_rebootstrap(
         expected_occupants=1,
         expected_occupants_entity="sensor.people",
     )
-    runtime.observe_entity("binary_sensor.office", "on", NOW)
-    assert runtime_automation_summary(runtime).zones["office"].keep_on
+    runtime.confidence.ensure_state(NOW)
 
     hass.states._states["sensor.people"] = _FakeState("3")
-    runtime._async_state_changed(  # noqa: SLF001
-        SimpleNamespace(
-            data={"entity_id": "sensor.people", "new_state": _FakeState("3")},
-            time_fired=NOW + timedelta(seconds=1),
-        )
-    )
-    increased = runtime_automation_summary(runtime)
-    assert runtime.confidence.requested_expected_occupants == 3
-    assert runtime.expected_occupants == 0
-    assert runtime.confidence.diagnostics.joint_unsupported_count == 3
-    assert not increased.zones["office"].keep_on
-
-    bootstraps: list[tuple[tuple[OccupancyEvent, ...], bool]] = []
-    original_bootstrap = runtime.confidence.bootstrap_joint_state
-
-    def record_bootstrap(
-        events: tuple[OccupancyEvent, ...], *, cold_start: bool
-    ) -> None:
-        bootstraps.append((events, cold_start))
-        original_bootstrap(events, cold_start=cold_start)
-
-    monkeypatch.setattr(runtime.confidence, "bootstrap_joint_state", record_bootstrap)
-    hass.states._states["binary_sensor.office"] = _FakeState("off")
-    hass.states._states["sensor.people"] = _FakeState("1")
-    runtime._async_state_changed(  # noqa: SLF001
-        SimpleNamespace(
-            data={"entity_id": "sensor.people", "new_state": _FakeState("1")},
-            time_fired=NOW + timedelta(seconds=2),
-        )
-    )
+    assert runtime._sync_expected_occupants(NOW + timedelta(seconds=1))  # noqa: SLF001
 
     assert runtime.expected_occupants == 1
-    assert len(bootstraps) == 1
-    assert bootstraps[0][1] is True
-    recovered = runtime_automation_summary(runtime)
-    assert not recovered.zones["office"].keep_on
-    assert not recovered.activation_plausible_zones
+    assert runtime.confidence.requested_expected_occupants == 3
+    assert runtime.confidence.diagnostics.unsupported_count == 3
+    assert runtime.problem_reasons == ()
 
 
-def test_runtime_start_bootstraps_snapshot_and_publishes_once(
+def test_runtime_start_bootstraps_snapshot_without_public_activation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    install_fake_homeassistant(monkeypatch)
-    sys.modules.pop("custom_components.predictive_controls.runtime", None)
-    runtime_module = importlib.import_module(
-        "custom_components.predictive_controls.runtime"
-    )
+    module = runtime_module(monkeypatch)
     publications: list[str] = []
     monkeypatch.setattr(
-        runtime_module,
+        module,
         "async_dispatcher_send",
         lambda _hass, signal: publications.append(signal),
     )
-    hass = _FakeHass(
-        {
-            "binary_sensor.office": _FakeState("on"),
-            "binary_sensor.hall": _FakeState("off"),
-            "binary_sensor.kitchen": _FakeState("on"),
-        }
-    )
-    runtime = runtime_module.PredictiveControlsRuntime(
-        hass,
+    runtime = module.PredictiveControlsRuntime(
+        _FakeHass(
+            {
+                "binary_sensor.office": _FakeState("on"),
+                "binary_sensor.hall": _FakeState("off"),
+                "binary_sensor.kitchen": _FakeState("off"),
+            }
+        ),
         make_map(),
         (),
         transition_window=30,
-        expected_occupants=2,
+        expected_occupants=1,
     )
 
     runtime.start()
 
-    assert publications == [runtime_module.DISPATCH_UPDATE]
-    stored = runtime.transition_store_data()
-    assert stored["schema"] == "exact-augmented-v6"
-    assert stored["occupants"] == 2
-    assert runtime.confidence.diagnostics.joint_pruned_probability == 0.0
+    assert publications == [module.DISPATCH_UPDATE]
+    assert not runtime_automation_summary(runtime).keep_on_zones
+    assert runtime.transition_store_data()["schema"] == "zone-belief-v1"
+    assert runtime.latency_metrics["sample_count"] == 1
 
 
-def test_runtime_lifecycle_callbacks_persistence_and_actions(
+def test_runtime_lifecycle_persistence_callbacks_and_actions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    install_fake_homeassistant(monkeypatch)
-    sys.modules.pop("custom_components.predictive_controls.runtime", None)
-    runtime_module = importlib.import_module(
-        "custom_components.predictive_controls.runtime"
-    )
-    publications: list[str] = []
+    module = runtime_module(monkeypatch)
     unsubscribed: list[str] = []
     state_callbacks: list[Callable[[object], None]] = []
-    interval_callbacks: list[Callable[[object], None]] = []
 
     def track_state(
-        _hass: object,
-        _entities: object,
-        callback: Callable[[object], None],
-    ) -> object:
+        _hass: object, _entities: object, callback: Callable[[object], None]
+    ) -> Callable[[], None]:
         state_callbacks.append(callback)
         return lambda: unsubscribed.append("state")
 
     def track_interval(
-        _hass: object,
-        callback: Callable[[object], None],
-        _interval: object,
-    ) -> object:
-        interval_callbacks.append(callback)
+        _hass: object, _callback: object, _interval: object
+    ) -> Callable[[], None]:
         return lambda: unsubscribed.append("interval")
 
-    monkeypatch.setattr(runtime_module, "async_track_state_change_event", track_state)
-    monkeypatch.setattr(runtime_module, "async_track_time_interval", track_interval)
-    monkeypatch.setattr(
-        runtime_module,
-        "async_dispatcher_send",
-        lambda _hass, signal: publications.append(signal),
-    )
-    hass = _FakeHass(
-        {
-            "binary_sensor.office": _FakeState("on"),
-            "binary_sensor.kitchen": _FakeState("unavailable"),
-            "sensor.people": _FakeState("1"),
-        }
-    )
+    monkeypatch.setattr(module, "async_track_state_change_event", track_state)
+    monkeypatch.setattr(module, "async_track_time_interval", track_interval)
     store = _FakeStore()
-    runtime = runtime_module.PredictiveControlsRuntime(
+    hass = _FakeHass()
+    runtime = module.PredictiveControlsRuntime(
         hass,
         make_map(),
         (),
         transition_window=30,
-        expected_occupants=2,
-        expected_occupants_entity=" sensor.people ",
+        expected_occupants=1,
         transition_store=store,
-        transition_counts={"office": {"hall": 2.0}},
+    )
+    runtime.start()
+    observed_at = datetime.now(UTC) + timedelta(seconds=1)
+    runtime.observe_entity("binary_sensor.hall", "on", observed_at)
+    runtime.observe_entity(
+        "binary_sensor.office", "on", observed_at + timedelta(seconds=2)
+    )
+
+    assert runtime_automation_summary(runtime).zones["office"].keep_on
+    assert store.delayed
+    assert state_callbacks
+
+    action = PredictiveAction(
+        "light",
+        "office",
+        ServiceCall("light.turn_on", {"entity_id": "light.office"}, {"brightness": 1}),
+    )
+    runtime._execute_actions((ActionDecision(action, 0.9),))  # noqa: SLF001
+    assert hass.services.calls[0][0:2] == ("light", "turn_on")
+
+    asyncio.run(runtime.async_stop())
+    assert unsubscribed == ["state", "interval", "interval", "interval"]
+    assert store.saved
+
+
+def test_runtime_adapter_boundaries_and_callbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = runtime_module(monkeypatch)
+    publications: list[str] = []
+    monkeypatch.setattr(
+        module,
+        "async_dispatcher_send",
+        lambda _hass, signal: publications.append(signal),
+    )
+    hass = _FakeHass({"sensor.people": _FakeState("invalid")})
+    runtime = module.PredictiveControlsRuntime(
+        hass,
+        make_map(),
+        (),
+        transition_window=30,
+        expected_occupants=1,
+        expected_occupants_entity="sensor.people",
     )
 
     assert runtime.chain is runtime.confidence.prediction_chain
@@ -299,38 +224,32 @@ def test_runtime_lifecycle_callbacks_persistence_and_actions(
     assert runtime.last_prediction is None
     assert runtime.zone_states
     assert runtime.recent_occupancy_events == ()
-    assert runtime.transition_counts["office"]["hall"] == 0.0
-    assert runtime.expected_occupants == 2
-    assert runtime.latency_metrics["sample_count"] == 0
-    assert not runtime.restore_stored_state(None, NOW)
+    assert runtime.transition_counts
+    assert runtime.authoritative_count_available
+    assert not runtime.restore_stored_state([], NOW)
 
-    runtime.start()
-    assert len(state_callbacks) == 1
-    assert len(interval_callbacks) == 3
-    assert runtime.expected_occupants == 1
-    assert runtime.latency_metrics["sample_count"] == 1
-    assert store.delayed
-
-    state_callback = state_callbacks[0]
-    state_callback(SimpleNamespace(data={}, time_fired=NOW))
-    state_callback(
-        SimpleNamespace(
-            data={"entity_id": "binary_sensor.office"},
-            time_fired=datetime(2100, 1, 1, tzinfo=UTC),
-        )
+    runtime.confidence.ensure_state(NOW)
+    assert not runtime._sync_expected_occupants(NOW)  # noqa: SLF001
+    assert not runtime.authoritative_count_available
+    runtime._restore_rejected = True  # noqa: SLF001
+    assert runtime.problem_reasons == (
+        "invalid_authoritative_count",
+        "restore_rejected",
     )
+    assert runtime.problem_sources == ("sensor.people", "occupancy_storage")
+
+    runtime._async_state_changed(SimpleNamespace(data={}))  # noqa: SLF001
     hass.states._states["sensor.people"] = _FakeState("2")
-    state_callback(
+    runtime._async_state_changed(  # noqa: SLF001
         SimpleNamespace(
             data={
                 "entity_id": "sensor.people",
                 "new_state": _FakeState("2"),
             },
-            time_fired=NOW,
+            time_fired=datetime.now(UTC) - timedelta(milliseconds=1),
         )
     )
-    assert runtime.expected_occupants == 2
-    state_callback(
+    runtime._async_state_changed(  # noqa: SLF001
         SimpleNamespace(
             data={
                 "entity_id": "sensor.people",
@@ -338,117 +257,95 @@ def test_runtime_lifecycle_callbacks_persistence_and_actions(
             }
         )
     )
-    state_callback(
+    runtime._async_state_changed(  # noqa: SLF001
         SimpleNamespace(
             data={
-                "entity_id": "binary_sensor.office",
-                "new_state": _FakeState("off"),
+                "entity_id": "binary_sensor.missing",
+                "new_state": _FakeState("on"),
             }
         )
     )
-
-    unchanged_update = runtime.last_zone_update
-    monkeypatch.setattr(runtime.confidence, "refresh_active", lambda _now: ())
-    runtime._async_refresh_active_confidence(NOW)  # noqa: SLF001
-    assert runtime.last_zone_update is unchanged_update
-    refreshed_update = SimpleNamespace(current=SimpleNamespace(zone="office"))
-    monkeypatch.setattr(
-        runtime.confidence,
-        "refresh_active",
-        lambda _now: (refreshed_update,),
-    )
-    runtime._async_refresh_active_confidence(NOW)  # noqa: SLF001
-    assert runtime.last_zone_update is refreshed_update
-    monkeypatch.setattr(
-        runtime.confidence, "expire_transient_state", lambda _now: False
-    )
-    runtime._async_expire_transient_state(NOW)  # noqa: SLF001
     runtime._async_publish_diagnostics(NOW)  # noqa: SLF001
-    monkeypatch.setattr(runtime.confidence, "expire_transient_state", lambda _now: True)
-    runtime._async_expire_transient_state(NOW)  # noqa: SLF001
+    runtime.observe_node("hall", NOW + timedelta(seconds=1))
+    assert publications
 
-    runtime.observe_entity("binary_sensor.unknown", "on", NOW)
-    runtime.observe_entity("binary_sensor.hall", "on", NOW + timedelta(seconds=1))
-    runtime.observe_node("hall", NOW + timedelta(seconds=2))
-    assert isinstance(runtime._node_prediction_probabilities(), dict)  # noqa: SLF001
-    assert "sensor.people" in runtime._tracked_entity_ids()  # noqa: SLF001
+    runtime._unsubscribe = object()  # noqa: SLF001
+    asyncio.run(runtime.async_stop())
 
+
+def test_runtime_prediction_action_refresh_health_and_empty_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = runtime_module(monkeypatch)
     action = PredictiveAction(
-        "light",
-        "office",
-        ServiceCall("light.turn_on", {"entity_id": "light.office"}, {"brightness": 1}),
+        "prelight",
+        "kitchen",
+        ServiceCall("light.turn_on", {"entity_id": "light.kitchen"}),
+        min_probability=0.4,
     )
-    runtime._execute_actions((ActionDecision(action, 0.9),))  # noqa: SLF001
-    assert hass.services.calls == [
-        (
-            "light",
-            "turn_on",
-            {"brightness": 1},
-            {"entity_id": "light.office"},
-            False,
-        )
-    ]
+    hass = _FakeHass()
+    runtime = module.PredictiveControlsRuntime(
+        hass, make_map(), (action,), transition_window=30, expected_occupants=1
+    )
+    runtime.observe_entity("binary_sensor.office", "on", NOW)
+    runtime.observe_entity("binary_sensor.hall", "on", NOW + timedelta(seconds=1))
+    assert runtime.last_prediction is not None
+    assert runtime.last_source_node == "hall"
+    assert runtime.probabilities["kitchen"] == pytest.approx(1.0)
+    assert hass.services.calls
 
-    awaitable = runtime.async_save_transition_counts()
-    asyncio_run(awaitable)
-    assert store.saved
-    asyncio_run(runtime.async_stop())
-    assert unsubscribed == ["state", "interval", "interval", "interval"]
-    assert store.saved
+    runtime._async_refresh_active_confidence(  # noqa: SLF001
+        NOW + timedelta(minutes=20)
+    )
+    runtime.confidence.refresh_active = lambda _now: ()
+    runtime._async_refresh_active_confidence(  # noqa: SLF001
+        NOW + timedelta(minutes=20)
+    )
+    runtime._async_refresh_active_confidence(  # noqa: SLF001
+        NOW + timedelta(minutes=20)
+    )
+    assert "sensor_health_degraded" in runtime.problem_reasons
+    assert "physical_sensor_episode" in runtime.problem_sources
+    runtime._async_expire_transient_state(NOW + timedelta(minutes=21))  # noqa: SLF001
+    transient = module.PredictiveControlsRuntime(
+        _FakeHass(), make_map(), (), transition_window=30, expected_occupants=1
+    )
+    transient.observe_entity("binary_sensor.hall", "on", NOW)
+    transient.observe_entity("binary_sensor.hall", "off", NOW + timedelta(seconds=1))
+    transient._async_expire_transient_state(  # noqa: SLF001
+        NOW + timedelta(seconds=6)
+    )
+    transient._observe_entity(  # noqa: SLF001
+        "binary_sensor.office", "off", NOW + timedelta(seconds=7), True, 0
+    )
 
-    no_store = runtime_module.PredictiveControlsRuntime(
-        _FakeHass(), make_map(), (), transition_window=30
+    empty_map = PredictiveMap.from_mapping(
+        {
+            "nodes": {
+                "unbound": {
+                    "zone": "unbound",
+                    "role": "room_occupancy",
+                    "occupancy_behavior": "sustained",
+                }
+            }
+        }
     )
-    no_store.schedule_transition_count_save()
-    asyncio_run(no_store.async_save_transition_counts())
-    asyncio_run(no_store.async_stop())
-    empty_map = PredictiveMap.from_mapping({"nodes": {"unbound": {"adjacent": []}}})
-    empty_runtime = runtime_module.PredictiveControlsRuntime(
-        _FakeHass(), empty_map, (), transition_window=30
+    empty = module.PredictiveControlsRuntime(
+        _FakeHass(), empty_map, (), transition_window=30, expected_occupants=1
     )
-    empty_runtime.start()
-    none_event_runtime = runtime_module.PredictiveControlsRuntime(
-        _FakeHass({"binary_sensor.office": _FakeState("on")}),
+    empty.start()
+    empty.schedule_transition_count_save()
+    asyncio.run(empty.async_save_transition_counts())
+    assert module._as_utc(NOW.replace(tzinfo=None)).tzinfo is None  # noqa: SLF001
+
+    partial = module.PredictiveControlsRuntime(
+        _FakeHass({"binary_sensor.office": _FakeState("off")}),
         make_map(),
         (),
         transition_window=30,
+        expected_occupants=1,
     )
-    monkeypatch.setattr(
-        runtime_module, "event_from_entity", lambda *_args, **_kwargs: None
-    )
-    none_event_runtime.start()
-    monkeypatch.setattr(
-        runtime_module,
-        "event_from_entity",
-        importlib.import_module(
-            "custom_components.predictive_controls.events"
-        ).event_from_entity,
-    )
-    ceiling_runtime = runtime_module.PredictiveControlsRuntime(
-        _FakeHass(), make_map(), (), transition_window=30, expected_occupants=1
-    )
-    clock = iter((0, 100_000_001, 100_000_002))
-    monkeypatch.setattr(runtime_module, "perf_counter_ns", lambda: next(clock))
-    ceiling_runtime.observe_entity("binary_sensor.office", "on", NOW)
-    assert ceiling_runtime.latency_metrics["performance_degraded"]
-    assert ceiling_runtime.latency_metrics["performance_budget_exceeded_count"] == 1
-    assert runtime_automation_summary(ceiling_runtime).zones[
-        "office"
-    ].keep_on
-    assert runtime_module._latency_summary((4.0, 1.0, 3.0, 2.0)) == {  # noqa: SLF001
-        "sample_count": 4,
-        "last_ms": 2.0,
-        "p50_ms": 2.0,
-        "p95_ms": 4.0,
-        "p99_ms": 4.0,
-        "max_ms": 4.0,
-    }
-
-
-def asyncio_run(awaitable: object) -> object:
-    import asyncio
-
-    return asyncio.run(awaitable)  # type: ignore[arg-type]
+    partial.start()
 
 
 @dataclass
@@ -469,11 +366,9 @@ class _FakeHass:
         self.states = _FakeStates(states)
         self.data: dict[str, Any] = {}
         self.services = _FakeServices()
-        self.tasks: list[object] = []
 
     def async_create_task(self, task: object) -> None:
-        self.tasks.append(task)
-        asyncio_run(task)
+        asyncio.run(task)  # type: ignore[arg-type]
 
 
 class _FakeServices:

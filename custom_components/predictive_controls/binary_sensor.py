@@ -31,8 +31,7 @@ async def async_setup_entry(
         PredictiveControlsProblemSensor(runtime, entry.entry_id),
     ]
     entities.extend(
-        ZoneActiveSensor(runtime, entry.entry_id, zone)
-        for zone in runtime.map.zones()
+        ZoneActiveSensor(runtime, entry.entry_id, zone) for zone in runtime.map.zones()
     )
     entities.extend(
         ZonePrelightSensor(runtime, entry.entry_id, zone, threshold)
@@ -113,9 +112,7 @@ class PredictiveControlsProblemSensor(RuntimeBinarySensor):
         reasons = list(getattr(self.runtime, "problem_reasons", ()))
         return {
             "reasons": reasons,
-            "affected_sources": list(
-                getattr(self.runtime, "problem_sources", ())
-            ),
+            "affected_sources": list(getattr(self.runtime, "problem_sources", ())),
             "explanation": (
                 f"Active problems: {', '.join(reasons)}"
                 if reasons
@@ -143,16 +140,11 @@ class ZoneActiveSensor(RuntimeBinarySensor):
     @property
     def extra_state_attributes(self) -> dict[str, object]:
         state = runtime_automation_summary(self.runtime).zones[self.zone]
+        reason = self.runtime.zone_states[self.zone].reason
         return {
-            "reason": self.runtime.confidence.diagnostics.joint_policy_states[
-                self.zone
-            ].reason,
+            "reason": reason,
             "occupancy_probability": state.confidence,
-            "explanation": (
-                self.runtime.confidence.diagnostics.joint_policy_states[
-                    self.zone
-                ].reason
-            ),
+            "explanation": reason,
         }
 
 
@@ -172,9 +164,11 @@ class ZonePrelightSensor(RuntimeBinarySensor):
 
     @property
     def is_on(self) -> bool:
-        return runtime_automation_summary(self.runtime, self.threshold).zones[
-            self.zone
-        ].prelight_plausible
+        return (
+            runtime_automation_summary(self.runtime, self.threshold)
+            .zones[self.zone]
+            .prelight_plausible
+        )
 
     @property
     def extra_state_attributes(self) -> dict[str, float | str]:
@@ -193,6 +187,7 @@ class ZonePrelightSensor(RuntimeBinarySensor):
 
 class ZoneDiagnosticEntryPathSensor(RuntimeBinarySensor):
     _attr_entity_registry_enabled_default = False
+
     def __init__(
         self,
         runtime: PredictiveControlsRuntime,
@@ -208,9 +203,11 @@ class ZoneDiagnosticEntryPathSensor(RuntimeBinarySensor):
 
     @property
     def is_on(self) -> bool:
-        return runtime_automation_summary(self.runtime).zones[
-            self.zone
-        ].diagnostic_entry_path_plausible
+        return (
+            runtime_automation_summary(self.runtime)
+            .zones[self.zone]
+            .diagnostic_entry_path_plausible
+        )
 
     @property
     def update_signal(self) -> str:

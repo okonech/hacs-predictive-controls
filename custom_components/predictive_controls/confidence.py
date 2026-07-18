@@ -2,48 +2,32 @@ from __future__ import annotations
 
 from .markov import MarkovChain
 from .model import PredictiveMap
-from .occupancy_scoring import (
-    CONFIDENCE_STATUSES,
-    clear_factor_for_event,
-    conflict_confidence,
-    on_confidence_floor,
-    passive_confidence_for_duration,
-    reason_for_clear_transition_decay,
-    reason_for_conflict_decay,
-    reason_for_departure_decay,
-    reason_for_event,
-    reason_for_inactive_decay,
-    reason_for_sustained_event,
-    status_for_confidence,
-    sustained_cap_for_event,
-    sustained_confidence_for_duration,
-    sustained_ramp_seconds,
-)
-from .occupancy_tracker import (
-    OccupancyTracker,
-    TrackerConfig,
-    ZoneState,
-    ZoneUpdate,
+from .occupancy_tracker import OccupancyTracker, TrackerConfig, ZoneState, ZoneUpdate
+
+CONFIDENCE_STATUSES = (
+    "rejected",
+    "suspect",
+    "possible",
+    "probable",
+    "confirmed",
 )
 
 
 class ZoneConfidenceEngine(OccupancyTracker):
-    """Compatibility facade for the occupancy tracker used by runtime code."""
+    """Runtime facade for authoritative graph-local zone belief."""
 
     def __init__(
         self,
         predictive_map: PredictiveMap,
         expected_occupants: int | None = None,
         chain: MarkovChain | None = None,
-        activation_risk_threshold: float = 0.80,
-        release_risk_threshold: float = 0.95,
+        **_legacy_options: object,
     ) -> None:
-        config = TrackerConfig(
-            expected_occupants=expected_occupants or 0,
-            activation_risk_threshold=activation_risk_threshold,
-            release_risk_threshold=release_risk_threshold,
+        super().__init__(
+            predictive_map,
+            config=TrackerConfig(expected_occupants or 0),
+            chain=chain,
         )
-        super().__init__(predictive_map, config=config, chain=chain)
 
 
 __all__ = [
@@ -53,18 +37,4 @@ __all__ = [
     "ZoneConfidenceEngine",
     "ZoneState",
     "ZoneUpdate",
-    "clear_factor_for_event",
-    "conflict_confidence",
-    "on_confidence_floor",
-    "passive_confidence_for_duration",
-    "reason_for_clear_transition_decay",
-    "reason_for_conflict_decay",
-    "reason_for_departure_decay",
-    "reason_for_event",
-    "reason_for_inactive_decay",
-    "reason_for_sustained_event",
-    "status_for_confidence",
-    "sustained_cap_for_event",
-    "sustained_confidence_for_duration",
-    "sustained_ramp_seconds",
 ]

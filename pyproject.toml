@@ -1,7 +1,7 @@
 [project]
 name = "hacs-predictive-controls"
 version = "0.2.1"
-description = "Home Assistant exact anonymous occupancy and predictive controls"
+description = "Home Assistant graph-local occupancy and predictive controls"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -20,6 +20,7 @@ test = [
 testpaths = ["tests"]
 markers = [
   "scenario: timestamped acceptance, remediation, restart, or runtime lifecycle scenario",
+  "target_model: authoritative graph-local target-model contract",
 ]
 addopts = [
   "--cov=custom_components.predictive_controls",
