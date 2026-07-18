@@ -339,12 +339,12 @@ than replacing it with a separate proof system.
 
 The initial supported profiles are role-based:
 
-| Profile | Hardware clear/reset recommendation | Software interpretation |
-| --- | --- | --- |
+| Profile           | Hardware clear/reset recommendation                                                         | Software interpretation                                                                                          |
+| ----------------- | ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `transition_fast` | Use the shortest reliable device setting, initially 5-15 seconds where hardware supports it | Short zone persistence; assertion is bounded traversal context; rapid stable clear reveals path endpoints sooner |
-| `stay_pir` | Start near 30 seconds; increase only if measured false clears are excessive | Strong fresh local evidence, weak clear evidence, long no-exit residual |
-| `stay_presence` | Use the device's shortest stable presence/absence reporting | Strong current stay evidence with a finite assertion trust horizon |
-| `entry_boundary` | Use a short reliable reset consistent with the physical crossing | Boundary reacquisition and count context, not long-lived room occupancy |
+| `stay_pir`        | Start near 30 seconds; increase only if measured false clears are excessive                 | Strong fresh local evidence, weak clear evidence, long no-exit residual                                          |
+| `stay_presence`   | Use the device's shortest stable presence/absence reporting                                 | Strong current stay evidence with a finite assertion trust horizon                                               |
+| `entry_boundary`  | Use a short reliable reset consistent with the physical crossing                            | Boundary reacquisition and count context, not long-lived room occupancy                                          |
 
 These are deployment starting points, not normative constants. Device settings
 must be recorded with the map profile because software timing must reflect actual

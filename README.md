@@ -88,11 +88,11 @@ person.
 
 The normal automation surface is intentionally small:
 
-| Entity | Meaning |
-| --- | --- |
-| `binary_sensor.<zone>_active` | Desired normal-output state for the zone |
-| `binary_sensor.<zone>_prelight` | Optional bounded predictive-lighting lease |
-| `binary_sensor.home_active` | Logical OR of per-zone `active` states |
+| Entity                                      | Meaning                                                  |
+| ------------------------------------------- | -------------------------------------------------------- |
+| `binary_sensor.<zone>_active`               | Desired normal-output state for the zone                 |
+| `binary_sensor.<zone>_prelight`             | Optional bounded predictive-lighting lease               |
+| `binary_sensor.home_active`                 | Logical OR of per-zone `active` states                   |
 | `binary_sensor.predictive_controls_problem` | Diagnostic integration problem state; never policy input |
 
 Optional probability and path diagnostics are disabled by default. The target

@@ -92,19 +92,19 @@ latency.
 
 Create this package incrementally:
 
-| Module | Responsibility |
-| --- | --- |
-| `zone_model/types.py` | Immutable accepted events, episode IDs, beliefs, traversal tokens, contributions, policy decisions, and engine snapshots |
-| `zone_model/profiles.py` | Shared role/profile calibration and map migration from current role/behavior names |
-| `zone_model/episodes.py` | Physical-node alias collapse, flap grouping, stable clear, bounded assertion trust, and health state |
-| `zone_model/filter.py` | Per-zone Bayesian/log-odds update and continuous role/context decay |
-| `zone_model/traversal.py` | Bounded anonymous leading-edge frontier, graph authorization, missed-edge path, and source-free reacquisition |
-| `zone_model/count.py` | Count validation, `N=0` categorical behavior, and optional bounded positive-count context |
-| `zone_model/policy.py` | Activation authorization, Schmitt hysteresis, release dwell, and refresh deduplication |
-| `zone_model/prediction.py` | Optional downstream-only leases and anonymous bounded learning adapter |
-| `zone_model/persistence.py` | Target Store payload, validation, schema-6 compatibility seed, and deterministic restore |
-| `zone_model/engine.py` | Ordered orchestration and immutable result construction |
-| `zone_model/shadow.py` | Differential execution, metrics, and bounded mismatch records; no public control |
+| Module                      | Responsibility                                                                                                           |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `zone_model/types.py`       | Immutable accepted events, episode IDs, beliefs, traversal tokens, contributions, policy decisions, and engine snapshots |
+| `zone_model/profiles.py`    | Shared role/profile calibration and map migration from current role/behavior names                                       |
+| `zone_model/episodes.py`    | Physical-node alias collapse, flap grouping, stable clear, bounded assertion trust, and health state                     |
+| `zone_model/filter.py`      | Per-zone Bayesian/log-odds update and continuous role/context decay                                                      |
+| `zone_model/traversal.py`   | Bounded anonymous leading-edge frontier, graph authorization, missed-edge path, and source-free reacquisition            |
+| `zone_model/count.py`       | Count validation, `N=0` categorical behavior, and optional bounded positive-count context                                |
+| `zone_model/policy.py`      | Activation authorization, Schmitt hysteresis, release dwell, and refresh deduplication                                   |
+| `zone_model/prediction.py`  | Optional downstream-only leases and anonymous bounded learning adapter                                                   |
+| `zone_model/persistence.py` | Target Store payload, validation, schema-6 compatibility seed, and deterministic restore                                 |
+| `zone_model/engine.py`      | Ordered orchestration and immutable result construction                                                                  |
+| `zone_model/shadow.py`      | Differential execution, metrics, and bounded mismatch records; no public control                                         |
 
 Continue using `OccupancyTracker` as the production-facing integration seam.
 Do not move Home Assistant entity or runtime wiring into `zone_model`.
@@ -157,16 +157,16 @@ names. Do not retain exact occupancy configurations in target state.
 Before implementation, generate `tests/zone_model_requirement_matrix.md` with
 one row per current test module:
 
-| Existing test/module | Disposition | Target replacement | Requirements | Phase |
-| --- | --- | --- | --- | --- |
-| Public incident/acceptance | Preserve factual timeline and public outcome | Same test or explicitly named target variant | Relevant `REQ-*` | 1-7 |
-| Episode behavior | Reuse behavior where specification agrees | `test_zone_model_episodes.py` | `REQ-EVID-*` | 2 |
-| Exact state/operator/oracle | Retire after cutover | Zone-filter normalization/determinism tests | `REQ-BELIEF-007`, `REQ-PERF-*` | 3, 8 |
-| Assignment/support/finalization | Retire after cutover | Traversal, belief-release, and local explainability tests | `REQ-TRAV-*`, `REQ-POLICY-*` | 4-5, 8 |
-| Policy audit | Migrate compact fields and bounds | `test_zone_model_diagnostics.py` | `REQ-DIAG-*` | 5 |
-| Persistence | Preserve atomicity/restart outcomes | `test_zone_model_persistence.py` | `REQ-STATE-*` | 6 |
-| Prediction | Preserve separation and useful leases | Target prediction tests | `REQ-PRED-*` | 9 |
-| Entities/runtime/frontend | Preserve public contract except specified probability diagnostics | Existing tests plus refresh/shadow tests | `REQ-PUBLIC-*` | 6-7 |
+| Existing test/module            | Disposition                                                       | Target replacement                                        | Requirements                   | Phase  |
+| ------------------------------- | ----------------------------------------------------------------- | --------------------------------------------------------- | ------------------------------ | ------ |
+| Public incident/acceptance      | Preserve factual timeline and public outcome                      | Same test or explicitly named target variant              | Relevant `REQ-*`               | 1-7    |
+| Episode behavior                | Reuse behavior where specification agrees                         | `test_zone_model_episodes.py`                             | `REQ-EVID-*`                   | 2      |
+| Exact state/operator/oracle     | Retire after cutover                                              | Zone-filter normalization/determinism tests               | `REQ-BELIEF-007`, `REQ-PERF-*` | 3, 8   |
+| Assignment/support/finalization | Retire after cutover                                              | Traversal, belief-release, and local explainability tests | `REQ-TRAV-*`, `REQ-POLICY-*`   | 4-5, 8 |
+| Policy audit                    | Migrate compact fields and bounds                                 | `test_zone_model_diagnostics.py`                          | `REQ-DIAG-*`                   | 5      |
+| Persistence                     | Preserve atomicity/restart outcomes                               | `test_zone_model_persistence.py`                          | `REQ-STATE-*`                  | 6      |
+| Prediction                      | Preserve separation and useful leases                             | Target prediction tests                                   | `REQ-PRED-*`                   | 9      |
+| Entities/runtime/frontend       | Preserve public contract except specified probability diagnostics | Existing tests plus refresh/shadow tests                  | `REQ-PUBLIC-*`                 | 6-7    |
 
 Rules for the matrix:
 
