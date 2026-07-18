@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.4
+
+### Changed
+
+- Replace the standalone Zone Beliefs list on the Occupancy tab with belief,
+  policy, profile, evidence, and anonymous traversal-frontier details embedded
+  directly in the zone graph.
+- Highlight possible next paths and recent directed traversal authorizations on
+  graph edges without presenting anonymous evidence as persistent person tracks.
+
 ## 0.2.3
 
 ### Fixed

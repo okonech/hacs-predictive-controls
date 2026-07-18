@@ -135,8 +135,8 @@ test("panel defaults to occupancy first and renders requested tab order", async 
     panel.innerHTML,
     /data-tab="occupancy">Occupancy<\/button>\s*<button[^>]+data-tab="reliability">Reliability<\/button>\s*<button[^>]+data-tab="activity">Activity<\/button>\s*<button[^>]+data-tab="map">Map<\/button>\s*<button[^>]+data-tab="yaml">YAML<\/button>\s*<button[^>]+data-tab="actions">Actions<\/button>\s*<button[^>]+data-tab="settings">Settings<\/button>/,
   );
-  assert.match(panel.innerHTML, /Zone Beliefs/);
-  assert.match(panel.innerHTML, /No zone belief is available yet/);
+  assert.match(panel.innerHTML, /Believed Occupancy Graph/);
+  assert.doesNotMatch(panel.innerHTML, /Zone Beliefs/);
 });
 
 test("activity workspace explains target edges, rejections, and observations", async () => {
@@ -376,11 +376,14 @@ test("panel renders live occupancy zones from configured map data", async () => 
   assert.match(panel.innerHTML, /living_left/);
   assert.match(panel.innerHTML, /Learned Transitions/);
   assert.match(panel.innerHTML, /Expected 2/);
-  assert.match(panel.innerHTML, /Zone Beliefs/);
-  assert.match(panel.innerHTML, /Independent filtered probabilities/);
-  assert.match(panel.innerHTML, /class="track-row"/);
+  assert.match(panel.innerHTML, /Believed Occupancy Graph/);
+  assert.match(panel.innerHTML, /highlighted paths are anonymous/);
+  assert.doesNotMatch(panel.innerHTML, /Zone Beliefs/);
+  assert.doesNotMatch(panel.innerHTML, /class="track-row"/);
   assert.match(panel.innerHTML, /stay_presence/);
-  assert.match(panel.innerHTML, /1 traversal token/);
+  assert.match(panel.innerHTML, /1 path frontier/);
+  assert.match(panel.innerHTML, /Anonymous path frontier/);
+  assert.match(panel.innerHTML, /91% belief/);
   assert.match(panel.innerHTML, /7/);
 });
 
@@ -458,13 +461,43 @@ test("panel renders cross-floor zone adjacency as a graph edge", async () => {
       },
     },
   };
-  panel._status = { zone_states: {}, occupancy_diagnostics: { tracks: [] } };
+  panel._status = {
+    zone_states: {},
+    occupancy_diagnostics: {
+      model: "zone_belief",
+      beliefs: { staircase_bottom: 0.4, upstairs_hallway: 0.72 },
+      policy: {
+        staircase_bottom: { active: false, profile: "transition_fast" },
+        upstairs_hallway: { active: true, profile: "transition_fast" },
+      },
+      traversal_frontier: [
+        {
+          token_id: "bottom:episode-1",
+          node_id: "bottom_of_staircase_motion",
+          zone: "staircase_bottom",
+          valid_until: "2026-07-18T12:00:30Z",
+        },
+      ],
+      authorizations: [
+        {
+          authorized: true,
+          reason: "adjacent_current",
+          target_zone: "upstairs_hallway",
+          source_token_ids: ["bottom:episode-1"],
+        },
+      ],
+    },
+  };
   panel._tab = "occupancy";
 
   panel.render();
 
   assert.match(panel.innerHTML, /occupancy-graph/);
   assert.match(panel.innerHTML, /data-edge="staircase_bottom-&gt;upstairs_hallway"/);
+  assert.match(panel.innerHTML, /class="zone-edge frontier-edge"/);
+  assert.match(panel.innerHTML, /class="authorized-path"/);
+  assert.match(panel.innerHTML, /data-path="staircase_bottom-&gt;upstairs_hallway"/);
+  assert.match(panel.innerHTML, /Recently authorized path/);
   assert.match(panel.innerHTML, /Bottom of Staircase/);
   assert.match(panel.innerHTML, /Second Floor/);
   assert.match(panel.innerHTML, /Upstairs Hallway/);
@@ -700,7 +733,7 @@ test("panel reports when no stale entities are found", async () => {
 });
 
 test("panel script parses when Home Assistant loads it as a classic script", async () => {
-  const source = await readFile(panelAssetUrl("panel-v0.2.3.js"), "utf8");
+  const source = await readFile(panelAssetUrl("panel-v0.2.4.js"), "utf8");
 
   assert.doesNotThrow(() => new vm.Script(source));
 });
@@ -708,7 +741,7 @@ test("panel script parses when Home Assistant loads it as a classic script", asy
 test("versioned panel asset matches the development panel asset", async () => {
   const [developmentSource, versionedSource] = await Promise.all([
     readFile(panelAssetUrl("panel.js"), "utf8"),
-    readFile(panelAssetUrl("panel-v0.2.3.js"), "utf8"),
+    readFile(panelAssetUrl("panel-v0.2.4.js"), "utf8"),
   ]);
 
   assert.equal(versionedSource, developmentSource);

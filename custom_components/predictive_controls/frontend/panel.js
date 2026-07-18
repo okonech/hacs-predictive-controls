@@ -272,7 +272,7 @@ function estimateCardHeight(zone) {
   const width = Number(zone.size?.width ?? 210);
   const charsPerLine = Math.max(1, Math.floor((width - 24) / 16));
   const titleLines = Math.max(1, Math.ceil(String(zone.label ?? "").length / charsPerLine));
-  const estimated = 138 + 24 * (titleLines - 1);
+  const estimated = 168 + 24 * (titleLines - 1);
   return Math.max(estimated, Number(zone.size?.height ?? 0));
 }
 
@@ -763,53 +763,9 @@ class PredictiveControlsPanel extends HTMLElement {
           </div>
           <button data-action="refresh-status">Refresh</button>
         </section>
-        ${this.renderOccupancyDiagnostics()}
         ${this.renderOccupancyGraph(zones)}
         ${this.renderLearnedTransitions()}
       </main>
-    `;
-  }
-
-  renderOccupancyDiagnostics() {
-    const diagnostics = this._status?.occupancy_diagnostics;
-    const expected = Number(diagnostics?.expected_occupants || this._status?.expected_occupants || 0);
-    if (!diagnostics) {
-      return `
-        <section class="track-section">
-          <div class="section-head"><div class="section-title"><h3>Zone Beliefs</h3><small>Current filtered state</small></div></div>
-          <p class="empty-state">No zone belief is available yet.</p>
-        </section>
-      `;
-    }
-    const beliefs = Object.entries(diagnostics.beliefs || {}).sort(([left], [right]) =>
-      this.zoneLabel(left).localeCompare(this.zoneLabel(right)),
-    );
-    const active = Object.values(diagnostics.policy || {}).filter((state) => state?.active).length;
-    const tokens = diagnostics.traversal_frontier || [];
-    const warnings = diagnostics.health_warnings || [];
-    return `
-      <section class="track-section">
-        <div class="section-head">
-          <div class="section-title"><h3>Zone Beliefs</h3><small>Independent filtered probabilities</small></div>
-          <strong>${beliefs.length} configured</strong>
-        </div>
-        <div class="track-list">
-          ${beliefs.length ? beliefs.map(([zone, belief]) => `
-            <article class="track-row">
-              <div><strong>${escapeHtml(this.zoneLabel(zone))}</strong><span>${diagnostics.policy?.[zone]?.active ? "Active" : "Inactive"}</span></div>
-              <div class="track-state"><strong>${escapeHtml(formatPercent(belief))}</strong><span>${escapeHtml(diagnostics.policy?.[zone]?.profile || "unprofiled")}</span></div>
-            </article>
-          `).join("") : `<p class="empty-state">No zone belief is available yet.</p>`}
-        </div>
-      </section>
-      <section class="diagnostics-panel">
-        <div class="diagnostics-strip">
-          <span>Expected ${expected || "auto"}</span>
-          <span>${active} active ${active === 1 ? "zone" : "zones"}</span>
-          <span>${tokens.length} traversal ${tokens.length === 1 ? "token" : "tokens"}</span>
-          <span>${warnings.length} health ${warnings.length === 1 ? "warning" : "warnings"}</span>
-        </div>
-      </section>
     `;
   }
 
@@ -1047,6 +1003,11 @@ class PredictiveControlsPanel extends HTMLElement {
   }
 
   renderOccupancyGraph(zones) {
+    const model = policyModel(this._status);
+    const expected = Number(model?.expected_occupants || this._status?.expected_occupants || 0);
+    const active = Object.values(model?.policy || {}).filter((state) => state?.active).length;
+    const paths = this.occupancyPathContext();
+    const warnings = model?.health_warnings || [];
     const floorOrder = Array.isArray(this._config.map?.floors) ? this._config.map.floors : [];
     const layoutZones = minimizeCrossings(
       stackFloorsByBand(separateFloorRows(spacedZoneSummaries(zones)), floorOrder),
@@ -1066,7 +1027,22 @@ class PredictiveControlsPanel extends HTMLElement {
     const height = Math.max(520, maxY - minY + 48, bandBottom + 24);
     return `
       <section class="floor-section occupancy-graph-section">
-        <h3>Zone Graph</h3>
+        <div class="graph-section-head">
+          <div class="section-title">
+            <h3>Believed Occupancy Graph</h3>
+            <small>Beliefs are zone-local; highlighted paths are anonymous and do not identify a person.</small>
+          </div>
+          <div class="graph-summary">
+            <span>Expected ${expected || "auto"}</span>
+            <span>${active} active ${active === 1 ? "zone" : "zones"}</span>
+            <span>${paths.frontierTokens.length} path ${paths.frontierTokens.length === 1 ? "frontier" : "frontiers"}</span>
+            <span>${warnings.length} health ${warnings.length === 1 ? "warning" : "warnings"}</span>
+          </div>
+        </div>
+        <div class="graph-legend">
+          <span><i class="legend-line frontier"></i>Possible next path</span>
+          <span><i class="legend-line authorized"></i>Recently authorized path</span>
+        </div>
         <div class="occupancy-board occupancy-graph" style="height:${height}px;width:${width}px">
           ${this.renderFloorBands(layoutZones, minY, width)}
           <svg class="zone-edges" viewBox="0 0 ${width} ${height}">${this.renderZoneEdges(layoutZones, minX, minY)}</svg>
@@ -1093,8 +1069,19 @@ class PredictiveControlsPanel extends HTMLElement {
     for (const zone of zones) {
       for (const nodeId of zone.nodeIds) zonesByNode.set(nodeId, zone);
     }
-    const lines = [];
+    const lines = [`
+      <defs>
+        <marker id="pc-path-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z"></path>
+        </marker>
+      </defs>
+    `];
     const seen = new Set();
+    const paths = this.occupancyPathContext();
+    const center = (item) => ({
+      x: Number(item.position.x ?? 80) - minX + Number(item.size.width ?? 210) / 2 + 24,
+      y: Number(item.position.y ?? 80) - minY + estimateCardHeight(item) / 2 + 24,
+    });
     for (const zone of zones) {
       for (const nodeId of zone.nodeIds) {
         const node = this.nodes[nodeId];
@@ -1104,30 +1091,75 @@ class PredictiveControlsPanel extends HTMLElement {
           const edgeId = [zone.zoneId, target.zoneId].sort().join("->");
           if (seen.has(edgeId)) continue;
           seen.add(edgeId);
-          lines.push(`<line data-edge="${escapeHtml(edgeId)}" x1="${Number(zone.position.x ?? 80) - minX + Number(zone.size.width ?? 210) / 2 + 24}" y1="${Number(zone.position.y ?? 80) - minY + estimateCardHeight(zone) / 2 + 24}" x2="${Number(target.position.x ?? 80) - minX + Number(target.size.width ?? 210) / 2 + 24}" y2="${Number(target.position.y ?? 80) - minY + estimateCardHeight(target) / 2 + 24}" />`);
+          const source = center(zone);
+          const destination = center(target);
+          const frontier = paths.frontierZones.has(zone.zoneId) || paths.frontierZones.has(target.zoneId);
+          lines.push(`<line class="zone-edge${frontier ? " frontier-edge" : ""}" data-edge="${escapeHtml(edgeId)}" x1="${source.x}" y1="${source.y}" x2="${destination.x}" y2="${destination.y}" />`);
         }
       }
+    }
+    const zonesById = new Map(zones.map((zone) => [zone.zoneId, zone]));
+    for (const path of paths.authorizedPaths) {
+      const sourceZone = zonesById.get(path.sourceZone);
+      const targetZone = zonesById.get(path.targetZone);
+      if (!sourceZone || !targetZone || sourceZone === targetZone) continue;
+      const source = center(sourceZone);
+      const target = center(targetZone);
+      lines.push(`<line class="authorized-path" data-path="${escapeHtml(`${path.sourceZone}->${path.targetZone}`)}" x1="${source.x}" y1="${source.y}" x2="${target.x}" y2="${target.y}" marker-end="url(#pc-path-arrow)" />`);
     }
     return lines.join("");
   }
 
+  occupancyPathContext() {
+    const model = policyModel(this._status);
+    const frontierTokens = Array.isArray(model?.traversal_frontier)
+      ? model.traversal_frontier
+      : [];
+    const tokenById = new Map(frontierTokens.map((token) => [token.token_id, token]));
+    const frontierZones = new Set(frontierTokens.map((token) => token.zone).filter(Boolean));
+    const authorizedPaths = [];
+    const seen = new Set();
+    for (const authorization of model?.authorizations || []) {
+      if (!authorization?.authorized) continue;
+      for (const tokenId of authorization.source_token_ids || []) {
+        const token = tokenById.get(tokenId);
+        if (!token?.zone || !authorization.target_zone || token.zone === authorization.target_zone) continue;
+        const pathId = `${token.zone}->${authorization.target_zone}`;
+        if (seen.has(pathId)) continue;
+        seen.add(pathId);
+        authorizedPaths.push({
+          sourceZone: token.zone,
+          targetZone: authorization.target_zone,
+          reason: authorization.reason,
+        });
+      }
+    }
+    return { frontierTokens, frontierZones, authorizedPaths };
+  }
+
   renderZoneCard(zone, minX, minY) {
     const state = this._status?.zone_states?.[zone.zoneId] || { confidence: 0, status: "rejected", reason: "no evidence" };
-    const confidence = Math.round(Number(state.confidence || 0) * 100);
+    const model = policyModel(this._status);
+    const policy = model?.policy?.[zone.zoneId];
+    const belief = model?.beliefs?.[zone.zoneId] ?? state.confidence ?? 0;
+    const confidence = Math.round(Number(belief || 0) * 100);
+    const active = Boolean(policy?.active);
+    const frontier = this.occupancyPathContext().frontierTokens.find((token) => token.zone === zone.zoneId);
     const left = Number(zone.position.x ?? 80) - minX + 24;
     const top = Number(zone.position.y ?? 80) - minY + 24;
     const width = Number(zone.size.width ?? 210);
     const height = Number(zone.size.height ?? 112);
     return `
-      <article class="zone-card status-${state.status}" style="left:${left}px;top:${top}px;width:${width}px;min-height:${height}px" title="${escapeHtml(state.reason || "no evidence")}">
+      <article class="zone-card status-${state.status}${active ? " is-active" : ""}${frontier ? " has-frontier" : ""}" style="left:${left}px;top:${top}px;width:${width}px;min-height:${height}px" title="${escapeHtml(state.reason || "no evidence")}">
         <div class="zone-card-head">
           <strong>${escapeHtml(zone.label)}</strong>
-          <span>${confidence}%</span>
+          <span>${confidence}% belief</span>
         </div>
         <div class="confidence-bar"><span style="width:${confidence}%"></span></div>
-        <small>${escapeHtml(state.status || "rejected")} · ${escapeHtml(labelFromValue(state.occupancy_behavior || zone.occupancyBehavior))}</small>
-        <small>${escapeHtml(labelFromValue(zone.role))}</small>
+        <div class="zone-belief-state"><strong>${active ? "Active" : "Inactive"}</strong><span>${escapeHtml(policy?.profile || "unprofiled")}</span></div>
+        <small>${escapeHtml(labelFromValue(state.status || "rejected"))} · ${escapeHtml(labelFromValue(state.occupancy_behavior || zone.occupancyBehavior))} · ${escapeHtml(labelFromValue(zone.role))}</small>
         <small>${zone.nodeIds.length} ${zone.nodeIds.length === 1 ? "sensor" : "sensors"}${state.last_node_id ? ` · ${escapeHtml(state.last_node_id)}` : ""}</small>
+        ${frontier ? `<small class="path-frontier-label">Anonymous path frontier · until ${escapeHtml(formatTimestamp(frontier.valid_until))}</small>` : ""}
       </article>
     `;
   }
@@ -1616,16 +1648,32 @@ class PredictiveControlsPanel extends HTMLElement {
       .activity-empty h3 { margin-top:0; }
       .floor-section, .transition-section { overflow:auto; }
       .occupancy-graph-section h3 { margin-top:0; }
+      .graph-section-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
+      .graph-summary { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:8px; }
+      .graph-summary span { border:1px solid var(--divider-color); border-radius:999px; padding:4px 8px; white-space:nowrap; }
+      .graph-legend { display:flex; flex-wrap:wrap; gap:16px; margin:12px 0; color:var(--secondary-text-color); font-size:12px; }
+      .graph-legend span { display:flex; align-items:center; gap:7px; }
+      .legend-line { display:inline-block; width:28px; height:0; border-top:3px solid var(--primary-color); }
+      .legend-line.frontier { border-top-style:dashed; opacity:.8; }
+      .legend-line.authorized { border-top-color:var(--success-color, #43a047); border-top-width:5px; }
       .occupancy-board { position:relative; overflow:auto; background:var(--secondary-background-color); border:1px solid var(--divider-color); border-radius:8px; }
       .occupancy-graph { background:var(--secondary-background-color); }
       .floor-band { position:absolute; left:12px; box-sizing:border-box; border:1px solid color-mix(in srgb, var(--divider-color) 78%, transparent); border-radius:8px; background:color-mix(in srgb, var(--card-background-color) 10%, transparent); pointer-events:none; }
       .floor-band span { position:absolute; left:12px; top:10px; color:var(--primary-text-color); font-size:13px; font-weight:700; }
       .zone-edges { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
-      .zone-edges line { stroke:var(--primary-color); stroke-width:3; opacity:.72; }
+      .zone-edges line { stroke:var(--primary-color); stroke-width:3; opacity:.5; }
+      .zone-edges .frontier-edge { stroke-dasharray:10 8; stroke-width:4; opacity:.9; }
+      .zone-edges .authorized-path { stroke:var(--success-color, #43a047); stroke-width:7; opacity:.95; }
+      .zone-edges marker path { fill:var(--success-color, #43a047); }
       .zone-card { position:absolute; box-sizing:border-box; border:1px solid var(--divider-color); border-left-width:6px; border-radius:8px; padding:12px; background:var(--card-background-color); box-shadow:var(--ha-card-box-shadow, none); z-index:1; }
+      .zone-card.is-active { box-shadow:0 0 0 2px color-mix(in srgb, var(--success-color, #43a047) 42%, transparent), var(--ha-card-box-shadow, none); }
+      .zone-card.has-frontier { outline:2px dashed var(--primary-color); outline-offset:3px; }
       .zone-card-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
       .zone-card-head strong, .zone-card small { overflow:hidden; text-overflow:ellipsis; }
       .zone-card small { display:block; margin-top:6px; color:var(--secondary-text-color); }
+      .zone-belief-state { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:8px; }
+      .zone-belief-state span { color:var(--secondary-text-color); font-size:12px; }
+      .path-frontier-label { color:var(--primary-color) !important; }
       .confidence-bar { height:8px; margin-top:10px; border-radius:999px; background:var(--divider-color); overflow:hidden; }
       .confidence-bar span { display:block; height:100%; background:var(--primary-color); }
       .status-rejected { border-left-color:var(--disabled-text-color); }
@@ -1640,7 +1688,8 @@ class PredictiveControlsPanel extends HTMLElement {
       @media (max-width: 1000px) { .map-layout { grid-template-columns:1fr; } }
       @media (max-width: 700px) {
         .pc-shell { padding:12px; }
-        header, .occupancy-toolbar, .audit-heading { align-items:flex-start; flex-direction:column; }
+        header, .occupancy-toolbar, .audit-heading, .graph-section-head { align-items:flex-start; flex-direction:column; }
+        .graph-summary { justify-content:flex-start; }
         .track-row { grid-template-columns:1fr auto; }
         .track-row small { grid-column:1 / -1; }
         .reliability-metrics { grid-template-columns:1fr; }
