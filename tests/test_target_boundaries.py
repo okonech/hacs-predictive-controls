@@ -70,7 +70,10 @@ def test_tracker_validation_bootstrap_advancement_and_transient_expiry() -> None
         (event("hall", "hall", "off", NOW),),
         cold_start=True,
     )
-    tracker.bootstrap_state((), cold_start=False)
+    tracker.bootstrap_state(
+        (event("hall", "hall", "off", NOW),),
+        cold_start=False,
+    )
     tracker.bootstrap_state(
         (event("hall", "hall", "off", NOW + timedelta(seconds=1)),),
         cold_start=False,
@@ -78,6 +81,9 @@ def test_tracker_validation_bootstrap_advancement_and_transient_expiry() -> None
     assert tracker.expire_transient_state(NOW + timedelta(seconds=2)) is False
     tracker.observe(event("hall", "hall", "on", NOW + timedelta(seconds=3)))
     assert tracker.expire_transient_state(NOW + timedelta(minutes=2)) is True
+
+    empty = OccupancyTracker(target_map(), TrackerConfig(1))
+    empty.bootstrap_state((), cold_start=True)
 
 
 def test_tracker_empty_store_schema6_migration_and_prediction_restore_failure() -> None:

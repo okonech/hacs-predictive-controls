@@ -38,7 +38,7 @@ async def async_register_panel(
                 "name": "predictive-controls-panel",
                 "embed_iframe": False,
                 "trust_external": False,
-                "js_url": panel_js_url(),
+                "module_url": panel_js_url(),
             }
         },
         require_admin=True,

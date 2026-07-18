@@ -458,7 +458,10 @@ def test_panel_registration_and_unregistration(monkeypatch: pytest.MonkeyPatch) 
     assert len(static_paths) == 1
     assert len(fake.registered_panels) == 2
     assert fake.removed_panels == [DOMAIN, DOMAIN]
-    assert module.panel_js_url().endswith("panel-v0.2.1.js")
+    assert module.panel_js_url().endswith("panel-v0.2.2.js")
+    panel_custom = fake.registered_panels[-1]["config"]["_panel_custom"]
+    assert panel_custom["module_url"] == module.panel_js_url()
+    assert "js_url" not in panel_custom
 
 
 def make_runtime() -> SimpleNamespace:

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.2
+
+### Fixed
+
+- Register the Predictive Controls custom panel through Home Assistant's current
+  `module_url` loader instead of the legacy `js_url` path. The new versioned
+  bundle URL also invalidates stale or corrupted cached panel responses.
+- Add a repeatable frontend build command and a real-browser smoke page that
+  verifies a config-entry ULID cannot render as the panel body.
+
 ## 0.2.1
 
 ### Changed

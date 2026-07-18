@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Predictive Controls browser smoke test</title>
+    <script
+      type="module"
+      src="/custom_components/predictive_controls/frontend/panel-v0.2.2.js"
+    ></script>
+  </head>
+  <body>
+    <predictive-controls-panel id="panel"></predictive-controls-panel>
+    <script type="module">
+      await customElements.whenDefined("predictive-controls-panel");
+      const panel = document.querySelector("#panel");
+      panel.hass = {
+        callWS(message) {
+          if (message.type === "predictive_controls/config") {
+            return Promise.resolve({
+              entry_id: "01KTDW41RZKB4EV7VK29KSKNVP",
+              map: { nodes: {} },
+              map_yaml: "nodes: {}\n",
+              actions_yaml: "actions: {}\n",
+              transition_window_seconds: 30,
+              prediction_threshold: 0.6,
+              expected_occupants: 2,
+            });
+          }
+          if (message.type === "predictive_controls/entities") {
+            return Promise.resolve({ entities: [] });
+          }
+          if (message.type === "predictive_controls/status") {
+            return Promise.resolve({
+              zone_states: {},
+              recent_occupancy_events: [],
+              occupancy_diagnostics: {
+                model: "zone_belief",
+                beliefs: {},
+                policy: {},
+                traversal_frontier: [],
+                health_warnings: [],
+              },
+            });
+          }
+          return Promise.reject(new Error(`Unexpected command ${message.type}`));
+        },
+      };
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const rendered =
+        panel.textContent.includes("Predictive Controls") &&
+        panel.textContent.includes("Occupancy") &&
+        !document.body.textContent.trim().startsWith("'01KTDW");
+      document.body.dataset.smoke = rendered ? "passed" : "failed";
+      if (!rendered) throw new Error("Panel did not render its application shell");
+    </script>
+  </body>
+</html>
