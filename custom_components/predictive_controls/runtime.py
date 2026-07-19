@@ -79,6 +79,7 @@ class PredictiveControlsRuntime:
         self._invalid_authoritative_count = False
         self._restore_rejected = False
         self._safe_bootstrap_complete = False
+        self._automation_summary_cache: dict[float, object] = {}
 
     @property
     def chain(self) -> MarkovChain:
@@ -140,9 +141,7 @@ class PredictiveControlsRuntime:
     @property
     def problem_reasons(self) -> tuple[str, ...]:
         reasons: list[str] = []
-        if any(
-            state.health_warning for state in self.confidence.diagnostics.episode_states
-        ):
+        if any(state.health_warning for state in self.confidence.episode_states):
             reasons.append("sensor_health_degraded")
         if self._invalid_authoritative_count:
             reasons.append("invalid_authoritative_count")
@@ -227,7 +226,7 @@ class PredictiveControlsRuntime:
         )
         self._safe_bootstrap_complete = True
         self._bootstrap_total_ms = (perf_counter_ns() - startup_started_ns) / 1_000_000
-        async_dispatcher_send(self.hass, DISPATCH_UPDATE)
+        self._publish_update()
         if snapshot:
             self.schedule_transition_count_save()
 
@@ -269,7 +268,7 @@ class PredictiveControlsRuntime:
         if str(entity_id) == self.expected_occupants_entity:
             if self._sync_expected_occupants(now):
                 self.schedule_transition_count_save()
-            async_dispatcher_send(self.hass, DISPATCH_UPDATE)
+            self._publish_update()
             return
 
         self.observe_entity(
@@ -287,14 +286,14 @@ class PredictiveControlsRuntime:
             return
         self.last_zone_update = updates[-1]
         _LOGGER.debug("Refreshed %s active zone confidence states", len(updates))
-        async_dispatcher_send(self.hass, DISPATCH_UPDATE)
+        self._publish_update()
 
     @callback
     def _async_expire_transient_state(self, now: datetime) -> None:
         now = _as_utc(now)
         if self.confidence.expire_transient_state(now):
             self.schedule_transition_count_save()
-            async_dispatcher_send(self.hass, DISPATCH_UPDATE)
+            self._publish_update()
 
     @callback
     def _async_publish_diagnostics(self, _now: datetime) -> None:
@@ -364,7 +363,7 @@ class PredictiveControlsRuntime:
             self.last_zone_update.current.reason,
         )
 
-        async_dispatcher_send(self.hass, DISPATCH_UPDATE)
+        self._publish_update()
         self.schedule_transition_count_save()
         self._execute_actions(action_decisions)
 
@@ -372,8 +371,14 @@ class PredictiveControlsRuntime:
         now = _as_utc(now)
         self._sync_expected_occupants(now)
         action_decisions = self._evaluate_prediction_actions(node_id, now)
-        async_dispatcher_send(self.hass, DISPATCH_UPDATE)
+        self._publish_update()
         self._execute_actions(action_decisions)
+
+    def _publish_update(self) -> None:
+        """Invalidate projections and publish one coherent runtime update."""
+
+        self._automation_summary_cache.clear()
+        async_dispatcher_send(self.hass, DISPATCH_UPDATE)
 
     def _evaluate_prediction_actions(
         self,

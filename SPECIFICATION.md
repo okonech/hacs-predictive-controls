@@ -494,6 +494,11 @@ assignment graph.
   whole-home occupant assignments.
 - **REQ-PERF-004:** Same inputs produce byte-stable persisted model state and
   deterministic diagnostics apart from explicitly excluded runtime timing fields.
+- **REQ-PERF-005:** Routine entity publication must use bounded current-state
+  projections without materializing retained policy audit. Shared automation
+  summaries are computed at most once per runtime update and threshold; full
+  audit materialization is reserved for startup restoration, explicit
+  diagnostics, persistence, and operator status requests.
 
 ## 16. Acceptance Requirements
 

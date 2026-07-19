@@ -269,21 +269,19 @@ def test_arrival_event_deduplicates_episode_ids(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _, _, event_module = load_platform_modules(monkeypatch)
-    diagnostics = SimpleNamespace(
-        policy_events=(
-            PolicyEvent(
-                "acquired",
-                datetime(2026, 7, 15, 12, tzinfo=UTC),
-                "living_room",
-                "living_motion@2026-07-15T12:00:00+00:00",
-                0.9,
-                "adjacent_current",
-                "acquired",
-            ),
-        )
+    policy_events = (
+        PolicyEvent(
+            "acquired",
+            datetime(2026, 7, 15, 12, tzinfo=UTC),
+            "living_room",
+            "living_motion@2026-07-15T12:00:00+00:00",
+            0.9,
+            "adjacent_current",
+            "acquired",
+        ),
     )
     runtime = SimpleNamespace(
-        confidence=SimpleNamespace(diagnostics=diagnostics),
+        confidence=SimpleNamespace(policy_events=policy_events),
         last_occupancy_event=SimpleNamespace(
             event_at=datetime(2026, 7, 15, 12, tzinfo=UTC)
         ),
@@ -316,17 +314,13 @@ def test_arrival_event_filters_nonlocal_release_and_missing_episode(
 ) -> None:
     _, _, event_module = load_platform_modules(monkeypatch)
     at = datetime(2026, 7, 15, 12, tzinfo=UTC)
-    diagnostics = SimpleNamespace(
-        policy_events=(
-            PolicyEvent("acquired", at, "other", "other:1", 0.8, None, "acquired"),
-            PolicyEvent(
-                "released", at, "living_room", "living:1", 0.1, None, "released"
-            ),
-            SimpleNamespace(kind="acquired", zone="living_room", episode_id=None),
-        )
+    policy_events = (
+        PolicyEvent("acquired", at, "other", "other:1", 0.8, None, "acquired"),
+        PolicyEvent("released", at, "living_room", "living:1", 0.1, None, "released"),
+        SimpleNamespace(kind="acquired", zone="living_room", episode_id=None),
     )
     entity = event_module.ZoneArrivalEvent(
-        SimpleNamespace(confidence=SimpleNamespace(diagnostics=diagnostics)),
+        SimpleNamespace(confidence=SimpleNamespace(policy_events=policy_events)),
         "entry123",
         "living_room",
     )

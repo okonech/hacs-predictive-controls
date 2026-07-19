@@ -51,16 +51,23 @@ def runtime_automation_summary(
 ) -> AutomationSummary:
     """Build the public summary directly from zone-belief state."""
 
-    diagnostics = runtime.confidence.diagnostics
-    beliefs = dict(diagnostics.beliefs)
-    policies = dict(diagnostics.policy_states)
-    predictions = dict(diagnostics.prediction_probabilities)
+    cache = getattr(runtime, "_automation_summary_cache", None)
+    cache_key = float(prediction_threshold)
+    if isinstance(cache, dict):
+        cached = cache.get(cache_key)
+        if isinstance(cached, AutomationSummary):
+            return cached
+
+    confidence = runtime.confidence
+    beliefs = dict(confidence.beliefs)
+    policies = dict(confidence.policy_states)
+    predictions = dict(confidence.prediction_probabilities)
     authorized = {
-        item.target_zone for item in diagnostics.authorizations if item.authorized
+        item.target_zone for item in confidence.authorizations if item.authorized
     }
     boundary = {
         item.target_zone
-        for item in diagnostics.authorizations
+        for item in confidence.authorizations
         if item.authorized and item.reason == "boundary_reacquisition"
     }
     zones = {
@@ -80,7 +87,7 @@ def runtime_automation_summary(
     active = tuple(zone for zone, state in zones.items() if state.keep_on)
     prelight = tuple(zone for zone, state in zones.items() if state.prelight_plausible)
     top_zone, top_probability = _top_prediction(predictions)
-    return AutomationSummary(
+    summary = AutomationSummary(
         expected_inside_count=int(runtime.expected_occupants or 0),
         probable_inside_count=len(probable),
         possible_inside_count=len(possible),
@@ -92,7 +99,7 @@ def runtime_automation_summary(
         keep_on_zones=active,
         diagnostic_entry_path_plausible_zones=tuple(sorted(boundary)),
         active_movement_corridor=tuple(
-            sorted({token.zone for token in diagnostics.traversal_tokens})
+            sorted({token.zone for token in confidence.traversal_tokens})
         ),
         prelight_plausible_zones=prelight,
         diagnostic_predicted_next_zone=top_zone,
@@ -100,6 +107,9 @@ def runtime_automation_summary(
         explanation=_explanation(probable, top_zone, top_probability),
         zones=zones,
     )
+    if isinstance(cache, dict):
+        cache[cache_key] = summary
+    return summary
 
 
 def _zone_state(

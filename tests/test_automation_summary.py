@@ -3,10 +3,13 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+import pytest
+
 from custom_components.predictive_controls.automation_summary import (
     runtime_automation_summary,
 )
 from custom_components.predictive_controls.confidence import ZoneConfidenceEngine
+from custom_components.predictive_controls.zone_model.engine import ZoneModelEngine
 from tests.test_confidence import event
 from tests.test_zone_model_engine import target_map
 
@@ -48,3 +51,33 @@ def test_automation_summary_keeps_prediction_downstream_only() -> None:
     assert summary.keep_on_zones == ()
     assert summary.prelight_plausible_zones == ()
     assert summary.diagnostic_predicted_next_zone is None
+
+
+def test_automation_summary_avoids_audit_and_caches_per_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    predictive_map = target_map()
+    confidence = ZoneConfidenceEngine(predictive_map, expected_occupants=1)
+    confidence.observe(event("hall", "hall", "on", NOW))
+    confidence.observe(event("room", "room", "on", NOW + timedelta(seconds=2)))
+    runtime = SimpleNamespace(
+        confidence=confidence,
+        map=predictive_map,
+        expected_occupants=1,
+        _automation_summary_cache={},
+    )
+
+    def fail_audit_materialization(_engine: ZoneModelEngine) -> tuple[object, ...]:
+        raise AssertionError("entity summary materialized retained policy audit")
+
+    monkeypatch.setattr(
+        ZoneModelEngine,
+        "audit_rows",
+        property(fail_audit_materialization),
+    )
+
+    first = runtime_automation_summary(runtime)
+    second = runtime_automation_summary(runtime)
+
+    assert second is first
+    assert first.keep_on_zones == ("room",)

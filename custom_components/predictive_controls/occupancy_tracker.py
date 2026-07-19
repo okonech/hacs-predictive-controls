@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from .const import PRODUCT_MAX_OCCUPANTS
 from .events import OccupancyEvent
@@ -118,6 +118,8 @@ class OccupancyTracker:
         self._last_result: ZoneModelResult | None = None
         self._restore_status = "not_attempted"
         self._restore_reason: str | None = None
+        self._active_since_by_zone: dict[str, datetime] = {}
+        self._policy_reason_by_zone: dict[str, str] = {}
 
     @property
     def states(self) -> dict[str, ZoneState]:
@@ -139,6 +141,49 @@ class OccupancyTracker:
             )
             for zone in self._map.zones()
         }
+
+    @property
+    def beliefs(self) -> dict[str, float]:
+        """Return the lightweight current belief projection without audit data."""
+
+        if self._engine is None:
+            return {}
+        return {
+            state.zone: state.probability
+            for state in self._engine.snapshot.belief_states
+        }
+
+    @property
+    def policy_states(self) -> dict[str, ZonePolicyState]:
+        """Return current policy states without materializing retained audit."""
+
+        if self._engine is None:
+            return {}
+        return {state.zone: state for state in self._engine.snapshot.policy_states}
+
+    @property
+    def episode_states(self) -> tuple[EpisodeState, ...]:
+        """Return current physical episodes without materializing retained audit."""
+
+        return () if self._engine is None else self._engine.snapshot.episode_states
+
+    @property
+    def traversal_tokens(self) -> tuple[TraversalToken, ...]:
+        """Return current traversal tokens without materializing retained audit."""
+
+        return () if self._engine is None else self._engine.snapshot.traversal_tokens
+
+    @property
+    def authorizations(self) -> tuple[TraversalAuthorization, ...]:
+        """Return authorizations from the latest model result."""
+
+        return () if self._last_result is None else self._last_result.authorizations
+
+    @property
+    def policy_events(self) -> tuple[PolicyEvent, ...]:
+        """Return public policy events from the latest model result."""
+
+        return () if self._last_result is None else self._last_result.policy_events
 
     @property
     def requested_expected_occupants(self) -> int:
@@ -202,7 +247,16 @@ class OccupancyTracker:
         )
 
     def state_for_zone(self, zone: str) -> ZoneState:
-        return self.states.get(zone, ZoneState(zone=zone))
+        if self._engine is None or zone not in self._map.zones():
+            return ZoneState(zone=zone)
+        snapshot = self._engine.snapshot
+        belief = next(
+            (item for item in snapshot.belief_states if item.zone == zone), None
+        )
+        policy = next(
+            (item for item in snapshot.policy_states if item.zone == zone), None
+        )
+        return self._zone_state(zone, belief, policy, snapshot.episode_states)
 
     def observe(
         self,
@@ -278,6 +332,8 @@ class OccupancyTracker:
         if self._engine is not None:
             if at > self._engine.snapshot.updated_at:
                 self._record_result(self._engine.advance(at, emit_events=False))
+            else:
+                self._rebuild_policy_projection_cache()
             return
         if self._legacy_seed is not None:
             self._engine = migrate_schema6_seed(
@@ -288,9 +344,11 @@ class OccupancyTracker:
             )
             self._legacy_seed = None
             self._restore_status = "schema6_migrated"
+            self._rebuild_policy_projection_cache()
             return
         self._engine = ZoneModelEngine(self._map, self.config.expected_occupants, at)
         self._engine.bootstrap_sensor_snapshot(sensor_snapshot, at)
+        self._rebuild_policy_projection_cache()
 
     def occupancy_store_data(
         self,
@@ -329,6 +387,7 @@ class OccupancyTracker:
         self.config = TrackerConfig(candidate.snapshot.count_state.expected_count)
         self._restore_status = "restored"
         self._restore_reason = None
+        self._rebuild_policy_projection_cache()
         return True
 
     def reject_restore(self, reason: str) -> None:
@@ -368,6 +427,36 @@ class OccupancyTracker:
     def _record_result(self, result: ZoneModelResult) -> None:
         self._last_result = result
         self._predictions.apply(result)
+        for decision in result.policy_decisions:
+            self._policy_reason_by_zone[decision.zone] = decision.reason
+            if decision.active_after and not decision.active_before:
+                self._active_since_by_zone[decision.zone] = decision.event_at
+            elif not decision.active_after:
+                self._active_since_by_zone.pop(decision.zone, None)
+
+    def _rebuild_policy_projection_cache(self) -> None:
+        """Build small public projection indexes outside the event hot path."""
+
+        self._active_since_by_zone.clear()
+        self._policy_reason_by_zone.clear()
+        engine = cast(ZoneModelEngine, self._engine)
+        rows_by_zone: dict[str, list[PolicyDecision]] = {}
+        for row in engine.audit_rows:
+            rows_by_zone.setdefault(row.zone, []).append(row)
+        for policy in engine.snapshot.policy_states:
+            rows = rows_by_zone.get(policy.zone, [])
+            if rows:
+                latest = max(rows, key=lambda row: row.event_at)
+                self._policy_reason_by_zone[policy.zone] = latest.reason
+            else:
+                self._policy_reason_by_zone[policy.zone] = "bootstrap"
+            if not policy.active:
+                continue
+            acquired = [row.event_at for row in rows if row.event_kind == "acquired"]
+            self._active_since_by_zone[policy.zone] = max(
+                acquired,
+                default=policy.last_evaluated_at,
+            )
 
     @staticmethod
     def _sensor_input(event: OccupancyEvent) -> SensorInput:
@@ -392,15 +481,7 @@ class OccupancyTracker:
             default=None,
         )
         active = policy is not None and policy.active
-        active_since = None
-        engine = self._engine
-        if active and policy is not None and engine is not None:
-            acquired = [
-                row.event_at
-                for row in engine.audit_rows
-                if row.zone == zone and row.event_kind == "acquired"
-            ]
-            active_since = max(acquired, default=policy.last_evaluated_at)
+        active_since = self._active_since_by_zone.get(zone) if active else None
         return ZoneState(
             zone=zone,
             confidence=probability,
@@ -425,10 +506,7 @@ class OccupancyTracker:
     def _policy_reason(self, zone: str) -> str:
         if self._engine is None:
             return "no evidence"
-        for row in reversed(self._engine.audit_rows):
-            if row.zone == zone:
-                return row.reason
-        return "bootstrap"
+        return self._policy_reason_by_zone.get(zone, "bootstrap")
 
 
 __all__ = [

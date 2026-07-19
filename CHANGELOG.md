@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.6
+
+### Performance
+
+- Remove retained policy-audit materialization from occupancy entity updates,
+  arrival-event projection, and problem-state checks.
+- Cache automation summaries once per runtime update and prediction threshold,
+  eliminating duplicate work across Home Assistant entity subscribers.
+- Maintain small current policy-reason and activation-time projections while
+  preserving full bounded audit for startup restoration, diagnostics,
+  persistence, and status APIs.
+
 ## 0.2.5
 
 ### Fixed

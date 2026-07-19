@@ -53,7 +53,7 @@ class ZoneArrivalEvent(EventEntity):
         self.async_write_ha_state()
 
     def _project_decisions(self, *, emit: bool) -> None:
-        for event in self.runtime.confidence.diagnostics.policy_events:
+        for event in self.runtime.confidence.policy_events:
             if event.zone != self.zone or event.kind == "released":
                 continue
             episode_id = event.episode_id
