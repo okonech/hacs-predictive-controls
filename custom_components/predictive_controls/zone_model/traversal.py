@@ -14,6 +14,7 @@ from .types import (
     CountState,
     EpisodeEffect,
     EpisodeState,
+    PendingAcquisitionCandidate,
     PhysicalNode,
     TraversalAuthorization,
     TraversalToken,
@@ -48,6 +49,10 @@ class TraversalFrontier:
         self._tokens: dict[str, TraversalToken] = {}
         self._current: set[str] = set()
         self._uses: dict[tuple[str, str], AuthorizationUse] = {}
+        self._pending_by_zone: dict[str, PendingAcquisitionCandidate] = {}
+        self._expired_pending: dict[
+            tuple[str, str], PendingAcquisitionCandidate
+        ] = {}
         self._advanced_at: datetime | None = None
 
     @property
@@ -71,12 +76,31 @@ class TraversalFrontier:
     def current_token_ids(self) -> tuple[str, ...]:
         return tuple(sorted(self._current))
 
+    @property
+    def pending_candidates(self) -> tuple[PendingAcquisitionCandidate, ...]:
+        return tuple(
+            self._pending_by_zone[zone] for zone in sorted(self._pending_by_zone)
+        )
+
+    def take_expired_pending(self) -> tuple[PendingAcquisitionCandidate, ...]:
+        """Drain candidates that crossed their deadline since the last operation."""
+
+        expired = tuple(
+            sorted(
+                self._expired_pending.values(),
+                key=lambda item: (item.expires_at, item.zone, item.node_id),
+            )
+        )
+        self._expired_pending.clear()
+        return expired
+
     def restore_snapshot(
         self,
         tokens: tuple[TraversalToken, ...],
         current_token_ids: tuple[str, ...],
         uses: tuple[AuthorizationUse, ...],
         at: datetime,
+        pending_candidates: tuple[PendingAcquisitionCandidate, ...] = (),
     ) -> None:
         self.validate_time(at)
         restored_tokens = {token.token_id: token for token in tokens}
@@ -92,6 +116,7 @@ class TraversalFrontier:
                 or token.token_id != f"{token.node_id}:{token.episode_id}"
                 or token.accepted_at > at
                 or token.valid_until <= at
+                or token.path_node_ids[-1] != token.node_id
             ):
                 raise ValueError("Traversal token snapshot is incompatible")
         current = set(current_token_ids)
@@ -107,12 +132,31 @@ class TraversalFrontier:
             for use in uses
         ):
             raise ValueError("Traversal use snapshot is incompatible")
+        pending_by_zone = {item.zone: item for item in pending_candidates}
+        if len(pending_by_zone) != len(pending_candidates):
+            raise ValueError("Pending candidate snapshot is duplicated")
+        for candidate in pending_candidates:
+            node = self._nodes.get(candidate.node_id)
+            if (
+                node is None
+                or node.zone != candidate.zone
+                or node.profile_name != candidate.profile_name
+                or candidate.created_at > at
+                or candidate.expires_at <= at
+            ):
+                raise ValueError("Pending candidate snapshot is incompatible")
         self._tokens = restored_tokens
         self._current = current
         self._uses = restored_uses
+        self._pending_by_zone = pending_by_zone
         self._advanced_at = at
 
-    def issue(self, state: EpisodeState, effect: EpisodeEffect) -> TraversalToken:
+    def issue(
+        self,
+        state: EpisodeState,
+        effect: EpisodeEffect,
+        authorization: TraversalAuthorization,
+    ) -> TraversalToken:
         self.advance(effect.at)
         node = self._validated_episode(state)
         if (
@@ -122,8 +166,14 @@ class TraversalFrontier:
             or state.status != "asserted"
             or state.traversal_valid_until is None
             or state.traversal_valid_until <= effect.at
+            or not authorization.authorized
+            or authorization.target_episode_id != effect.episode_id
+            or authorization.track_confidence is None
+            or authorization.provenance_kind is None
         ):
-            raise ValueError("Traversal token requires a current positive episode")
+            raise ValueError(
+                "Traversal token requires an authorized current positive episode"
+            )
         token_id = f"{state.node_id}:{state.episode_id}"
         existing = self._tokens.get(token_id)
         if existing is not None:
@@ -137,6 +187,10 @@ class TraversalFrontier:
             state.episode_id or "",
             effect.at,
             state.traversal_valid_until,
+            authorization.track_confidence,
+            authorization.path_node_ids,
+            authorization.provenance_kind,
+            authorization.equivalent_confirmed_strength,
         )
         self._tokens[token_id] = token
         self._current.add(token_id)
@@ -146,12 +200,23 @@ class TraversalFrontier:
     def sync(self, state: EpisodeState, at: datetime) -> None:
         self.advance(at)
         self._validated_episode(state)
+        if state.status in {"degraded", "unavailable"} or state.cadence_warning:
+            self._pending_by_zone = {
+                zone: candidate
+                for zone, candidate in self._pending_by_zone.items()
+                if candidate.node_id != state.node_id
+            }
+            for token_id in tuple(
+                token_id
+                for token_id, token in self._tokens.items()
+                if token.node_id == state.node_id
+            ):
+                self._remove_token(token_id)
+            return
         token_id = f"{state.node_id}:{state.episode_id}"
         if token_id not in self._tokens:
             return
-        if state.status in {"degraded", "unavailable"}:
-            self._remove_token(token_id)
-        elif state.status == "asserted" and not state.health_warning:
+        if state.status == "asserted" and not state.health_warning:
             self._current.add(token_id)
         else:
             self._current.discard(token_id)
@@ -164,15 +229,29 @@ class TraversalFrontier:
         count: CountState | None,
         corroborating_states: Sequence[EpisodeState] = (),
     ) -> TraversalAuthorization:
+        del corroborating_states
         self.advance(at)
         target_node = self._validated_episode(target)
         if target.status != "asserted" or target.episode_id is None:
             raise ValueError("Traversal target must be a current positive episode")
+        if not self._target_trustworthy(target, at):
+            return TraversalAuthorization(
+                target.node_id,
+                target.zone,
+                target.episode_id,
+                at,
+                False,
+                "untracked_rejected",
+            )
         candidates = tuple(
             token for token in self.tokens if token.episode_id != target.episode_id
         )
-        reason = "disconnected"
+        reason = "track_bootstrap_pending"
         sources: tuple[TraversalToken, ...] = ()
+        confidence: str | None = None
+        path: tuple[str, ...] = ()
+        provenance: str | None = None
+        equivalent_strength = False
         same_zone = tuple(
             token
             for token in candidates
@@ -204,28 +283,78 @@ class TraversalFrontier:
             token for token in candidates if token.episode_id in linked_episode_ids
         )
         if same_zone:
-            reason, sources = (
-                "same_zone_other_node",
-                self._unique_tokens((*same_zone, *adjacent, *missed, *linked)),
-            )
+            reason = "same_zone_authorized"
+            direct_sources = self._unique_tokens(same_zone)
+            source = self._best_token(direct_sources)
+            sources = self._unique_tokens((*direct_sources, *linked))
+            if target.node_id in self._map.neighbors(source.node_id):
+                confidence, path = self._advance_path(source, target.node_id)
+            else:
+                confidence, path = "provisional", (target.node_id,)
+            provenance = "same_zone"
         elif adjacent_current:
-            reason, sources = (
-                "adjacent_current",
-                self._unique_tokens((*adjacent_current, *missed, *linked)),
+            direct_sources = self._unique_tokens(adjacent_current)
+            source = self._best_token(direct_sources)
+            sources = self._unique_tokens((*direct_sources, *linked))
+            confidence, path = self._advance_path(source, target.node_id)
+            reason = (
+                "track_confirmed"
+                if confidence == "confirmed"
+                and source.track_confidence == "provisional"
+                else "adjacent_authorized"
             )
+            provenance = "adjacent"
         elif adjacent:
-            reason, sources = (
-                "adjacent_recent",
-                self._unique_tokens((*adjacent, *missed, *linked)),
+            direct_sources = self._unique_tokens(adjacent)
+            source = self._best_token(direct_sources)
+            sources = self._unique_tokens((*direct_sources, *linked))
+            confidence, path = self._advance_path(source, target.node_id)
+            reason = (
+                "track_confirmed"
+                if confidence == "confirmed"
+                and source.track_confidence == "provisional"
+                else "adjacent_authorized"
             )
+            provenance = "adjacent"
         elif self._boundary_authorized(target_node, at, count):
-            reason = "boundary_reacquisition"
+            reason = "boundary_authorized"
+            confidence, path, provenance = (
+                "provisional",
+                (target.node_id,),
+                "boundary",
+            )
+            self._pending_by_zone.pop(target.zone, None)
+        elif missed:
+            sources = self._unique_tokens(missed)
+            source = self._best_token(sources)
+            confidence, path = self._advance_path(source, target.node_id)
+            reason = "missed_edge_authorized"
+            provenance = "missed_edge"
+        elif (pending := self._pending_support(target, at)) is not None:
+            self._pending_by_zone.pop(pending.zone, None)
+            if pending.zone == target.zone:
+                source = self._issue_pending_token(pending, target.node_id)
+                sources = (source,)
+                reason = "same_zone_authorized"
+                confidence, path, provenance = (
+                    "provisional",
+                    (target.node_id,),
+                    "same_zone",
+                )
+            else:
+                source = self._issue_pending_token(pending, target.node_id)
+                sources = (source,)
+                reason = "provisional_track_acquired"
+                confidence, path, provenance = (
+                    "provisional",
+                    (pending.node_id, target.node_id),
+                    "adjacent_pair",
+                )
         else:
-            if missed:
-                reason, sources = "bounded_missed_edge", missed
-            elif self._source_free_authorized(target, at, count, corroborating_states):
-                reason = "source_free_corroborated"
-        authorized = reason != "disconnected"
+            self._remember_pending(target, at, target_node.reliability)
+        authorized = confidence is not None
+        if authorized:
+            self._pending_by_zone.pop(target.zone, None)
         new_uses: list[AuthorizationUse] = []
         if authorized:
             for token in sources:
@@ -245,7 +374,111 @@ class TraversalFrontier:
             reason,
             sources,
             tuple(new_uses),
+            confidence,
+            path,
+            provenance,
+            equivalent_strength,
         )
+
+    def _remember_pending(
+        self,
+        target: EpisodeState,
+        at: datetime,
+        reliability: float,
+    ) -> None:
+        assert target.episode_id is not None
+        assert target.traversal_valid_until is not None
+        profile = SHARED_PROFILES[target.profile_name]
+        self._pending_by_zone[target.zone] = PendingAcquisitionCandidate(
+            target.node_id,
+            target.zone,
+            target.profile_name,
+            target.episode_id,
+            at,
+            at + profile.track_bootstrap_window,
+            target.traversal_valid_until,
+            reliability,
+        )
+
+    @staticmethod
+    def _target_trustworthy(target: EpisodeState, at: datetime) -> bool:
+        return bool(
+            target.status == "asserted"
+            and not target.health_warning
+            and not target.cadence_warning
+            and target.started_at is not None
+            and target.traversal_valid_until is not None
+            and target.started_at <= at < target.traversal_valid_until
+        )
+
+    def _pending_support(
+        self, target: EpisodeState, at: datetime
+    ) -> PendingAcquisitionCandidate | None:
+        candidates = tuple(
+            item
+            for item in self.pending_candidates
+            if item.episode_id != target.episode_id
+            and item.node_id != target.node_id
+            and item.created_at <= at < item.expires_at
+            and (
+                item.zone == target.zone
+                or target.node_id in self._map.neighbors(item.node_id)
+            )
+        )
+        return min(
+            candidates,
+            key=lambda item: (item.created_at, item.node_id),
+            default=None,
+        )
+
+    def _issue_pending_token(
+        self,
+        pending: PendingAcquisitionCandidate,
+        target_node_id: str,
+    ) -> TraversalToken:
+        token_id = f"{pending.node_id}:{pending.episode_id}"
+        existing = self._tokens.get(token_id)
+        if existing is not None:
+            return existing
+        token = TraversalToken(
+            token_id,
+            pending.node_id,
+            pending.zone,
+            SHARED_PROFILES[pending.profile_name].role,
+            pending.profile_name,
+            pending.episode_id,
+            pending.created_at,
+            pending.traversal_valid_until,
+            "provisional",
+            (pending.node_id,),
+            "adjacent_pair",
+        )
+        self._tokens[token_id] = token
+        self._enforce_token_bound()
+        return token
+
+    @staticmethod
+    def _best_token(tokens: Sequence[TraversalToken]) -> TraversalToken:
+        return max(
+            tokens,
+            key=lambda token: (
+                token.track_confidence == "confirmed",
+                token.accepted_at,
+                token.token_id,
+            ),
+        )
+
+    def _advance_path(
+        self, source: TraversalToken, target_node_id: str
+    ) -> tuple[str, tuple[str, ...]]:
+        sequence = (*source.path_node_ids, target_node_id)[-3:]
+        distinct = len(set(sequence))
+        confidence = (
+            "confirmed"
+            if source.track_confidence == "confirmed" or distinct >= 3
+            else "provisional"
+        )
+        return confidence, sequence
 
     @staticmethod
     def _unique_tokens(tokens: Sequence[TraversalToken]) -> tuple[TraversalToken, ...]:
@@ -270,6 +503,18 @@ class TraversalFrontier:
         )
         for token_id in expired:
             self._remove_token(token_id)
+        expired_pending = tuple(
+            candidate
+            for candidate in self._pending_by_zone.values()
+            if candidate.expires_at <= at
+        )
+        for candidate in expired_pending:
+            self._expired_pending[(candidate.zone, candidate.episode_id)] = candidate
+        self._pending_by_zone = {
+            zone: candidate
+            for zone, candidate in self._pending_by_zone.items()
+            if candidate.expires_at > at
+        }
         self._advanced_at = at
 
     def clear(self, at: datetime) -> None:
@@ -277,6 +522,8 @@ class TraversalFrontier:
         self._tokens.clear()
         self._current.clear()
         self._uses.clear()
+        self._pending_by_zone.clear()
+        self._expired_pending.clear()
 
     @staticmethod
     def apply_outward_context(
@@ -315,35 +562,6 @@ class TraversalFrontier:
             and count.positive_transition_until is not None
             and count.positive_transition_at <= at < count.positive_transition_until
             and SHARED_PROFILES[target.profile_name].role == "entry"
-        )
-
-    def _source_free_authorized(
-        self,
-        target: EpisodeState,
-        at: datetime,
-        count: CountState | None,
-        corroborating_states: Sequence[EpisodeState],
-    ) -> bool:
-        if (
-            count is None
-            or count.expected_count <= 0
-            or target.health_warning
-            or target.started_at is None
-            or target.traversal_valid_until is None
-            or not target.started_at <= at < target.traversal_valid_until
-        ):
-            return False
-        profile = SHARED_PROFILES[target.profile_name]
-        if profile.single_node_reacquisition:
-            return True
-        return any(
-            state.node_id != target.node_id
-            and state.zone == target.zone
-            and state.status == "asserted"
-            and not state.health_warning
-            and state.started_at is not None
-            and state.started_at <= at
-            for state in corroborating_states
         )
 
     def _missed_edge(

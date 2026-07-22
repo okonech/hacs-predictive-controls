@@ -28,7 +28,8 @@ function createNodeForEntity(nodes, entity, x, y) {
       adjacent: [],
       role: "room_occupancy",
       occupancy_behavior: "sustained",
-      initial_weight: 1,
+      reliability: 1,
+      route_prior_weight: 1,
       position: { x: Math.round(Math.max(0, x)), y: Math.round(Math.max(0, y)) },
     },
   };
@@ -44,7 +45,8 @@ function createEmptyNode(nodes) {
       adjacent: [],
       role: "room_occupancy",
       occupancy_behavior: "sustained",
-      initial_weight: 1,
+      reliability: 1,
+      route_prior_weight: 1,
       position: { x: 80, y: 80 },
     },
   };
@@ -720,7 +722,7 @@ class PredictiveControlsPanel extends HTMLElement {
         <header>
           <div>
             <h1>Predictive Controls</h1>
-            <p>Build the motion graph, tune predictive actions, and save it locally to Home Assistant.</p>
+            <p>Build the motion graph and configure one fast, evidence-aware active control per zone.</p>
           </div>
           <div class="pc-actions">
             <button data-action="reload">Reload</button>
@@ -733,7 +735,6 @@ class PredictiveControlsPanel extends HTMLElement {
           <button class="${this._tab === "activity" ? "active" : ""}" data-tab="activity">Activity</button>
           <button class="${this._tab === "map" ? "active" : ""}" data-tab="map">Map</button>
           <button class="${this._tab === "yaml" ? "active" : ""}" data-tab="yaml">YAML</button>
-          <button class="${this._tab === "actions" ? "active" : ""}" data-tab="actions">Actions</button>
           <button class="${this._tab === "settings" ? "active" : ""}" data-tab="settings">Settings</button>
         </nav>
         ${this.renderActiveTab()}
@@ -747,7 +748,6 @@ class PredictiveControlsPanel extends HTMLElement {
     if (this._tab === "reliability") return this.renderReliability();
     if (this._tab === "activity") return this.renderActivity();
     if (this._tab === "yaml") return this.renderYaml();
-    if (this._tab === "actions") return this.renderActions();
     if (this._tab === "settings") return this.renderSettings();
     return this.renderMap();
   }
@@ -1254,20 +1254,12 @@ class PredictiveControlsPanel extends HTMLElement {
       <label>Role<input data-field="role" value="${node.role || "room_occupancy"}" /></label>
       <label>Occupancy behavior<input data-field="occupancy_behavior" value="${this.nodeOccupancyBehavior(node)}" /></label>
       <label>Entities<textarea class="small" data-field="entities">${escapeHtml(this.formatEntities(node.entities || {}))}</textarea></label>
-      <label>Initial weight<input data-field="initial_weight" type="number" min="0.01" step="0.01" value="${node.initial_weight || 1}" /></label>
+      <label>Sensor reliability<input data-field="reliability" type="number" min="0.01" max="1" step="0.01" value="${node.reliability || 1}" /></label>
+      <label>Route prior weight<input data-field="route_prior_weight" type="number" min="0.01" step="0.01" value="${node.route_prior_weight || 1}" /></label>
       <h3>Adjacent</h3>
       <div class="chips">
         ${(node.adjacent || []).map((target) => `<button data-remove-adjacent="${target}">${target} ×</button>`).join("") || "<p>No edges yet.</p>"}
       </div>
-    `;
-  }
-
-  renderActions() {
-    return `
-      <main class="single-panel">
-        <h2>Predictive Actions</h2>
-        <textarea data-actions-yaml>${this._config.actions_yaml || ""}</textarea>
-      </main>
     `;
   }
 
@@ -1285,7 +1277,6 @@ class PredictiveControlsPanel extends HTMLElement {
     return `
       <main class="single-panel settings">
         <label>Transition window seconds<input data-setting="transition_window_seconds" type="number" min="1" value="${this._config.transition_window_seconds}" /></label>
-        <label>Prediction threshold<input data-setting="prediction_threshold" type="number" min="0" max="1" step="0.01" value="${this._config.prediction_threshold}" /></label>
         <label>Expected occupants<input data-setting="expected_occupants" type="number" min="0" max="2" step="1" value="${this._config.expected_occupants || 0}" /></label>
         <label>Expected occupants entity<input data-setting="expected_occupants_entity" type="text" value="${escapeHtml(this._config.expected_occupants_entity || "")}" /></label>
         <section class="maintenance-section">
@@ -1324,9 +1315,6 @@ class PredictiveControlsPanel extends HTMLElement {
     this.querySelector('[data-action="delete"]')?.addEventListener("click", () => this.deleteSelected());
     this.bindDragAndDrop();
     this.bindInspector();
-    this.querySelector("[data-actions-yaml]")?.addEventListener("input", (event) => {
-      this._config.actions_yaml = event.target.value;
-    });
     this.querySelector("[data-map-yaml]")?.addEventListener("input", (event) => {
       this._config.map_yaml = event.target.value;
       this._mapYamlDirty = true;
@@ -1410,8 +1398,8 @@ class PredictiveControlsPanel extends HTMLElement {
       this._selectedNode = renameNode(this.nodes, this._selectedNode, input.value);
     } else if (input.dataset.field === "entities") {
       node.entities = this.parseEntities(input.value);
-    } else if (input.dataset.field === "initial_weight") {
-      node.initial_weight = Number(input.value);
+    } else if (["reliability", "route_prior_weight"].includes(input.dataset.field)) {
+      node[input.dataset.field] = Number(input.value);
     } else {
       node[input.dataset.field] = input.value;
     }
@@ -1510,9 +1498,7 @@ class PredictiveControlsPanel extends HTMLElement {
         map: this._config.map,
         map_yaml: this._config.map_yaml,
         map_yaml_dirty: this._mapYamlDirty === true,
-        actions_yaml: this._config.actions_yaml,
         transition_window_seconds: Number(this._config.transition_window_seconds),
-        prediction_threshold: Number(this._config.prediction_threshold),
         expected_occupants: Number(this._config.expected_occupants || 0),
         expected_occupants_entity: this._config.expected_occupants_entity || "",
       });

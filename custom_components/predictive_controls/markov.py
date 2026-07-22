@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 
 from .model import PredictiveMap
+
+MARKOV_COUNT_LIMIT = 1_000_000.0
 
 
 @dataclass(frozen=True)
@@ -44,15 +47,21 @@ class MarkovChain:
                     parsed_count = float(count)
                 except (TypeError, ValueError):
                     continue
-                if parsed_count >= 0:
+                if (
+                    math.isfinite(parsed_count)
+                    and 0 <= parsed_count <= MARKOV_COUNT_LIMIT
+                ):
                     self._counts[source][target] = parsed_count
 
     def observe(self, source: str, target: str, weight: float = 1.0) -> bool:
-        if weight <= 0:
-            raise ValueError("weight must be positive")
+        if not math.isfinite(weight) or weight <= 0:
+            raise ValueError("weight must be finite and positive")
         if target not in self._counts.get(source, {}):
             return False
-        self._counts[source][target] += weight
+        self._counts[source][target] = min(
+            MARKOV_COUNT_LIMIT,
+            self._counts[source][target] + weight,
+        )
         return True
 
     def probabilities(self, source: str) -> dict[str, float]:
@@ -61,7 +70,8 @@ class MarkovChain:
             return {}
 
         weighted = {
-            target: count + self._smoothing * self._map.nodes[target].initial_weight
+            target: count
+            + self._smoothing * self._map.nodes[target].route_prior_weight
             for target, count in targets.items()
         }
         total = sum(weighted.values())

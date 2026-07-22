@@ -10,25 +10,17 @@ from homeassistant.const import CONF_NAME
 from homeassistant.helpers import selector
 
 from .const import (
-    CONF_ACTIONS_YAML,
     CONF_EXPECTED_OCCUPANTS,
     CONF_EXPECTED_OCCUPANTS_ENTITY,
     CONF_MAP_YAML,
-    CONF_PREDICTION_THRESHOLD,
     CONF_TRANSITION_WINDOW,
     DEFAULT_EXPECTED_OCCUPANTS,
     DEFAULT_EXPECTED_OCCUPANTS_ENTITY,
-    DEFAULT_PREDICTION_THRESHOLD,
     DEFAULT_TRANSITION_WINDOW,
     DOMAIN,
     PRODUCT_MAX_OCCUPANTS,
 )
-from .yaml_config import (
-    DEFAULT_ACTIONS_YAML,
-    DEFAULT_MAP_YAML,
-    load_predictive_actions,
-    load_predictive_map,
-)
+from .yaml_config import DEFAULT_MAP_YAML, load_predictive_map
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -41,22 +33,14 @@ def _yaml_selector(default: str) -> selector.TextSelector:
 
 def _options_schema(
     map_yaml: str = DEFAULT_MAP_YAML,
-    actions_yaml: str = DEFAULT_ACTIONS_YAML,
     transition_window: int = DEFAULT_TRANSITION_WINDOW,
-    prediction_threshold: float = DEFAULT_PREDICTION_THRESHOLD,
     expected_occupants: int = DEFAULT_EXPECTED_OCCUPANTS,
     expected_occupants_entity: str = DEFAULT_EXPECTED_OCCUPANTS_ENTITY,
 ) -> vol.Schema:
     return vol.Schema(
         {
             vol.Required(CONF_MAP_YAML, default=map_yaml): _yaml_selector(map_yaml),
-            vol.Required(CONF_ACTIONS_YAML, default=actions_yaml): _yaml_selector(
-                actions_yaml
-            ),
             vol.Required(CONF_TRANSITION_WINDOW, default=transition_window): int,
-            vol.Required(
-                CONF_PREDICTION_THRESHOLD, default=prediction_threshold
-            ): float,
             vol.Required(CONF_EXPECTED_OCCUPANTS, default=expected_occupants): int,
             vol.Optional(
                 CONF_EXPECTED_OCCUPANTS_ENTITY,
@@ -68,12 +52,8 @@ def _options_schema(
 
 def _validate_options(data: dict[str, Any]) -> None:
     load_predictive_map(data[CONF_MAP_YAML])
-    load_predictive_actions(data[CONF_ACTIONS_YAML])
     if int(data[CONF_TRANSITION_WINDOW]) < 1:
         raise ValueError("Transition window must be positive")
-    threshold = float(data[CONF_PREDICTION_THRESHOLD])
-    if not 0 <= threshold <= 1:
-        raise ValueError("Prediction threshold must be between 0 and 1")
     expected_occupants = int(data[CONF_EXPECTED_OCCUPANTS])
     if not 0 <= expected_occupants <= PRODUCT_MAX_OCCUPANTS:
         raise ValueError("Expected occupants must be between zero and two")
@@ -103,9 +83,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data={},
             options={
                 CONF_MAP_YAML: DEFAULT_MAP_YAML,
-                CONF_ACTIONS_YAML: DEFAULT_ACTIONS_YAML,
                 CONF_TRANSITION_WINDOW: DEFAULT_TRANSITION_WINDOW,
-                CONF_PREDICTION_THRESHOLD: DEFAULT_PREDICTION_THRESHOLD,
                 CONF_EXPECTED_OCCUPANTS: DEFAULT_EXPECTED_OCCUPANTS,
                 CONF_EXPECTED_OCCUPANTS_ENTITY: DEFAULT_EXPECTED_OCCUPANTS_ENTITY,
             },
@@ -140,9 +118,7 @@ class OptionsFlow(config_entries.OptionsFlow):
                 step_id="init",
                 data_schema=_options_schema(
                     map_yaml=user_input[CONF_MAP_YAML],
-                    actions_yaml=user_input[CONF_ACTIONS_YAML],
                     transition_window=int(user_input[CONF_TRANSITION_WINDOW]),
-                    prediction_threshold=float(user_input[CONF_PREDICTION_THRESHOLD]),
                     expected_occupants=int(user_input[CONF_EXPECTED_OCCUPANTS]),
                     expected_occupants_entity=str(
                         user_input.get(CONF_EXPECTED_OCCUPANTS_ENTITY, "")
@@ -155,12 +131,8 @@ class OptionsFlow(config_entries.OptionsFlow):
             step_id="init",
             data_schema=_options_schema(
                 map_yaml=options.get(CONF_MAP_YAML, DEFAULT_MAP_YAML),
-                actions_yaml=options.get(CONF_ACTIONS_YAML, DEFAULT_ACTIONS_YAML),
                 transition_window=options.get(
                     CONF_TRANSITION_WINDOW, DEFAULT_TRANSITION_WINDOW
-                ),
-                prediction_threshold=options.get(
-                    CONF_PREDICTION_THRESHOLD, DEFAULT_PREDICTION_THRESHOLD
                 ),
                 expected_occupants=options.get(
                     CONF_EXPECTED_OCCUPANTS, DEFAULT_EXPECTED_OCCUPANTS

@@ -40,7 +40,9 @@ def test_runtime_status_payload_exposes_only_target_model_diagnostics() -> None:
     assert diagnostics["model"] == "zone_belief"
     assert diagnostics["policy"]["room"]["active"] is True
     assert diagnostics["beliefs"]["room"] >= 0.7
-    assert diagnostics["authorizations"][-1]["reason"] == "adjacent_current"
+    assert diagnostics["authorizations"][-1]["reason"] == (
+        "provisional_track_acquired"
+    )
     assert diagnostics["recent_policy_events"][-1]["kind"] == "acquired"
     assert "joint" not in diagnostics
     assert "zone_model_shadow" not in payload

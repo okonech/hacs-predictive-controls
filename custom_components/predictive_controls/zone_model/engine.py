@@ -2,15 +2,31 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 
 from ..model import PredictiveMap
-from .count import CountContext, apply_count_update
+from .count import (
+    SEEN_EVENT_LIMIT,
+    CountConflictTracker,
+    CountContext,
+    apply_count_update,
+)
 from .episodes import PhysicalEpisodes
 from .filter import ZoneBeliefFilter
-from .policy import POLICY_CALIBRATIONS, PolicyAuditLog, ZonePolicy
-from .profiles import BELIEF_PROFILES, SHARED_PROFILES, build_physical_nodes
+from .policy import (
+    POLICY_CALIBRATIONS,
+    REFRESH_RETENTION,
+    PolicyAuditLog,
+    ZonePolicy,
+)
+from .prediction import PredictionLease, TargetPredictionManager
+from .profiles import (
+    BELIEF_PROFILES,
+    ENTRY_BOUNDARY,
+    SHARED_PROFILES,
+    build_physical_nodes,
+)
 from .traversal import TraversalFrontier
 from .types import (
     CountInput,
@@ -68,12 +84,22 @@ class ZoneModelEngine:
             for zone, profiles in sorted(profiles_by_zone.items())
         }
         self._frontier = TraversalFrontier(predictive_map, self._nodes)
+        self._predictions = TargetPredictionManager(predictive_map)
+        self._pending_prediction_learning: list[TraversalAuthorization] = []
         self._count = CountContext(initial_count)
+        self._count_conflicts = CountConflictTracker(
+            {
+                node_id: tuple(node.adjacent)
+                for node_id, node in predictive_map.nodes.items()
+            }
+        )
         active_seed = {} if active_seed is None else dict(active_seed)
         if not set(active_seed) <= set(self._filters) or any(
             not isinstance(active, bool) for active in active_seed.values()
         ):
             raise ValueError("Zone-model active seed is incompatible")
+        if initial_count == 0:
+            active_seed = {}
         self._policies = {
             zone: ZonePolicy(
                 zone,
@@ -108,6 +134,13 @@ class ZoneModelEngine:
             candidate._policies
         ):
             raise ValueError("Zone-model snapshot zones are incompatible")
+        candidate._validate_snapshot_integrity(snapshot)
+        if snapshot.count_state.expected_count == 0 and any(
+            state.active for state in policy_by_zone.values()
+        ):
+            raise ValueError("Zero-count snapshot cannot restore active zones")
+        if snapshot.count_state.expected_count == 0:
+            candidate._validate_zero_count_snapshot(snapshot)
         candidate._filters = {
             zone: ZoneBeliefFilter.restore(
                 BELIEF_PROFILES[state.profile_name],
@@ -120,8 +153,14 @@ class ZoneModelEngine:
             snapshot.current_token_ids,
             snapshot.authorization_uses,
             snapshot.updated_at,
+            snapshot.pending_candidates,
         )
         candidate._count = CountContext.restore(snapshot.count_state)
+        candidate._count_conflicts.restore(
+            snapshot.strong_fronts,
+            snapshot.count_conflicts,
+            snapshot.count_state.expected_count,
+        )
         audits: dict[str, PolicyAuditLog] = {
             zone: PolicyAuditLog() for zone in candidate._policies
         }
@@ -156,6 +195,9 @@ class ZoneModelEngine:
             self._frontier.uses,
             self._count.state,
             tuple(self._policies[zone].state for zone in sorted(self._policies)),
+            self._frontier.pending_candidates,
+            self._count_conflicts.fronts,
+            self._count_conflicts.conflicts,
         )
 
     @property
@@ -165,6 +207,26 @@ class ZoneModelEngine:
             for zone in sorted(self._policies)
             for row in self._policies[zone].audit.rows
         )
+
+    @property
+    def prediction_manager(self) -> TargetPredictionManager:
+        return self._predictions
+
+    def commit_prediction_learning(self) -> None:
+        """Commit queued confirmed route observations after publication."""
+
+        pending = tuple(self._pending_prediction_learning)
+        self._pending_prediction_learning.clear()
+        self._predictions.commit(pending)
+
+    def restore_prediction_state(self, payload: object, at: datetime) -> None:
+        """Install validated route statistics and unexpired leases atomically."""
+
+        candidate = TargetPredictionManager.restored(self._map, payload, at)
+        if self._count.state.expected_count == 0 and candidate.leases:
+            raise ValueError("Zero-count state cannot restore prediction leases")
+        self._validate_prediction_consistency(candidate)
+        self._predictions = candidate
 
     def bootstrap_sensor_snapshot(
         self,
@@ -178,48 +240,83 @@ class ZoneModelEngine:
             if event.event_at != at:
                 raise ValueError("Bootstrap sensor snapshot must share one frontier")
             update = self._episodes.observe(event)
-            for effect in sorted(update.effects, key=self._effect_order):
-                assert effect.kind == "positive"
-                self._filters[effect.zone].apply_positive(effect.episode_id, effect.at)
-            if event.state in {"unknown", "unavailable"}:
-                self._filters[update.state.zone].apply_unavailable(at)
+            if self._count.state.expected_count > 0:
+                for effect in sorted(update.effects, key=self._effect_order):
+                    assert effect.kind == "positive"
+                    self._filters[effect.zone].apply_positive(
+                        effect.episode_id, effect.at, effect.reliability
+                    )
+                if event.state in {"unknown", "unavailable"}:
+                    self._filters[update.state.zone].apply_unavailable(at)
         self._advance_components(at)
         self._frontier.clear(at)
-        self._seed_asserted_stay_policies(at)
+        self._predictions.clear()
+        if self._count.state.expected_count == 0:
+            for filter_ in self._filters.values():
+                filter_.apply_empty_baseline(at)
         self._updated_at = at
         return self.snapshot
-
-    def _seed_asserted_stay_policies(self, at: datetime) -> None:
-        """Project current stay assertions at bootstrap without public edges."""
-
-        if self._count.state.expected_count <= 0:
-            return
-        asserted_zones = {
-            state.zone
-            for state in self._episodes.states
-            if state.status == "asserted"
-            and state.known_on
-            and SHARED_PROFILES[state.profile_name].role == "stay"
-            and SHARED_PROFILES[state.profile_name].single_node_reacquisition
-        }
-        for zone in sorted(asserted_zones):
-            policy = self._policies[zone]
-            if policy.state.active:
-                continue
-            belief = self._filters[zone].state
-            calibration = POLICY_CALIBRATIONS[belief.profile_name]
-            self._policies[zone] = ZonePolicy(
-                zone,
-                calibration,
-                at,
-                active=True,
-            )
 
     def observe(
         self,
         event: SensorInput,
         *,
         processing_at: datetime | None = None,
+        decision_callback: Callable[
+            [PolicyEvent, PolicyDecision, TraversalAuthorization | None], None
+        ]
+        | None = None,
+    ) -> ZoneModelResult:
+        """Observe one input with audit deferred across a public handoff."""
+
+        if decision_callback is None:
+            return self._observe(event, processing_at=processing_at)
+        audits = tuple(policy.audit for policy in self._policies.values())
+        for audit in audits:
+            audit.begin_defer()
+        callback_failure: Exception | None = None
+        learning_frontier = len(self._pending_prediction_learning)
+
+        def safe_callback(
+            policy_event: PolicyEvent,
+            decision: PolicyDecision,
+            authorization: TraversalAuthorization | None,
+        ) -> None:
+            nonlocal callback_failure
+            if callback_failure is not None:
+                return
+            try:
+                decision_callback(policy_event, decision, authorization)
+            except Exception as exc:  # publication failure is reported after commit
+                callback_failure = exc
+
+        try:
+            result = self._observe(
+                event,
+                processing_at=processing_at,
+                decision_callback=safe_callback,
+            )
+        except Exception:
+            for audit in audits:
+                audit.discard_deferred()
+            del self._pending_prediction_learning[learning_frontier:]
+            raise
+        for audit in audits:
+            audit.flush_deferred()
+        if callback_failure is not None:
+            del self._pending_prediction_learning[learning_frontier:]
+            raise callback_failure
+        return result
+
+    def _observe(
+        self,
+        event: SensorInput,
+        *,
+        processing_at: datetime | None = None,
+        decision_callback: Callable[
+            [PolicyEvent, PolicyDecision, TraversalAuthorization | None], None
+        ]
+        | None = None,
     ) -> ZoneModelResult:
         processing_at = event.event_at if processing_at is None else processing_at
         if event.event_at < self._updated_at:
@@ -227,6 +324,11 @@ class ZoneModelEngine:
             require_utc(processing_at, "Zone-model processing time")
             return ZoneModelResult("stale", self.snapshot)
         self._validate_operation_time(event.event_at, processing_at)
+        if self._count.state.expected_count == 0:
+            return self._observe_empty_house(event, processing_at)
+        operation_beliefs = {
+            zone: filter_.state for zone, filter_ in self._filters.items()
+        }
         pending_updates = self._episodes.advance(event.event_at)
         for effect in sorted(
             (effect for update in pending_updates for effect in update.effects),
@@ -237,9 +339,38 @@ class ZoneModelEngine:
                 item for item in self._episodes.states if item.node_id == effect.node_id
             )
             self._apply_effect(state, effect)
+        self._advance_components(event.event_at)
+        deadline_decisions, deadline_events = self._release_due_policies(
+            event.event_at,
+            processing_at,
+            operation_beliefs,
+        )
+        # An external clear arriving exactly at a count-conflict deadline must
+        # not erase the asserted episode before its health diagnosis. Positive
+        # acquisition events defer this whole-house work until after the local
+        # publication callback.
+        if event.state != "on":
+            self._apply_count_conflicts(event.event_at)
         update = self._episodes.observe(event)
         if update.disposition in {"stale", "duplicate"}:
-            return ZoneModelResult(update.disposition, self.snapshot)
+            pending_expiry_decisions = self._record_pending_expiries(
+                event.event_at, processing_at
+            )
+            self._apply_count_conflicts(event.event_at)
+            self._updated_at = event.event_at
+            return ZoneModelResult(
+                update.disposition,
+                self.snapshot,
+                deadline_events,
+                (*pending_expiry_decisions, *deadline_decisions),
+            )
+
+        recovered_conflicts = tuple(
+            conflict
+            for conflict in self._count_conflicts.conflicts
+            if conflict.target_node_id == update.state.node_id
+            and any(effect.kind == "health_recovered" for effect in update.effects)
+        )
 
         effects = tuple(sorted(update.effects, key=self._effect_order))
         final_effect: EpisodeEffect | None = None
@@ -260,7 +391,16 @@ class ZoneModelEngine:
         if event.state in {"unknown", "unavailable"}:
             belief_before = self._filters[update.state.zone].state
             self._filters[update.state.zone].apply_unavailable(event.event_at)
+        elif update.disposition == "baseline_clear":
+            belief_before = self._filters[update.state.zone].state
+            self._filters[update.state.zone].apply_availability_clear(
+                update.state.episode_id,
+                event.event_at,
+            )
         self._frontier.sync(update.state, event.event_at)
+        prediction_leases = self._prepare_predictions(
+            event.event_at, tuple(authorizations)
+        )
         decisions, policy_events = self._evaluate_policies(
             event.event_at,
             processing_at,
@@ -268,14 +408,63 @@ class ZoneModelEngine:
             final_effect,
             final_authorization,
             belief_before,
+            prediction_leases=prediction_leases,
+            decision_callback=decision_callback,
+        )
+        pending_expiry_decisions = self._record_pending_expiries(
+            event.event_at, processing_at
+        )
+        self._apply_count_conflicts(
+            event.event_at,
+            local_effect=final_effect,
+            authorization=final_authorization,
+        )
+        for conflict in recovered_conflicts:
+            self._policies[update.state.zone].record_count_conflict(
+                conflict,
+                update.state,
+                self._filters[update.state.zone].state,
+                result="recovered",
+                at=event.event_at,
+                processing_at=processing_at,
+            )
+        self._updated_at = event.event_at
+        return ZoneModelResult(
+            update.disposition,
+            self.snapshot,
+            (*deadline_events, *policy_events),
+            (*pending_expiry_decisions, *deadline_decisions, *decisions),
+            tuple(authorizations),
+        )
+
+    def _observe_empty_house(
+        self,
+        event: SensorInput,
+        processing_at: datetime,
+    ) -> ZoneModelResult:
+        """Retain sensor health state while count zero suppresses all inference."""
+
+        self._episodes.advance(event.event_at)
+        update = self._episodes.observe(event)
+        for filter_ in self._filters.values():
+            filter_.apply_empty_baseline(event.event_at)
+        self._frontier.clear(event.event_at)
+        self._predictions.clear()
+        self._pending_prediction_learning.clear()
+        self._count_conflicts.clear()
+        policy_updates = tuple(
+            self._policies[zone].apply_count_zero(
+                event.event_at,
+                processing_at=processing_at,
+            )
+            for zone in sorted(self._policies)
         )
         self._updated_at = event.event_at
         return ZoneModelResult(
             update.disposition,
             self.snapshot,
-            policy_events,
-            decisions,
-            tuple(authorizations),
+            tuple(item.event for item in policy_updates if item.event is not None),
+            tuple(item.decision for item in policy_updates),
         )
 
     def observe_count(
@@ -290,6 +479,9 @@ class ZoneModelEngine:
             require_utc(processing_at, "Zone-model processing time")
             return ZoneModelResult("stale", self.snapshot)
         self._validate_operation_time(event.event_at, processing_at)
+        operation_beliefs = {
+            zone: filter_.state for zone, filter_ in self._filters.items()
+        }
         pending_updates = self._episodes.advance(event.event_at)
         for effect in sorted(
             (effect for update in pending_updates for effect in update.effects),
@@ -301,12 +493,29 @@ class ZoneModelEngine:
             )
             self._apply_effect(state, effect)
         self._advance_components(event.event_at)
+        pending_expiry_decisions = self._record_pending_expiries(
+            event.event_at, processing_at
+        )
+        self._apply_count_conflicts(event.event_at)
+        deadline_decisions, deadline_events = self._release_due_policies(
+            event.event_at,
+            processing_at,
+            operation_beliefs,
+        )
         update = self._count.observe(event)
         if update.disposition != "accepted":
             self._updated_at = event.event_at
-            return ZoneModelResult(update.disposition, self.snapshot)
+            return ZoneModelResult(
+                update.disposition,
+                self.snapshot,
+                deadline_events,
+                (*pending_expiry_decisions, *deadline_decisions),
+            )
         if update.categorical_zero:
             apply_count_update(update, self._filters, self._frontier)
+            self._count_conflicts.clear()
+            self._pending_prediction_learning.clear()
+            self._prepare_predictions(event.event_at, ())
             policy_updates = tuple(
                 self._policies[zone].apply_count_zero(
                     event.event_at,
@@ -319,6 +528,8 @@ class ZoneModelEngine:
                 item.event for item in policy_updates if item.event is not None
             )
         else:
+            self._apply_count_conflicts(event.event_at)
+            prediction_leases = self._prepare_predictions(event.event_at, ())
             decisions, policy_events = self._evaluate_policies(
                 event.event_at,
                 processing_at,
@@ -326,13 +537,14 @@ class ZoneModelEngine:
                 None,
                 None,
                 None,
+                prediction_leases=prediction_leases,
             )
         self._updated_at = event.event_at
         return ZoneModelResult(
             update.disposition,
             self.snapshot,
-            policy_events,
-            decisions,
+            (*deadline_events, *policy_events),
+            (*pending_expiry_decisions, *deadline_decisions, *decisions),
         )
 
     def advance(
@@ -363,6 +575,9 @@ class ZoneModelEngine:
         self._advance_components(at)
         for state in self._episodes.states:
             self._frontier.sync(state, at)
+        pending_expiry_decisions = self._record_pending_expiries(at, processing_at)
+        self._apply_count_conflicts(at)
+        prediction_leases = self._prepare_predictions(at, ())
         decisions, policy_events = self._evaluate_policies(
             at,
             processing_at,
@@ -372,13 +587,14 @@ class ZoneModelEngine:
             None,
             belief_before_by_zone=belief_before_advance,
             emit_events=emit_events,
+            prediction_leases=prediction_leases,
         )
         self._updated_at = at
         return ZoneModelResult(
             "advanced",
             self.snapshot,
             policy_events,
-            decisions,
+            (*pending_expiry_decisions, *decisions),
             (),
         )
 
@@ -389,14 +605,16 @@ class ZoneModelEngine:
     ) -> TraversalAuthorization | None:
         filter_ = self._filters[effect.zone]
         if effect.kind == "positive":
-            filter_.apply_positive(effect.episode_id, effect.at)
-            self._frontier.issue(state, effect)
+            filter_.apply_positive(effect.episode_id, effect.at, effect.reliability)
             authorization = self._frontier.authorize(
                 state,
                 effect.at,
                 count=self._count.state,
                 corroborating_states=self._episodes.states,
             )
+            if authorization.authorized:
+                filter_.apply_arrival_transition(effect.episode_id, effect.at)
+                self._frontier.issue(state, effect, authorization)
             TraversalFrontier.apply_outward_context(
                 authorization,
                 self._filters,
@@ -404,8 +622,13 @@ class ZoneModelEngine:
                 state.traversal_valid_until,
             )
             return authorization
+        if effect.kind in {"correlated_flap_ignored", "impossible_cadence"}:
+            self._frontier.sync(state, effect.at)
+            return None
         if effect.kind == "stable_clear":
-            filter_.apply_stable_clear(effect.episode_id, effect.at)
+            filter_.apply_stable_clear(
+                effect.episode_id, effect.at, effect.reliability
+            )
         elif effect.kind == "health_degraded":
             filter_.apply_health_degraded(effect.episode_id, effect.at)
         else:
@@ -419,6 +642,124 @@ class ZoneModelEngine:
             filter_.advance(at)
         self._frontier.advance(at)
 
+    def _prepare_predictions(
+        self,
+        at: datetime,
+        authorizations: tuple[TraversalAuthorization, ...],
+    ) -> tuple[PredictionLease, ...]:
+        leases = self._predictions.prepare(
+            at,
+            self._count.state.expected_count,
+            self._episodes.states,
+            authorizations,
+        )
+        self._pending_prediction_learning.extend(
+            authorization
+            for authorization in authorizations
+            if authorization.track_confidence == "confirmed"
+            and self._policies[authorization.target_zone].state.phase
+            != "predicted"
+        )
+        return leases
+
+    def _record_pending_expiries(
+        self,
+        at: datetime,
+        processing_at: datetime,
+    ) -> tuple[PolicyDecision, ...]:
+        return tuple(
+            self._policies[candidate.zone].record_pending_expiry(
+                candidate,
+                self._filters[candidate.zone].state,
+                at=at,
+                processing_at=processing_at,
+            )
+            for candidate in self._frontier.take_expired_pending()
+        )
+
+    def _apply_count_conflicts(
+        self,
+        at: datetime,
+        *,
+        local_effect: EpisodeEffect | None = None,
+        authorization: TraversalAuthorization | None = None,
+    ) -> None:
+        release_dwells = {
+            zone: POLICY_CALIBRATIONS[filter_.state.profile_name].release_dwell
+            for zone, filter_ in self._filters.items()
+        }
+        crossed = self._count_conflicts.evaluate(
+            at,
+            self._count.state.expected_count,
+            self._nodes,
+            self._episodes.states,
+            tuple(self._filters[zone].state for zone in sorted(self._filters)),
+            self._frontier.tokens,
+            release_dwells,
+            local_effect=local_effect,
+            authorization=authorization,
+        )
+        for conflict in crossed:
+            update = self._episodes.apply_count_conflict(
+                conflict.target_node_id,
+                conflict.target_episode_id,
+                at,
+            )
+            effect = update.effects[0]
+            self._filters[effect.zone].apply_health_degraded(
+                effect.episode_id, effect.at
+            )
+            self._frontier.sync(update.state, at)
+            self._policies[update.state.zone].record_count_conflict(
+                conflict,
+                update.state,
+                self._filters[update.state.zone].state,
+                result="degraded",
+                at=at,
+                processing_at=at,
+            )
+
+    def _release_due_policies(
+        self,
+        at: datetime,
+        processing_at: datetime,
+        belief_before_by_zone: Mapping[str, ZoneBeliefState],
+    ) -> tuple[tuple[PolicyDecision, ...], tuple[PolicyEvent, ...]]:
+        """Advance normal release deadlines before an external input at ``at``."""
+
+        decisions: list[PolicyDecision] = []
+        events: list[PolicyEvent] = []
+        for zone in sorted(self._policies):
+            policy = self._policies[zone]
+            if not policy.state.active or policy.state.phase != "active":
+                continue
+            belief_after = self._filters[zone].state
+            calibration = POLICY_CALIBRATIONS[belief_after.profile_name]
+            if belief_after.probability > calibration.off_threshold:
+                continue
+            below_since = self._filters[zone].threshold_crossed_at(
+                belief_before_by_zone[zone],
+                calibration.off_threshold,
+                at,
+            )
+            pending = policy.state.pending_release_since or below_since
+            if pending is None or at < pending + calibration.release_dwell:
+                continue
+            update = policy.evaluate(
+                at,
+                belief_before_by_zone[zone],
+                belief_after,
+                local_state=None,
+                local_effect=None,
+                authorization=None,
+                processing_at=processing_at,
+                below_threshold_since=below_since,
+            )
+            decisions.append(update.decision)
+            assert update.event is not None
+            events.append(update.event)
+        return tuple(decisions), tuple(events)
+
     def _evaluate_policies(
         self,
         at: datetime,
@@ -430,10 +771,38 @@ class ZoneModelEngine:
         *,
         belief_before_by_zone: Mapping[str, ZoneBeliefState] | None = None,
         emit_events: bool = True,
+        prediction_leases: tuple[PredictionLease, ...] = (),
+        decision_callback: Callable[
+            [PolicyEvent, PolicyDecision, TraversalAuthorization | None], None
+        ]
+        | None = None,
     ) -> tuple[tuple[PolicyDecision, ...], tuple[PolicyEvent, ...]]:
         decisions: list[PolicyDecision] = []
         events: list[PolicyEvent] = []
-        for zone in sorted(self._policies):
+        pending_by_zone = {
+            candidate.zone: candidate
+            for candidate in self._frontier.pending_candidates
+        }
+        prediction_by_zone = {
+            lease.target_zone: lease
+            for lease in sorted(
+                prediction_leases,
+                key=lambda item: (
+                    item.target_zone,
+                    item.probability,
+                    item.support,
+                    item.target_node_id,
+                ),
+            )
+        }
+        priority_zones = set(prediction_by_zone)
+        if local_state is not None:
+            priority_zones.add(local_state.zone)
+        ordered_zones = sorted(
+            self._policies,
+            key=lambda zone: (zone not in priority_zones, zone),
+        )
+        for zone in ordered_zones:
             belief_after = self._filters[zone].state
             before = (
                 belief_before_by_zone[zone]
@@ -455,6 +824,35 @@ class ZoneModelEngine:
                 calibration.off_threshold,
                 at,
             )
+            expiry = self._policies[zone].expire_prediction(
+                at,
+                belief_after,
+                processing_at=processing_at,
+                emit_event=emit_events,
+                force=bool(
+                    state is None
+                    and self._policies[zone].state.phase == "predicted"
+                    and not any(
+                        lease.mature
+                        and lease.target_zone == zone
+                        and lease.source_episode_id
+                        == self._policies[zone].state.prediction_source_episode_id
+                        and lease.expires_at
+                        == self._policies[zone].state.prediction_expires_at
+                        and lease.probability
+                        == self._policies[zone].state.prediction_probability
+                        and lease.support
+                        == self._policies[zone].state.prediction_support
+                        for lease in self._predictions.leases
+                    )
+                ),
+            )
+            if expiry is not None:
+                decisions.append(expiry.decision)
+                if expiry.event is not None:
+                    events.append(expiry.event)
+                if state is None:
+                    continue
             update = self._policies[zone].evaluate(
                 at,
                 before,
@@ -465,10 +863,25 @@ class ZoneModelEngine:
                 processing_at=processing_at,
                 emit_event=emit_events,
                 below_threshold_since=below_since,
+                pending_candidate=pending_by_zone.get(zone),
+                before_audit=decision_callback,
             )
             decisions.append(update.decision)
             if update.event is not None:
                 events.append(update.event)
+            lease = prediction_by_zone.get(zone)
+            if lease is not None:
+                prediction = self._policies[zone].apply_prediction(
+                    lease,
+                    belief_after,
+                    processing_at=processing_at,
+                    emit_event=emit_events,
+                    before_audit=decision_callback,
+                )
+                if prediction is not None:
+                    decisions.append(prediction.decision)
+                    if prediction.event is not None:
+                        events.append(prediction.event)
         return tuple(decisions), tuple(events)
 
     def _validate_operation_time(
@@ -480,6 +893,532 @@ class ZoneModelEngine:
         require_utc(processing_at, "Zone-model processing time")
         if processing_at < event_at:
             raise ValueError("Zone-model processing time cannot precede event time")
+
+    def _validate_snapshot_integrity(self, snapshot: ZoneModelSnapshot) -> None:
+        """Validate cross-component links and frontiers before installing state."""
+
+        at = snapshot.updated_at
+        episodes = {state.node_id: state for state in snapshot.episode_states}
+        for state in snapshot.episode_states:
+            historical_frontiers = (
+                state.started_at,
+                state.last_event_at,
+                state.advanced_at,
+                state.clear_started_at,
+                state.degraded_at,
+            )
+            if any(value is not None and value > at for value in historical_frontiers):
+                raise ValueError("Episode snapshot is newer than its model frontier")
+
+        for belief in snapshot.belief_states:
+            if belief.last_updated_at > at:
+                raise ValueError("Belief snapshot is newer than its model frontier")
+            if belief.generation_episode_id is not None:
+                state, _created_at = self._episode_reference(
+                    belief.generation_episode_id,
+                    episodes,
+                    at,
+                    exact=True,
+                )
+                if state.zone != belief.zone:
+                    raise ValueError("Belief snapshot episode is zone-incompatible")
+
+        for policy in snapshot.policy_states:
+            if policy.last_evaluated_at > at:
+                raise ValueError("Policy snapshot is newer than its model frontier")
+            for entry in policy.refresh_dedup:
+                state, created_at = self._episode_reference(
+                    entry.episode_id,
+                    episodes,
+                    at,
+                    exact=False,
+                )
+                if (
+                    entry.expires_at != entry.published_at + REFRESH_RETENTION
+                    or state.zone != policy.zone
+                    or created_at > entry.published_at
+                ):
+                    raise ValueError(
+                        "Refresh deduplication entry is not episode-derived"
+                    )
+            if policy.phase == "active" and policy.activation_provenance == "evidence":
+                assert policy.activation_episode_id is not None
+                assert policy.activation_at is not None
+                assert policy.activation_reason is not None
+                assert policy.activation_provenance_kind is not None
+                state, created_at = self._episode_reference(
+                    policy.activation_episode_id,
+                    episodes,
+                    at,
+                    exact=False,
+                )
+                expected_provenance = {
+                    "adjacent_authorized": "adjacent",
+                    "boundary_authorized": "boundary",
+                    "missed_edge_authorized": "missed_edge",
+                    "prediction_confirmed": "prediction_confirmation",
+                    "provisional_track_acquired": "adjacent_pair",
+                    "same_zone_authorized": "same_zone",
+                    "track_confirmed": "adjacent",
+                }[policy.activation_reason]
+                source_states = tuple(
+                    self._episode_reference(
+                        episode_id,
+                        episodes,
+                        at,
+                        exact=False,
+                    )[0]
+                    for episode_id in policy.activation_source_episode_ids
+                )
+                path = policy.activation_path_node_ids
+                source_nodes = {source.node_id for source in source_states}
+                requires_source = policy.activation_reason not in {
+                    "boundary_authorized",
+                    "prediction_confirmed",
+                }
+                if (
+                    state.zone != policy.zone
+                    or created_at != policy.activation_at
+                    or policy.activation_provenance_kind != expected_provenance
+                    or path[-1] != state.node_id
+                    or any(node_id not in self._map.nodes for node_id in path)
+                    or any(
+                        not self._bounded_path_step(left, right)
+                        for left, right in zip(path, path[1:], strict=False)
+                    )
+                    or (requires_source and not source_nodes)
+                    or (
+                        requires_source
+                        and not source_nodes.intersection(path[:-1])
+                        and not (
+                            policy.activation_reason == "same_zone_authorized"
+                            and any(
+                                source.zone == policy.zone
+                                for source in source_states
+                            )
+                        )
+                    )
+                    or (
+                        policy.activation_reason == "provisional_track_acquired"
+                        and (
+                            policy.activation_track_confidence != "provisional"
+                            or len(path) != 2
+                        )
+                    )
+                    or (
+                        policy.activation_reason == "track_confirmed"
+                        and (
+                            policy.activation_track_confidence != "confirmed"
+                            or len(path) != 3
+                        )
+                    )
+                    or (
+                        policy.activation_reason == "boundary_authorized"
+                        and (
+                            policy.activation_track_confidence != "provisional"
+                            or len(path) != 1
+                            or source_states
+                        )
+                    )
+                    or (
+                        policy.activation_reason == "prediction_confirmed"
+                        and (
+                            policy.activation_track_confidence is not None
+                            or len(path) != 1
+                            or source_states
+                        )
+                    )
+                ):
+                    raise ValueError(
+                        "Evidence-active policy is not bound to its acquisition episode"
+                    )
+
+        count = snapshot.count_state
+        if (count.last_event_at is None) != (count.last_event_id is None):
+            raise ValueError("Count snapshot event identity is incomplete")
+        if any(
+            value is not None and value > at
+            for value in (count.last_event_at, count.positive_transition_at)
+        ):
+            raise ValueError("Count snapshot is newer than its model frontier")
+        if (
+            count.last_event_id is not None
+            and count.last_event_id not in count.seen_event_ids
+        ) or len(count.seen_event_ids) > SEEN_EVENT_LIMIT:
+            raise ValueError("Count snapshot event sequence is inconsistent")
+        if (
+            count.positive_transition_at is not None
+            and count.positive_transition_until
+            != count.positive_transition_at
+            + ENTRY_BOUNDARY.traversal_context_window
+        ):
+            raise ValueError("Count transition expiry is not calibration-derived")
+
+        allowed_provenance = {
+            "adjacent",
+            "adjacent_pair",
+            "boundary",
+            "missed_edge",
+            "same_zone",
+        }
+        tokens = {token.token_id: token for token in snapshot.traversal_tokens}
+        if len(tokens) != len(snapshot.traversal_tokens):
+            raise ValueError("Traversal token snapshot is duplicated")
+        for token in snapshot.traversal_tokens:
+            state, created_at = self._episode_reference(
+                token.episode_id,
+                episodes,
+                at,
+                exact=False,
+            )
+            profile = SHARED_PROFILES[token.profile_name]
+            expected_valid_until = min(
+                created_at + profile.traversal_context_window,
+                created_at + profile.assertion_trust_horizon,
+            )
+            if (
+                state.node_id != token.node_id
+                or created_at != token.accepted_at
+                or token.valid_until != expected_valid_until
+            ):
+                raise ValueError("Traversal token is not bound to its physical episode")
+            if token.provenance_kind not in allowed_provenance:
+                raise ValueError("Traversal token provenance is incompatible")
+            if token.track_confidence == "confirmed" and len(token.path_node_ids) != 3:
+                raise ValueError("Confirmed traversal token lacks a bounded path")
+            if token.equivalent_confirmed_strength and (
+                token.provenance_kind not in {"boundary", "missed_edge"}
+                or len(token.path_node_ids) != 3
+            ):
+                raise ValueError("Equivalent traversal strength is incompatible")
+            if any(node_id not in self._map.nodes for node_id in token.path_node_ids):
+                raise ValueError("Traversal token path contains an unknown node")
+            if any(
+                not self._bounded_path_step(left, right)
+                for left, right in zip(
+                    token.path_node_ids,
+                    token.path_node_ids[1:],
+                    strict=False,
+                )
+            ):
+                raise ValueError("Traversal token path is graph-incompatible")
+
+        max_target_traversal = max(
+            min(
+                SHARED_PROFILES[node.profile_name].traversal_context_window,
+                SHARED_PROFILES[node.profile_name].assertion_trust_horizon,
+            )
+            for node in self._nodes
+        )
+        for belief in snapshot.belief_states:
+            outward = belief.outward_context
+            if outward is None:
+                continue
+            state, created_at = self._episode_reference(
+                outward.source_episode_id,
+                episodes,
+                at,
+                exact=True,
+            )
+            source_profile = SHARED_PROFILES[state.profile_name]
+            source_valid_until = min(
+                created_at + source_profile.traversal_context_window,
+                created_at + source_profile.assertion_trust_horizon,
+            )
+            if outward.valid_until > source_valid_until + max_target_traversal:
+                raise ValueError("Outward context expiry exceeds its calibrated bound")
+
+        for token_id in snapshot.current_token_ids:
+            current_token = tokens.get(token_id)
+            if current_token is None:
+                raise ValueError("Current traversal token does not exist")
+            state = episodes[current_token.node_id]
+            if (
+                state.episode_id != current_token.episode_id
+                or state.status != "asserted"
+                or state.health_warning
+                or state.cadence_warning
+            ):
+                raise ValueError("Current traversal token is not physically current")
+
+        for candidate in snapshot.pending_candidates:
+            state, created_at = self._episode_reference(
+                candidate.episode_id,
+                episodes,
+                at,
+                exact=True,
+            )
+            node = self._map.nodes[candidate.node_id]
+            physical_profile = next(
+                item for item in self._nodes if item.node_id == candidate.node_id
+            )
+            sensor_profile = SHARED_PROFILES[candidate.profile_name]
+            expected_traversal = min(
+                created_at + sensor_profile.traversal_context_window,
+                created_at + sensor_profile.assertion_trust_horizon,
+            )
+            if (
+                state.node_id != candidate.node_id
+                or created_at != candidate.created_at
+                or candidate.expires_at
+                != created_at + sensor_profile.track_bootstrap_window
+                or candidate.traversal_valid_until != expected_traversal
+                or candidate.reliability != physical_profile.reliability
+                or node.occupancy_zone != candidate.zone
+            ):
+                raise ValueError("Pending candidate is not bound to its episode")
+
+        for use in snapshot.authorization_uses:
+            source = tokens.get(use.token_id)
+            if source is None or not source.accepted_at <= use.authorized_at <= at:
+                raise ValueError("Traversal use has an incompatible source frontier")
+            _state, target_created_at = self._episode_reference(
+                use.target_episode_id,
+                episodes,
+                at,
+                exact=False,
+            )
+            if target_created_at > use.authorized_at:
+                raise ValueError("Traversal use predates its target episode")
+
+        self._validate_count_snapshot(snapshot)
+
+    def _validate_count_snapshot(self, snapshot: ZoneModelSnapshot) -> None:
+        """Require stored strong fronts and conflicts to match current evidence."""
+
+        at = snapshot.updated_at
+        validator = CountConflictTracker(
+            {
+                node_id: tuple(node.adjacent)
+                for node_id, node in self._map.nodes.items()
+            }
+        )
+        validator.restore(
+            snapshot.strong_fronts,
+            (),
+            snapshot.count_state.expected_count,
+        )
+        validator.evaluate(
+            at,
+            snapshot.count_state.expected_count,
+            self._nodes,
+            snapshot.episode_states,
+            snapshot.belief_states,
+            snapshot.traversal_tokens,
+            {
+                belief.zone: POLICY_CALIBRATIONS[
+                    belief.profile_name
+                ].release_dwell
+                for belief in snapshot.belief_states
+            },
+        )
+        if validator.fronts != snapshot.strong_fronts:
+            raise ValueError("Strong-front snapshot is not evidence-derived")
+        episodes = {state.node_id: state for state in snapshot.episode_states}
+        for conflict in snapshot.count_conflicts:
+            state = episodes.get(conflict.target_node_id)
+            historical = (
+                conflict.started_at,
+                conflict.last_evaluated_at,
+                conflict.degraded_at,
+            )
+            if (
+                state is None
+                or state.zone != conflict.target_zone
+                or state.episode_id != conflict.target_episode_id
+                or any(
+                    value is not None and value > snapshot.updated_at
+                    for value in historical
+                )
+                or (
+                    state is not None
+                    and conflict.deadline
+                    != conflict.started_at
+                    + POLICY_CALIBRATIONS[state.profile_name].release_dwell
+                )
+                or (
+                    conflict.degraded_at is None
+                    and conflict.strong_front_ids
+                    != tuple(
+                        front.front_id
+                        for front in snapshot.strong_fronts
+                        if conflict.target_zone not in front.zones
+                        and conflict.target_node_id not in front.node_ids
+                    )[: snapshot.count_state.expected_count]
+                )
+            ):
+                raise ValueError("Count-conflict snapshot is incompatible")
+
+    def _validate_prediction_consistency(
+        self,
+        manager: TargetPredictionManager,
+    ) -> None:
+        """Bind every restored predicted policy to one mature current lease."""
+
+        leases = manager.leases
+        counts = manager.chain.counts
+        episodes = {state.node_id: state for state in self.snapshot.episode_states}
+        tokens = {
+            token.episode_id: token for token in self.snapshot.traversal_tokens
+        }
+        for lease in leases:
+            state, created_at = self._episode_reference(
+                lease.source_episode_id,
+                episodes,
+                self._updated_at,
+                exact=False,
+            )
+            token = tokens.get(lease.source_episode_id)
+            target_state = episodes.get(lease.target_node_id)
+            if (
+                state.node_id != lease.current_node_id
+                or created_at != lease.created_at
+                or token is None
+                or token.node_id != lease.current_node_id
+                or token.track_confidence != "confirmed"
+                or len(token.path_node_ids) != 3
+                or token.path_node_ids[-2:] != (
+                    lease.source_node_id,
+                    lease.current_node_id,
+                )
+            ):
+                raise ValueError(
+                    "Prediction lease is not bound to confirmed traversal provenance"
+                )
+            if (
+                target_state is not None
+                and target_state.last_event_at is not None
+                and target_state.last_event_at > lease.created_at
+            ):
+                raise ValueError(
+                    "Prediction lease survived contradictory target evidence"
+                )
+            prior_total = sum(
+                self._map.nodes[node_id].route_prior_weight
+                for node_id in self._map.nodes[lease.current_node_id].adjacent
+            )
+            expected_probability = (
+                counts[lease.current_node_id][lease.target_node_id]
+                + self._map.nodes[lease.target_node_id].route_prior_weight
+            ) / (
+                sum(counts[lease.current_node_id].values()) + prior_total
+            )
+            if lease.support > counts[lease.current_node_id][lease.target_node_id]:
+                raise ValueError("Prediction lease support exceeds learned route state")
+            if lease.support < counts[lease.current_node_id][lease.target_node_id]:
+                raise ValueError(
+                    "Prediction lease support disagrees with learned route state"
+                )
+            if lease.probability > expected_probability + 1e-12:
+                raise ValueError(
+                    "Prediction lease probability exceeds its learned route state"
+                )
+            if lease.probability < expected_probability - 1e-12:
+                raise ValueError(
+                    "Prediction lease probability disagrees with its "
+                    "learned route state"
+                )
+        for policy in self.snapshot.policy_states:
+            if policy.phase != "predicted":
+                continue
+            matches = tuple(
+                lease
+                for lease in leases
+                if lease.mature
+                and lease.target_zone == policy.zone
+                and lease.source_episode_id == policy.prediction_source_episode_id
+                and lease.expires_at == policy.prediction_expires_at
+                and lease.probability == policy.prediction_probability
+                and lease.support == policy.prediction_support
+            )
+            if len(matches) != 1:
+                raise ValueError("Predicted policy has no matching mature lease")
+
+    def _bounded_path_step(self, source: str, target: str) -> bool:
+        if source == target:
+            return False
+        neighbors = set(self._map.neighbors(source))
+        if target in neighbors:
+            return True
+        return any(target in self._map.neighbors(node_id) for node_id in neighbors)
+
+    @staticmethod
+    def _episode_reference(
+        episode_id: str,
+        states: Mapping[str, EpisodeState],
+        frontier: datetime,
+        *,
+        exact: bool,
+    ) -> tuple[EpisodeState, datetime]:
+        for node_id in sorted(states, key=len, reverse=True):
+            prefix = f"{node_id}:"
+            if not episode_id.startswith(prefix):
+                continue
+            raw_generation, separator, raw_at = episode_id[len(prefix) :].partition(
+                ":"
+            )
+            try:
+                generation = int(raw_generation)
+                created_at = datetime.fromisoformat(raw_at)
+            except ValueError as exc:
+                raise ValueError("Episode reference is malformed") from exc
+            require_utc(created_at, "Episode reference time")
+            state = states[node_id]
+            if (
+                not separator
+                or not 1 <= generation <= state.generation
+                or created_at > frontier
+                or (
+                    generation < state.generation
+                    and state.started_at is not None
+                    and created_at >= state.started_at
+                )
+                or (
+                    generation == state.generation
+                    and state.episode_id != episode_id
+                )
+                or (exact and state.episode_id != episode_id)
+            ):
+                raise ValueError("Episode reference is outside stored state")
+            return state, created_at
+        raise ValueError("Episode reference has no stored physical node")
+
+    @staticmethod
+    def _validate_zero_count_snapshot(snapshot: ZoneModelSnapshot) -> None:
+        forbidden = (
+            snapshot.traversal_tokens,
+            snapshot.current_token_ids,
+            snapshot.authorization_uses,
+            snapshot.pending_candidates,
+            snapshot.strong_fronts,
+            snapshot.count_conflicts,
+        )
+        if any(forbidden):
+            raise ValueError("Zero-count snapshot contains acquisition state")
+        for belief in snapshot.belief_states:
+            prior = BELIEF_PROFILES[belief.profile_name].prior_probability
+            if (
+                abs(belief.probability - prior) > 1e-12
+                or belief.generation_episode_id is not None
+                or belief.asserted_episode_id is not None
+                or belief.outward_context is not None
+                or belief.health_warning
+                or belief.context != "cleared_without_outward"
+                or belief.contributions
+            ):
+                raise ValueError("Zero-count snapshot contains nonbaseline belief")
+        for policy in snapshot.policy_states:
+            if (
+                policy.active
+                or policy.phase != "inactive"
+                or policy.pending_release_since is not None
+                or policy.activation_provenance is not None
+                or policy.prediction_expires_at is not None
+                or policy.prediction_source_episode_id is not None
+                or policy.prediction_probability is not None
+                or policy.prediction_support is not None
+            ):
+                raise ValueError("Zero-count snapshot contains policy authority")
 
     @staticmethod
     def _effect_order(effect: EpisodeEffect) -> tuple[datetime, str, str]:

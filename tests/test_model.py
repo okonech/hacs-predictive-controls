@@ -28,7 +28,8 @@ def test_predictive_map_parses_nodes_and_entities() -> None:
                     "entities": {"motion": "binary_sensor.entry"},
                     "adjacent": ["hall"],
                     "transition_seconds": {"hall": 12},
-                    "initial_weight": 2,
+                    "reliability": 0.8,
+                    "route_prior_weight": 2,
                     "review_required": True,
                 },
                 "hall": {"adjacent": ["entry"]},
@@ -47,7 +48,9 @@ def test_predictive_map_parses_nodes_and_entities() -> None:
     )
     assert predictive_map.zone_occupancy_behavior("entry_hall") == "transient"
     assert predictive_map.zone_occupancy_behavior("missing") == "sustained"
-    assert predictive_map.nodes["entry"].initial_weight == 2.0
+    assert predictive_map.nodes["entry"].reliability == 0.8
+    assert predictive_map.nodes["entry"].initial_weight == 0.8
+    assert predictive_map.nodes["entry"].route_prior_weight == 2.0
     assert predictive_map.nodes["entry"].transition_seconds == {"hall": 12.0}
     assert predictive_map.transition_seconds_between_nodes("entry", "hall") == 12.0
     assert predictive_map.transition_seconds_between_nodes("hall", "entry") is None
@@ -87,7 +90,16 @@ def test_predictive_map_parses_nodes_and_entities() -> None:
             "must be finite and positive",
         ),
         ({"nodes": {"entry": {"initial_weight": "heavy"}}}, "must be numeric"),
-        ({"nodes": {"entry": {"initial_weight": 0}}}, "must be positive"),
+        ({"nodes": {"entry": {"initial_weight": 0}}}, "in \\(0, 1]"),
+        ({"nodes": {"entry": {"initial_weight": 2}}}, "in \\(0, 1]"),
+        (
+            {"nodes": {"entry": {"route_prior_weight": "heavy"}}},
+            "route_prior_weight must be numeric",
+        ),
+        (
+            {"nodes": {"entry": {"route_prior_weight": 0}}},
+            "route_prior_weight must be finite and positive",
+        ),
         ({"nodes": {"entry": {"floor": 1}}}, "floor must be"),
         ({"nodes": {"entry": {"zone": 1}}}, "zone must be"),
         ({"nodes": {"entry": {"role": ""}}}, "role must be"),
@@ -163,7 +175,19 @@ def test_initial_reliability_alias_is_supported() -> None:
         {"nodes": {"entry": {"initial_reliability": 0.75}}}
     )
 
+    assert predictive_map.nodes["entry"].reliability == 0.75
     assert predictive_map.nodes["entry"].initial_weight == 0.75
+
+
+def test_reliability_aliases_must_agree() -> None:
+    with pytest.raises(PredictiveMapError, match="aliases must agree"):
+        PredictiveMap.from_mapping(
+            {
+                "nodes": {
+                    "entry": {"reliability": 0.8, "initial_weight": 0.7}
+                }
+            }
+        )
 
 
 def test_empty_zone_metadata_is_supported() -> None:

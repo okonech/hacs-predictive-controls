@@ -8,8 +8,6 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .automation_summary import runtime_automation_summary
 from .const import (
-    CONF_PREDICTION_THRESHOLD,
-    DEFAULT_PREDICTION_THRESHOLD,
     DISPATCH_DIAGNOSTIC_UPDATE,
     DISPATCH_UPDATE,
     DOMAIN,
@@ -23,19 +21,12 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     runtime: PredictiveControlsRuntime = hass.data[DOMAIN][entry.entry_id]
-    threshold = float(
-        entry.options.get(CONF_PREDICTION_THRESHOLD, DEFAULT_PREDICTION_THRESHOLD)
-    )
     entities: list[BinarySensorEntity] = [
         HomeActiveSensor(runtime, entry.entry_id),
         PredictiveControlsProblemSensor(runtime, entry.entry_id),
     ]
     entities.extend(
         ZoneActiveSensor(runtime, entry.entry_id, zone) for zone in runtime.map.zones()
-    )
-    entities.extend(
-        ZonePrelightSensor(runtime, entry.entry_id, zone, threshold)
-        for zone in runtime.map.zones()
     )
     entities.extend(
         ZoneDiagnosticEntryPathSensor(runtime, entry.entry_id, zone)
@@ -50,25 +41,28 @@ class RuntimeBinarySensor(BinarySensorEntity):
     def __init__(self, runtime: PredictiveControlsRuntime, entry_id: str) -> None:
         self.runtime = runtime
         self.entry_id = entry_id
-        self._published_is_on: bool | None = None
+        self._published_signature: object | None = None
 
     @property
     def update_signal(self) -> str:
         return DISPATCH_UPDATE
 
     async def async_added_to_hass(self) -> None:
-        self._published_is_on = bool(self.is_on)
+        self._published_signature = self._state_signature()
         self.async_on_remove(
             async_dispatcher_connect(self.hass, self.update_signal, self._handle_update)
         )
 
     @callback
     def _handle_update(self) -> None:
-        is_on = bool(self.is_on)
-        if is_on == self._published_is_on:
+        signature = self._state_signature()
+        if signature == self._published_signature:
             return
-        self._published_is_on = is_on
+        self._published_signature = signature
         self.async_write_ha_state()
+
+    def _state_signature(self) -> object:
+        return bool(self.is_on), _freeze(self.extra_state_attributes)
 
 
 class HomeActiveSensor(RuntimeBinarySensor):
@@ -141,47 +135,46 @@ class ZoneActiveSensor(RuntimeBinarySensor):
     def extra_state_attributes(self) -> dict[str, object]:
         state = runtime_automation_summary(self.runtime).zones[self.zone]
         reason = self.runtime.zone_states[self.zone].reason
+        policy = self.runtime.confidence.policy_states.get(self.zone)
+        decisions = tuple(
+            row
+            for row in self.runtime.confidence.policy_decisions
+            if row.zone == self.zone
+        )
+        authorizations = tuple(
+            item
+            for item in self.runtime.confidence.authorizations
+            if item.target_zone == self.zone
+        )
+        latest_decision = decisions[-1] if decisions else None
+        latest_authorization = authorizations[-1] if authorizations else None
         return {
             "reason": reason,
             "occupancy_probability": state.confidence,
-            "explanation": reason,
-        }
-
-
-class ZonePrelightSensor(RuntimeBinarySensor):
-    def __init__(
-        self,
-        runtime: PredictiveControlsRuntime,
-        entry_id: str,
-        zone: str,
-        threshold: float,
-    ) -> None:
-        super().__init__(runtime, entry_id)
-        self.zone = zone
-        self.threshold = threshold
-        self._attr_name = f"{zone.replace('_', ' ').title()} Prelight"
-        self._attr_unique_id = f"{entry_id}_{zone}_prelight"
-
-    @property
-    def is_on(self) -> bool:
-        return (
-            runtime_automation_summary(self.runtime, self.threshold)
-            .zones[self.zone]
-            .prelight_plausible
-        )
-
-    @property
-    def extra_state_attributes(self) -> dict[str, float | str]:
-        state = runtime_automation_summary(self.runtime, self.threshold).zones[
-            self.zone
-        ]
-        return {
-            "probability": state.prediction_probability,
-            "threshold": self.threshold,
-            "explanation": (
-                f"Prediction probability {state.prediction_probability:.3f} "
-                f"against threshold {self.threshold:.3f}"
+            "phase": None if policy is None else policy.phase,
+            "activation_provenance": (
+                None if policy is None else policy.activation_provenance
             ),
+            "prediction_expires_at": (
+                None
+                if policy is None or policy.prediction_expires_at is None
+                else policy.prediction_expires_at.isoformat()
+            ),
+            "prediction_probability": (
+                None if policy is None else policy.prediction_probability
+            ),
+            "prediction_support": (
+                None if policy is None else policy.prediction_support
+            ),
+            "track_confidence": (
+                None
+                if latest_authorization is None
+                else latest_authorization.track_confidence
+            ),
+            "evidence_ids": (
+                [] if latest_decision is None else list(latest_decision.evidence_ids)
+            ),
+            "explanation": reason,
         }
 
 
@@ -218,3 +211,15 @@ class ZoneDiagnosticEntryPathSensor(RuntimeBinarySensor):
         return {
             "explanation": "Sampled diagnostic entry-path plausibility",
         }
+
+
+def _freeze(value: object) -> object:
+    """Return a deterministic comparison key for current entity attributes."""
+
+    if isinstance(value, dict):
+        return tuple(sorted((key, _freeze(item)) for key, item in value.items()))
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze(item) for item in value)
+    if isinstance(value, set):
+        return tuple(sorted((_freeze(item) for item in value), key=repr))
+    return value

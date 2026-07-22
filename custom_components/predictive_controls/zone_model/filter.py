@@ -16,6 +16,8 @@ from .types import (
 
 LOG_ODDS_LIMIT = 30.0
 DEFAULT_CONTRIBUTION_LIMIT = 32
+ARRIVAL_FROM_EMPTY_PROBABILITY = 0.75
+ARRIVAL_FROM_OCCUPIED_PROBABILITY = 0.80
 
 
 def probability_to_log_odds(probability: float) -> float:
@@ -75,7 +77,9 @@ class ZoneBeliefFilter:
             filter_.advance(restore_at)
         return filter_
 
-    def apply_positive(self, episode_id: str, at: datetime) -> ZoneBeliefState:
+    def apply_positive(
+        self, episode_id: str, at: datetime, reliability: float = 1.0
+    ) -> ZoneBeliefState:
         self._require_episode_id(episode_id)
         self._advance_to(at)
         if self._state.generation_episode_id == episode_id:
@@ -86,6 +90,7 @@ class ZoneBeliefFilter:
             log_odds=self._apply_likelihood(
                 self._profile.positive_empty_likelihood,
                 self._profile.positive_occupied_likelihood,
+                reliability,
             ),
             context="asserted",
             generation_episode_id=episode_id,
@@ -96,7 +101,9 @@ class ZoneBeliefFilter:
         self._record("local_positive", before, episode_id)
         return self._state
 
-    def apply_stable_clear(self, episode_id: str, at: datetime) -> ZoneBeliefState:
+    def apply_stable_clear(
+        self, episode_id: str, at: datetime, reliability: float = 1.0
+    ) -> ZoneBeliefState:
         self._require_episode_id(episode_id)
         self._advance_to(at)
         if self._state.generation_episode_id != episode_id:
@@ -116,6 +123,7 @@ class ZoneBeliefFilter:
             log_odds=self._apply_likelihood(
                 self._profile.clear_empty_likelihood,
                 self._profile.clear_occupied_likelihood,
+                reliability,
             ),
             context=(
                 "cleared_with_outward" if has_outward else "cleared_without_outward"
@@ -124,6 +132,39 @@ class ZoneBeliefFilter:
             outward_context=before.outward_context if has_outward else None,
         )
         self._record("stable_clear", before, episode_id)
+        return self._state
+
+    def apply_arrival_transition(
+        self,
+        episode_id: str,
+        at: datetime,
+        empty_to_occupied: float = ARRIVAL_FROM_EMPTY_PROBABILITY,
+        occupied_to_occupied: float = ARRIVAL_FROM_OCCUPIED_PROBABILITY,
+    ) -> ZoneBeliefState:
+        """Apply one graph-supported occupancy-state transition."""
+
+        self._require_episode_id(episode_id)
+        self._advance_to(at)
+        if not 0.0 < empty_to_occupied <= occupied_to_occupied < 1.0:
+            raise ValueError("Arrival transition probabilities are invalid")
+        if self._state.generation_episode_id != episode_id:
+            raise ValueError("Arrival transition must match current episode")
+        if any(
+            item.kind == "arrival_transition"
+            and item.episode_id == episode_id
+            and item.at == at
+            for item in self._state.contributions
+        ):
+            return self._state
+        before = self._state
+        probability = empty_to_occupied * (1.0 - before.probability) + (
+            occupied_to_occupied * before.probability
+        )
+        self._state = replace(
+            before,
+            log_odds=self._bounded_log_odds(probability_to_log_odds(probability)),
+        )
+        self._record("arrival_transition", before, episode_id)
         return self._state
 
     def apply_health_degraded(self, episode_id: str, at: datetime) -> ZoneBeliefState:
@@ -167,6 +208,43 @@ class ZoneBeliefFilter:
             outward_context=None,
         )
         self._record("unavailable", before, before.generation_episode_id)
+        return self._state
+
+    def apply_availability_clear(
+        self,
+        episode_id: str | None,
+        at: datetime,
+    ) -> ZoneBeliefState:
+        """End unavailable context when an accepted clear state arrives."""
+
+        self._advance_to(at)
+        if self._state.context != "unavailable":
+            return self._state
+        if episode_id is not None:
+            self._require_episode_id(episode_id)
+            if self._state.generation_episode_id != episode_id:
+                raise ValueError(
+                    "Availability clear does not match the current episode"
+                )
+            before = self._state
+            self._state = replace(
+                before,
+                context="cleared_without_outward",
+                asserted_episode_id=None,
+                outward_context=None,
+                health_warning=False,
+            )
+            self._record("availability_clear", before, episode_id)
+            return self._state
+        self._state = replace(
+            self._state,
+            log_odds=probability_to_log_odds(self._profile.prior_probability),
+            context="cleared_without_outward",
+            asserted_episode_id=None,
+            outward_context=None,
+            health_warning=False,
+            contributions=(),
+        )
         return self._state
 
     def register_outward(
@@ -236,17 +314,16 @@ class ZoneBeliefFilter:
 
     def apply_empty_baseline(self, at: datetime) -> ZoneBeliefState:
         self._advance_to(at)
-        before = self._state
         self._state = replace(
-            before,
+            self._state,
             log_odds=probability_to_log_odds(self._profile.prior_probability),
             context="cleared_without_outward",
             generation_episode_id=None,
             asserted_episode_id=None,
             outward_context=None,
             health_warning=False,
+            contributions=(),
         )
-        self._record("count_zero", before, before.generation_episode_id)
         return self._state
 
     def _advance_to(self, at: datetime) -> None:
@@ -273,6 +350,12 @@ class ZoneBeliefFilter:
 
     def _decay_to(self, at: datetime) -> None:
         before = self._state
+        if (
+            before.generation_episode_id is None
+            and before.context == "cleared_without_outward"
+        ):
+            self._state = replace(before, last_updated_at=at)
+            return
         elapsed = (at - before.last_updated_at).total_seconds()
         calibration = self._profile.decay_for(before.context)
         survival = math.exp(-elapsed / calibration.time_constant.total_seconds())
@@ -289,9 +372,14 @@ class ZoneBeliefFilter:
             return
         self._record("elapsed_decay", before, before.generation_episode_id)
 
-    def _apply_likelihood(self, empty: float, occupied: float) -> float:
+    def _apply_likelihood(
+        self, empty: float, occupied: float, reliability: float
+    ) -> float:
+        if not math.isfinite(reliability) or not 0 < reliability <= 1:
+            raise ValueError("Observation reliability must be finite and in (0, 1]")
         return self._bounded_log_odds(
-            self._state.log_odds + math.log(occupied) - math.log(empty)
+            self._state.log_odds
+            + reliability * (math.log(occupied) - math.log(empty))
         )
 
     def _record(
@@ -354,16 +442,53 @@ class ZoneBeliefFilter:
             or state.context in {"cleared_without_outward", "unavailable"}
         ):
             raise ValueError("Stored outward context is inconsistent")
-        if state.generation_episode_id is None and (
-            state.asserted_episode_id is not None
-            or state.outward_context is not None
-            or state.health_warning
-            or state.context != "cleared_without_outward"
-            or state.contributions
-            or state.log_odds
-            != probability_to_log_odds(self._profile.prior_probability)
-        ):
-            raise ValueError("Stored bootstrap belief state is inconsistent")
+        if state.generation_episode_id is None:
+            prior_log_odds = probability_to_log_odds(
+                self._profile.prior_probability
+            )
+            invalid_reference = bool(
+                state.asserted_episode_id is not None
+                or state.outward_context is not None
+                or state.health_warning
+            )
+            if state.context == "cleared_without_outward":
+                invalid_context = bool(
+                    state.contributions
+                    or abs(state.log_odds - prior_log_odds) > 1e-12
+                )
+            elif state.context == "unavailable":
+                unavailable = (
+                    state.contributions[0]
+                    if len(state.contributions) == 1
+                    else None
+                )
+                calibration = self._profile.unavailable
+                elapsed = (
+                    0.0
+                    if unavailable is None
+                    else (state.last_updated_at - unavailable.at).total_seconds()
+                )
+                survival = math.exp(
+                    -elapsed / calibration.time_constant.total_seconds()
+                )
+                expected_probability = calibration.baseline_probability + (
+                    self._profile.prior_probability
+                    - calibration.baseline_probability
+                ) * survival
+                expected_log_odds = probability_to_log_odds(expected_probability)
+                invalid_context = bool(
+                    unavailable is None
+                    or unavailable.kind != "unavailable"
+                    or unavailable.episode_id is not None
+                    or unavailable.context_before != "cleared_without_outward"
+                    or unavailable.context_after != "unavailable"
+                    or abs(unavailable.log_odds_delta) > 1e-12
+                    or abs(state.log_odds - expected_log_odds) > 1e-12
+                )
+            else:  # pragma: no cover - other contexts are rejected above
+                invalid_context = True
+            if invalid_reference or invalid_context:
+                raise ValueError("Stored bootstrap belief state is inconsistent")
 
     @staticmethod
     def _bounded_log_odds(value: float) -> float:

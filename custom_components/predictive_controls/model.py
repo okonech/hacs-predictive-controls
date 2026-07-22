@@ -70,7 +70,8 @@ class NodeConfig:
     entities: dict[str, str] = field(default_factory=dict)
     adjacent: tuple[str, ...] = ()
     transition_seconds: dict[str, float] = field(default_factory=dict)
-    initial_weight: float = 1.0
+    reliability: float = 1.0
+    route_prior_weight: float = 1.0
     floor: str | None = None
     zone: str | None = None
     role: str = "room_occupancy"
@@ -120,18 +121,37 @@ class NodeConfig:
                 )
             parsed_transition_seconds[target_id] = parsed_seconds
 
-        initial_weight = raw.get("initial_weight", raw.get("initial_reliability"))
-        if initial_weight is None:
-            initial_weight = 1.0
+        reliability_values = [
+            raw[key]
+            for key in ("reliability", "initial_reliability", "initial_weight")
+            if key in raw
+        ]
+        reliability = reliability_values[0] if reliability_values else 1.0
+        if any(value != reliability for value in reliability_values[1:]):
+            raise PredictiveMapError(
+                f"Node {node_id!r} reliability aliases must agree"
+            )
         try:
-            parsed_weight = float(initial_weight)
+            parsed_reliability = float(reliability)
         except (TypeError, ValueError) as exc:
             raise PredictiveMapError(
-                f"Node {node_id!r} initial_weight must be numeric"
+                f"Node {node_id!r} reliability must be numeric"
             ) from exc
-        if parsed_weight <= 0:
+        if not math.isfinite(parsed_reliability) or not 0 < parsed_reliability <= 1:
             raise PredictiveMapError(
-                f"Node {node_id!r} initial_weight must be positive"
+                f"Node {node_id!r} reliability must be finite and in (0, 1]"
+            )
+
+        route_prior_weight = raw.get("route_prior_weight", 1.0)
+        try:
+            parsed_route_prior = float(route_prior_weight)
+        except (TypeError, ValueError) as exc:
+            raise PredictiveMapError(
+                f"Node {node_id!r} route_prior_weight must be numeric"
+            ) from exc
+        if not math.isfinite(parsed_route_prior) or parsed_route_prior <= 0:
+            raise PredictiveMapError(
+                f"Node {node_id!r} route_prior_weight must be finite and positive"
             )
 
         floor = raw.get("floor")
@@ -166,7 +186,8 @@ class NodeConfig:
             entities=parsed_entities,
             adjacent=parsed_adjacent,
             transition_seconds=parsed_transition_seconds,
-            initial_weight=parsed_weight,
+            reliability=parsed_reliability,
+            route_prior_weight=parsed_route_prior,
             floor=floor,
             zone=zone,
             role=role,
@@ -177,6 +198,12 @@ class NodeConfig:
     @property
     def occupancy_zone(self) -> str:
         return self.zone or self.node_id
+
+    @property
+    def initial_weight(self) -> float:
+        """Deprecated one-release alias for sensor reliability."""
+
+        return self.reliability
 
 
 @dataclass(frozen=True)

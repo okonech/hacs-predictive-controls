@@ -13,9 +13,12 @@ from custom_components.predictive_controls.zone_model.policy import (
     PolicyAuditLog,
     ZonePolicy,
 )
+from custom_components.predictive_controls.zone_model.prediction import PredictionLease
 from custom_components.predictive_controls.zone_model.types import (
+    CountConflictState,
     EpisodeEffect,
     EpisodeState,
+    PendingAcquisitionCandidate,
     PolicyCalibration,
     PolicyUpdate,
     RefreshDedupEntry,
@@ -91,7 +94,10 @@ def authorization(
         state.episode_id or "",
         at,
         authorized,
-        "adjacent_current" if authorized else "disconnected",
+        "adjacent_authorized" if authorized else "track_bootstrap_pending",
+        track_confidence="provisional" if authorized else None,
+        path_node_ids=(state.node_id,) if authorized else (),
+        provenance_kind="adjacent" if authorized else None,
     )
 
 
@@ -238,6 +244,14 @@ def test_refresh_dedup_expires_exclusively_and_is_bounded() -> None:
         True,
         NOW + timedelta(seconds=255),
         refresh_dedup=entries,
+        phase="active",
+        activation_provenance="evidence",
+        activation_episode_id="episode:0",
+        activation_at=NOW,
+        activation_reason="boundary_authorized",
+        activation_track_confidence="provisional",
+        activation_path_node_ids=("room",),
+        activation_provenance_kind="boundary",
     )
     at = NOW + timedelta(seconds=256)
     policy = ZonePolicy("room", POLICY_CALIBRATIONS["stay_pir"], at, state=state)
@@ -479,6 +493,78 @@ def test_count_zero_releases_immediately_and_inactive_has_no_edge() -> None:
     assert unchanged.event is None
 
 
+def test_pending_expiry_audit_validates_zone_and_preserves_active_state() -> None:
+    candidate = PendingAcquisitionCandidate(
+        "room_motion",
+        "room",
+        "stay_pir",
+        "room:1",
+        NOW,
+        NOW + timedelta(seconds=30),
+        NOW + timedelta(seconds=20),
+        1.0,
+    )
+    at = NOW + timedelta(seconds=30)
+    active = ZonePolicy("room", POLICY_CALIBRATIONS["stay_pir"], NOW, active=True)
+
+    decision = active.record_pending_expiry(
+        candidate,
+        belief(0.8, at),
+        at=at,
+        processing_at=at,
+    )
+
+    assert active.state.active is True
+    assert decision.active_before is decision.active_after is True
+    assert decision.reason == "untracked_expired"
+    with pytest.raises(ValueError, match="incompatible"):
+        active.record_pending_expiry(
+            replace(candidate, zone="other"),
+            belief(0.8, at),
+            at=at,
+            processing_at=at,
+        )
+
+
+def test_prediction_contradiction_releases_when_public_events_are_suppressed() -> None:
+    policy = ZonePolicy("room", POLICY_CALIBRATIONS["stay_pir"], NOW)
+    lease = PredictionLease(
+        "source",
+        "current",
+        "room_motion",
+        "room",
+        0.9,
+        5.0,
+        "source:1",
+        NOW,
+        NOW + timedelta(seconds=10),
+        True,
+        "test",
+    )
+    assert policy.apply_prediction(lease, belief(0.1, NOW)) is not None
+    at = NOW + timedelta(seconds=1)
+    unavailable = episode(
+        "room:1",
+        at,
+        status="unavailable",
+    )
+
+    update = policy.evaluate(
+        at,
+        belief(0.1, at),
+        belief(0.1, at),
+        local_state=unavailable,
+        local_effect=None,
+        authorization=None,
+        emit_event=False,
+    )
+
+    assert not update.state.active
+    assert update.state.phase == "inactive"
+    assert update.event is None
+    assert update.decision.reason == "prediction_unconfirmed"
+
+
 def test_profile_policy_calibration_is_shared_and_role_ordered() -> None:
     assert {item.on_threshold for item in POLICY_CALIBRATIONS.values()} == {0.7}
     assert {item.off_threshold for item in POLICY_CALIBRATIONS.values()} == {0.3}
@@ -506,6 +592,44 @@ def test_policy_calibration_and_authorization_validate_direct_inputs() -> None:
         replace(valid, authorized=1)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="result"):
         replace(valid, reason="")
+
+
+def test_count_conflict_audit_and_prediction_reject_incompatible_inputs() -> None:
+    policy = ZonePolicy("room", POLICY_CALIBRATIONS["stay_pir"], NOW)
+    state = episode("room:1", NOW)
+    conflict = CountConflictState(
+        "other",
+        "room",
+        "room:1",
+        NOW,
+        NOW,
+        NOW + timedelta(seconds=60),
+        ("front",),
+    )
+    with pytest.raises(ValueError, match="incompatible"):
+        policy.record_count_conflict(
+            conflict,
+            state,
+            belief(0.8, NOW),
+            result="degraded",
+            at=NOW,
+            processing_at=NOW,
+        )
+
+    immature = PredictionLease(
+        "source",
+        "current",
+        "target",
+        "room",
+        1.0,
+        4.0,
+        "source:1",
+        NOW,
+        NOW + timedelta(seconds=10),
+        False,
+        "immature",
+    )
+    assert policy.apply_prediction(immature, belief(0.1, NOW)) is None
 
 
 def test_policy_can_suppress_acquire_refresh_events_and_reject_bad_frontier() -> None:
@@ -564,6 +688,14 @@ def test_refresh_and_policy_state_validate_restore_invariants() -> None:
         ZonePolicyState("room", "stay_pir", False, NOW, NOW)
     with pytest.raises(ValueError, match="current active"):
         ZonePolicyState("room", "stay_pir", True, NOW, NOW + timedelta(seconds=1))
+    with pytest.raises(ValueError, match="retains activation provenance"):
+        ZonePolicyState(
+            "room",
+            "stay_pir",
+            False,
+            NOW,
+            activation_provenance="evidence",
+        )
     with pytest.raises(ValueError, match="exceeds"):
         ZonePolicyState(
             "room",
@@ -574,9 +706,98 @@ def test_refresh_and_policy_state_validate_restore_invariants() -> None:
                 RefreshDedupEntry(f"room:{index}", NOW, NOW + timedelta(hours=12))
                 for index in range(257)
             ),
+            phase="active",
+            activation_provenance="evidence",
+            activation_episode_id="room:1",
+            activation_at=NOW,
+            activation_reason="boundary_authorized",
+            activation_track_confidence="provisional",
+            activation_path_node_ids=("room",),
+            activation_provenance_kind="boundary",
         )
+
+
+def test_evidence_active_state_requires_complete_bounded_provenance() -> None:
+    valid = ZonePolicyState(
+        "room",
+        "stay_pir",
+        True,
+        NOW,
+        phase="active",
+        activation_provenance="evidence",
+        activation_episode_id="room:1",
+        activation_at=NOW,
+        activation_reason="boundary_authorized",
+        activation_track_confidence="provisional",
+        activation_path_node_ids=("room",),
+        activation_provenance_kind="boundary",
+    )
+    for changes in (
+        {"activation_episode_id": ""},
+        {"activation_reason": ""},
+        {"activation_provenance_kind": ""},
+        {"activation_track_confidence": "invalid"},
+        {"activation_path_node_ids": ("a", "b", "c", "d")},
+        {"activation_path_node_ids": ("",)},
+        {"activation_source_episode_ids": ("source", "source")},
+        {"activation_source_episode_ids": ("",)},
+        {"activation_reason": "invalid"},
+        {"activation_at": NOW + timedelta(seconds=1)},
+        {"activation_track_confidence": None},
+        {"activation_provenance_kind": None},
+    ):
+        with pytest.raises(ValueError):
+            replace(valid, **changes)
+
+    with pytest.raises(ValueError, match="lacks acquisition evidence"):
+        ZonePolicyState(
+            "room",
+            "stay_pir",
+            True,
+            NOW,
+            phase="active",
+            activation_provenance="evidence",
+        )
+    with pytest.raises(ValueError, match="incompatible activation evidence"):
+        ZonePolicyState(
+            "room",
+            "stay_pir",
+            False,
+            NOW,
+            activation_path_node_ids=("room",),
+        )
+
+    confirmed = replace(
+        valid,
+        activation_reason="prediction_confirmed",
+        activation_track_confidence=None,
+        activation_provenance_kind="prediction_confirmation",
+    )
+    for changes in (
+        {"activation_track_confidence": "confirmed"},
+        {"activation_provenance_kind": "boundary"},
+        {"activation_path_node_ids": ("hall", "room")},
+        {"activation_source_episode_ids": ("hall:1",)},
+    ):
+        with pytest.raises(ValueError, match="lacks acquisition evidence"):
+            replace(confirmed, **changes)
+    refresh = RefreshDedupEntry("room:1", NOW, NOW + timedelta(hours=12))
     with pytest.raises(ValueError, match="unique"):
-        ZonePolicyState("room", "stay_pir", True, NOW, refresh_dedup=(valid, valid))
+        ZonePolicyState(
+            "room",
+            "stay_pir",
+            True,
+            NOW,
+            refresh_dedup=(refresh, refresh),
+            phase="active",
+            activation_provenance="evidence",
+            activation_episode_id="room:1",
+            activation_at=NOW,
+            activation_reason="boundary_authorized",
+            activation_track_confidence="provisional",
+            activation_path_node_ids=("room",),
+            activation_provenance_kind="boundary",
+        )
     later = RefreshDedupEntry(
         "room:2", NOW + timedelta(seconds=1), NOW + timedelta(hours=12)
     )
@@ -586,17 +807,47 @@ def test_refresh_and_policy_state_validate_restore_invariants() -> None:
             "stay_pir",
             True,
             NOW + timedelta(seconds=1),
-            refresh_dedup=(later, valid),
+            refresh_dedup=(later, refresh),
+            phase="active",
+            activation_provenance="evidence",
+            activation_episode_id="room:1",
+            activation_at=NOW,
+            activation_reason="boundary_authorized",
+            activation_track_confidence="provisional",
+            activation_path_node_ids=("room",),
+            activation_provenance_kind="boundary",
         )
     with pytest.raises(ValueError, match="state frontier"):
-        ZonePolicyState("room", "stay_pir", True, NOW, refresh_dedup=(later,))
+        ZonePolicyState(
+            "room",
+            "stay_pir",
+            True,
+            NOW,
+            refresh_dedup=(later,),
+            phase="active",
+            activation_provenance="evidence",
+            activation_episode_id="room:1",
+            activation_at=NOW,
+            activation_reason="boundary_authorized",
+            activation_track_confidence="provisional",
+            activation_path_node_ids=("room",),
+            activation_provenance_kind="boundary",
+        )
     with pytest.raises(ValueError, match="state frontier"):
         ZonePolicyState(
             "room",
             "stay_pir",
             True,
             NOW + timedelta(hours=12),
-            refresh_dedup=(valid,),
+            refresh_dedup=(refresh,),
+            phase="active",
+            activation_provenance="evidence",
+            activation_episode_id="room:1",
+            activation_at=NOW,
+            activation_reason="boundary_authorized",
+            activation_track_confidence="provisional",
+            activation_path_node_ids=("room",),
+            activation_provenance_kind="boundary",
         )
 
 

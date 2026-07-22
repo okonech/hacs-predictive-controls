@@ -28,7 +28,8 @@ export function createNodeForEntity(nodes, entity, x, y) {
       adjacent: [],
       role: "room_occupancy",
       occupancy_behavior: "sustained",
-      initial_weight: 1,
+      reliability: 1,
+      route_prior_weight: 1,
       position: { x: Math.round(Math.max(0, x)), y: Math.round(Math.max(0, y)) },
     },
   };
@@ -44,7 +45,8 @@ export function createEmptyNode(nodes) {
       adjacent: [],
       role: "room_occupancy",
       occupancy_behavior: "sustained",
-      initial_weight: 1,
+      reliability: 1,
+      route_prior_weight: 1,
       position: { x: 80, y: 80 },
     },
   };

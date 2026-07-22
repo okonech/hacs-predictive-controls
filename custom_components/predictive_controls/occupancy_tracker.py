@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -11,17 +12,26 @@ from .model import PredictiveMap
 from .zone_model.engine import ZoneModelEngine
 from .zone_model.persistence import (
     LEGACY_EXACT_SCHEMA,
+    LEGACY_V2_SCHEMA,
+    LegacySchema6Seed,
+    LegacyV2Seed,
+    decode_schema6_seed,
+    decode_v2_seed,
     migrate_schema6_seed,
+    migrate_v2_seed,
     restore_target_state,
     serialize_target_state,
 )
 from .zone_model.prediction import PredictionLease, TargetPredictionManager
 from .zone_model.types import (
+    CountConflictState,
     CountInput,
     EpisodeState,
+    PendingAcquisitionCandidate,
     PolicyDecision,
     PolicyEvent,
     SensorInput,
+    StrongTrackedFront,
     TraversalAuthorization,
     TraversalToken,
     ZoneBeliefState,
@@ -81,6 +91,10 @@ class TrackerDiagnostics:
     authorizations: tuple[TraversalAuthorization, ...]
     episode_states: tuple[EpisodeState, ...]
     traversal_tokens: tuple[TraversalToken, ...]
+    pending_candidates: tuple[PendingAcquisitionCandidate, ...]
+    strong_fronts: tuple[StrongTrackedFront, ...]
+    count_conflicts: tuple[CountConflictState, ...]
+    sensor_reliability: dict[str, float]
     prediction_leases: tuple[PredictionLease, ...]
     prediction_probabilities: dict[str, float]
     policy_audit: tuple[PolicyDecision, ...]
@@ -113,7 +127,8 @@ class OccupancyTracker:
         )
         self._engine: ZoneModelEngine | None = None
         self._predictions = TargetPredictionManager(predictive_map)
-        self._legacy_seed: object | None = None
+        self._legacy_seed: LegacySchema6Seed | None = None
+        self._v2_seed: LegacyV2Seed | None = None
         self._recent_events: list[OccupancyEvent] = []
         self._last_result: ZoneModelResult | None = None
         self._restore_status = "not_attempted"
@@ -186,6 +201,12 @@ class OccupancyTracker:
         return () if self._last_result is None else self._last_result.policy_events
 
     @property
+    def policy_decisions(self) -> tuple[PolicyDecision, ...]:
+        """Return decisions from the latest operation without retained audit."""
+
+        return () if self._last_result is None else self._last_result.policy_decisions
+
+    @property
     def requested_expected_occupants(self) -> int:
         return self._requested_expected_occupants
 
@@ -224,6 +245,15 @@ class OccupancyTracker:
             authorizations=() if result is None else result.authorizations,
             episode_states=() if snapshot is None else snapshot.episode_states,
             traversal_tokens=() if snapshot is None else snapshot.traversal_tokens,
+            pending_candidates=(
+                () if snapshot is None else snapshot.pending_candidates
+            ),
+            strong_fronts=() if snapshot is None else snapshot.strong_fronts,
+            count_conflicts=() if snapshot is None else snapshot.count_conflicts,
+            sensor_reliability={
+                node_id: node.reliability
+                for node_id, node in sorted(self._map.nodes.items())
+            },
             prediction_leases=self._predictions.leases,
             prediction_probabilities=self._predictions.probabilities,
             policy_audit=() if self._engine is None else self._engine.audit_rows,
@@ -240,6 +270,15 @@ class OccupancyTracker:
                 "token_count": 0
                 if snapshot is None
                 else len(snapshot.traversal_tokens),
+                "pending_candidate_count": 0
+                if snapshot is None
+                else len(snapshot.pending_candidates),
+                "strong_front_count": 0
+                if snapshot is None
+                else len(snapshot.strong_fronts),
+                "count_conflict_count": 0
+                if snapshot is None
+                else len(snapshot.count_conflicts),
                 "audit_count": 0
                 if self._engine is None
                 else len(self._engine.audit_rows),
@@ -262,13 +301,37 @@ class OccupancyTracker:
         self,
         event: OccupancyEvent,
         *,
+        processing_at: datetime | None = None,
         emit_activation: bool = True,
+        defer_learning: bool = False,
+        publication_callback: Callable[[], None] | None = None,
     ) -> ZoneUpdate:
         del emit_activation
         event = replace(event, event_at=_as_utc(event.event_at))
+        processed_at = (
+            event.event_at if processing_at is None else _as_utc(processing_at)
+        )
         previous = self.state_for_zone(event.zone)
         engine = self._ensure_engine(event.event_at)
-        self._record_result(engine.observe(self._sensor_input(event)))
+        self._record_result(
+            engine.observe(
+                self._sensor_input(event),
+                processing_at=processed_at,
+                decision_callback=(
+                    None
+                    if publication_callback is None
+                    else lambda policy_event, decision, authorization: (
+                        self._publish_fast_projection(
+                            policy_event,
+                            decision,
+                            authorization,
+                            publication_callback,
+                        )
+                    )
+                ),
+            ),
+            defer_learning=defer_learning,
+        )
         self._recent_events = [*self._recent_events[-24:], event]
         return ZoneUpdate(event, previous, self.state_for_zone(event.zone))
 
@@ -286,6 +349,8 @@ class OccupancyTracker:
         expected_occupants: int,
         now: datetime,
         evidence_id: str = "occupant_count_change",
+        *,
+        processing_at: datetime | None = None,
     ) -> None:
         if expected_occupants < 0:
             raise ValueError("expected_occupants must be non-negative")
@@ -296,9 +361,14 @@ class OccupancyTracker:
         self._unsupported_count = None
         self.config = TrackerConfig(expected_occupants)
         at = _as_utc(now)
+        if self._legacy_seed is not None or self._v2_seed is not None:
+            return
         self._record_result(
             self._ensure_engine(at).observe_count(
-                CountInput(evidence_id, expected_occupants, True, at)
+                CountInput(evidence_id, expected_occupants, True, at),
+                processing_at=(
+                    at if processing_at is None else _as_utc(processing_at)
+                ),
             )
         )
 
@@ -329,24 +399,42 @@ class OccupancyTracker:
         )
         at = max((event.event_at for event in normalized), default=datetime.now(UTC))
         sensor_snapshot = tuple(self._sensor_input(event) for event in normalized)
-        if self._engine is not None:
-            if at > self._engine.snapshot.updated_at:
-                self._record_result(self._engine.advance(at, emit_events=False))
-            else:
-                self._rebuild_policy_projection_cache()
-            return
         if self._legacy_seed is not None:
             self._engine = migrate_schema6_seed(
                 self._map,
                 self._legacy_seed,
                 sensor_snapshot,
                 at,
+                expected_count=self.config.expected_occupants,
             )
+            self._predictions = self._engine.prediction_manager
             self._legacy_seed = None
+            self._adopt_engine_count()
             self._restore_status = "schema6_migrated"
             self._rebuild_policy_projection_cache()
             return
+        if self._v2_seed is not None:
+            self._engine = migrate_v2_seed(
+                self._map,
+                self._v2_seed,
+                sensor_snapshot,
+                at,
+                expected_count=self.config.expected_occupants,
+            )
+            self._predictions = self._engine.prediction_manager
+            self._v2_seed = None
+            self._adopt_engine_count()
+            self._restore_status = "v2_migrated"
+            self._rebuild_policy_projection_cache()
+            return
+        if self._engine is not None:
+            if at > self._engine.snapshot.updated_at:
+                self._record_result(self._engine.advance(at, emit_events=False))
+            else:
+                self._rebuild_policy_projection_cache()
+            return
         self._engine = ZoneModelEngine(self._map, self.config.expected_occupants, at)
+        self._predictions = self._engine.prediction_manager
         self._engine.bootstrap_sensor_snapshot(sensor_snapshot, at)
         self._rebuild_policy_projection_cache()
 
@@ -360,14 +448,29 @@ class OccupancyTracker:
             self._ensure_engine(datetime.now(UTC) if now is None else _as_utc(now))
         assert self._engine is not None
         payload = serialize_target_state(self._map, self._engine)
-        payload["prediction"] = self._predictions.serialize()
         return payload
 
     def restore_state(self, restored: object, now: datetime) -> bool:
         at = _as_utc(now)
         if isinstance(restored, dict) and restored.get("schema") == LEGACY_EXACT_SCHEMA:
-            self._legacy_seed = restored
+            try:
+                seed = decode_schema6_seed(self._map, restored)
+            except (TypeError, ValueError) as exc:
+                self.reject_restore(str(exc))
+                return False
+            self._legacy_seed = seed
+            self._v2_seed = None
             self._restore_status = "schema6_pending"
+            self._restore_reason = None
+            return True
+        if isinstance(restored, dict) and restored.get("schema") == LEGACY_V2_SCHEMA:
+            try:
+                self._v2_seed = decode_v2_seed(self._map, restored)
+            except (TypeError, ValueError) as exc:
+                self.reject_restore(str(exc))
+                return False
+            self._legacy_seed = None
+            self._restore_status = "v2_pending"
             self._restore_reason = None
             return True
         try:
@@ -375,16 +478,11 @@ class OccupancyTracker:
         except (TypeError, ValueError) as exc:
             self.reject_restore(str(exc))
             return False
-        candidate_predictions = TargetPredictionManager(self._map)
-        if isinstance(restored, dict) and "prediction" in restored:
-            try:
-                candidate_predictions.restore(restored["prediction"], at)
-            except (TypeError, ValueError) as exc:
-                self.reject_restore(str(exc))
-                return False
         self._engine = candidate
-        self._predictions = candidate_predictions
-        self.config = TrackerConfig(candidate.snapshot.count_state.expected_count)
+        self._predictions = candidate.prediction_manager
+        self._legacy_seed = None
+        self._v2_seed = None
+        self._adopt_engine_count()
         self._restore_status = "restored"
         self._restore_reason = None
         self._rebuild_policy_projection_cache()
@@ -422,17 +520,47 @@ class OccupancyTracker:
             self._engine = ZoneModelEngine(
                 self._map, self.config.expected_occupants, at
             )
+            self._predictions = self._engine.prediction_manager
         return self._engine
 
-    def _record_result(self, result: ZoneModelResult) -> None:
+    def commit_prediction_learning(self) -> None:
+        if self._engine is not None:
+            self._engine.commit_prediction_learning()
+
+    def _record_result(
+        self, result: ZoneModelResult, *, defer_learning: bool = False
+    ) -> None:
         self._last_result = result
-        self._predictions.apply(result)
+        if not defer_learning:
+            self.commit_prediction_learning()
         for decision in result.policy_decisions:
             self._policy_reason_by_zone[decision.zone] = decision.reason
             if decision.active_after and not decision.active_before:
                 self._active_since_by_zone[decision.zone] = decision.event_at
             elif not decision.active_after:
                 self._active_since_by_zone.pop(decision.zone, None)
+
+    def _publish_fast_projection(
+        self,
+        event: PolicyEvent,
+        decision: PolicyDecision,
+        authorization: TraversalAuthorization | None,
+        callback: Callable[[], None],
+    ) -> None:
+        """Install coherent edge metadata before scheduling the entity write."""
+
+        engine = cast(ZoneModelEngine, self._engine)
+        self._last_result = ZoneModelResult(
+            "publishing",
+            engine.snapshot,
+            (event,),
+            (decision,),
+            () if authorization is None else (authorization,),
+        )
+        self._policy_reason_by_zone[decision.zone] = decision.reason
+        if decision.active_after and not decision.active_before:
+            self._active_since_by_zone[decision.zone] = decision.event_at
+        callback()
 
     def _rebuild_policy_projection_cache(self) -> None:
         """Build small public projection indexes outside the event hot path."""
@@ -458,9 +586,23 @@ class OccupancyTracker:
                 default=policy.last_evaluated_at,
             )
 
+    def _adopt_engine_count(self) -> None:
+        """Adopt restored count as the facade's reconciliation frontier."""
+
+        engine = cast(ZoneModelEngine, self._engine)
+        expected = engine.snapshot.count_state.expected_count
+        self.config = TrackerConfig(expected)
+        self._requested_expected_occupants = expected
+        self._unsupported_count = None
+
     @staticmethod
     def _sensor_input(event: OccupancyEvent) -> SensorInput:
-        return SensorInput(event.entity_id, event.state, event.event_at)
+        return SensorInput(
+            event.entity_id,
+            event.state,
+            event.event_at,
+            event.reliability,
+        )
 
     def _zone_state(
         self,

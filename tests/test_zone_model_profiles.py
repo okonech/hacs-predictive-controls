@@ -68,12 +68,12 @@ def test_shared_profiles_have_independent_finite_timing() -> None:
     assert TRANSITION_FAST.assertion_trust_horizon < STAY_PIR.assertion_trust_horizon
     assert STAY_PIR.post_clear_residual < STAY_PRESENCE.post_clear_residual
     assert ENTRY_BOUNDARY.role == "entry"
-    assert STAY_PIR.single_node_reacquisition is True
-    assert STAY_PRESENCE.single_node_reacquisition is True
-    assert TRANSITION_FAST.single_node_reacquisition is False
-    assert ENTRY_BOUNDARY.single_node_reacquisition is False
-    with pytest.raises(ValueError, match="must be boolean"):
-        replace(STAY_PIR, single_node_reacquisition=1)  # type: ignore[arg-type]
+    assert STAY_PIR.track_bootstrap_window == timedelta(seconds=90)
+    assert STAY_PRESENCE.track_bootstrap_window == timedelta(seconds=120)
+    assert TRANSITION_FAST.track_bootstrap_window == timedelta(seconds=45)
+    assert ENTRY_BOUNDARY.track_bootstrap_window == timedelta(seconds=30)
+    with pytest.raises(ValueError, match="must be positive"):
+        replace(STAY_PIR, track_bootstrap_window=timedelta(0))
 
 
 @pytest.mark.parametrize(

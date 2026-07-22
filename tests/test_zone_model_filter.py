@@ -8,6 +8,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from custom_components.predictive_controls.zone_model.filter import (
+    ARRIVAL_FROM_EMPTY_PROBABILITY,
+    ARRIVAL_FROM_OCCUPIED_PROBABILITY,
     ZoneBeliefFilter,
     probability_to_log_odds,
 )
@@ -21,6 +23,55 @@ from custom_components.predictive_controls.zone_model.types import (
 )
 
 NOW = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
+
+
+@pytest.mark.parametrize("profile_name", sorted(BELIEF_PROFILES))
+@pytest.mark.parametrize("reliability", (0.0001, 0.5, 1.0))
+def test_supported_arrival_crosses_on_threshold_at_reliability_boundaries(
+    profile_name: str,
+    reliability: float,
+) -> None:
+    filter_ = ZoneBeliefFilter("zone", BELIEF_PROFILES[profile_name], NOW)
+    filter_.apply_positive("episode", NOW, reliability)
+
+    supported = filter_.apply_arrival_transition("episode", NOW)
+    duplicate = filter_.apply_arrival_transition("episode", NOW)
+
+    assert supported.probability >= ARRIVAL_FROM_EMPTY_PROBABILITY
+    assert supported.probability <= ARRIVAL_FROM_OCCUPIED_PROBABILITY
+    assert duplicate == supported
+
+
+def test_supported_arrival_bounds_high_prior_without_entering_release_region() -> None:
+    filter_ = ZoneBeliefFilter("zone", BELIEF_PROFILES["stay_presence"], NOW)
+    filter_.apply_positive("episode", NOW)
+    high_prior = filter_.state.probability
+
+    supported = filter_.apply_arrival_transition("episode", NOW)
+
+    assert high_prior > ARRIVAL_FROM_OCCUPIED_PROBABILITY
+    assert supported.probability == pytest.approx(
+        ARRIVAL_FROM_EMPTY_PROBABILITY * (1.0 - high_prior)
+        + ARRIVAL_FROM_OCCUPIED_PROBABILITY * high_prior
+    )
+    assert supported.probability > 0.7
+
+
+def test_arrival_transition_and_observation_reliability_reject_invalid_inputs() -> None:
+    filter_ = belief_filter()
+    filter_.apply_positive("episode", NOW)
+
+    with pytest.raises(ValueError, match="probabilities"):
+        filter_.apply_arrival_transition(
+            "episode",
+            NOW,
+            empty_to_occupied=0.9,
+            occupied_to_occupied=0.8,
+        )
+    with pytest.raises(ValueError, match="current episode"):
+        filter_.apply_arrival_transition("other", NOW)
+    with pytest.raises(ValueError, match="Observation reliability"):
+        filter_.apply_positive("next", NOW, reliability=0.0)
 
 
 def belief_filter(
@@ -206,6 +257,48 @@ def test_stable_clear_recovers_unavailable_without_reopening_outward() -> None:
     cleared = filter_.apply_stable_clear("episode-1", NOW + timedelta(seconds=3))
     assert cleared.context == "cleared_without_outward"
     assert contribution_count(filter_, "stable_clear") == 1
+
+
+def test_accepted_clear_recovers_bootstrap_unavailable_to_prior() -> None:
+    filter_ = ZoneBeliefFilter("zone", BELIEF_PROFILES["stay_pir"], NOW)
+    filter_.apply_unavailable(NOW)
+
+    recovered = filter_.apply_availability_clear(
+        None,
+        NOW + timedelta(seconds=1),
+    )
+
+    assert recovered.context == "cleared_without_outward"
+    assert recovered.probability == pytest.approx(
+        BELIEF_PROFILES["stay_pir"].prior_probability
+    )
+    assert recovered.contributions == ()
+    assert filter_.apply_availability_clear(None, NOW + timedelta(seconds=1)) == (
+        recovered
+    )
+
+
+def test_accepted_clear_recovers_existing_episode_without_absence_evidence() -> None:
+    filter_ = belief_filter()
+    filter_.apply_positive("episode-1", NOW)
+    filter_.apply_unavailable(NOW + timedelta(seconds=1))
+    advanced = filter_.advance(NOW + timedelta(seconds=2))
+
+    recovered = filter_.apply_availability_clear(
+        "episode-1",
+        NOW + timedelta(seconds=2),
+    )
+
+    assert recovered.context == "cleared_without_outward"
+    assert recovered.probability == advanced.probability
+    assert recovered.contributions[-1].kind == "availability_clear"
+    assert recovered.contributions[-1].log_odds_delta == 0.0
+    filter_.apply_unavailable(NOW + timedelta(seconds=3))
+    with pytest.raises(ValueError, match="current episode"):
+        filter_.apply_availability_clear(
+            "other",
+            NOW + timedelta(seconds=3),
+        )
 
 
 def test_stale_time_is_rejected_and_equal_time_operations_are_ordered() -> None:

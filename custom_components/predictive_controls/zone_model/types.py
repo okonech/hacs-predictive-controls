@@ -24,6 +24,8 @@ BELIEF_CONTEXTS = frozenset(
 )
 BELIEF_CONTRIBUTION_KINDS = frozenset(
     {
+        "arrival_transition",
+        "availability_clear",
         "count_zero",
         "context_expired",
         "elapsed_decay",
@@ -34,6 +36,22 @@ BELIEF_CONTRIBUTION_KINDS = frozenset(
         "unavailable",
     }
 )
+TRACK_CONFIDENCES = frozenset({"provisional", "confirmed"})
+POLICY_PHASES = frozenset({"inactive", "pending", "predicted", "active"})
+ACTIVE_PROVENANCES = frozenset({"evidence", "restored_seed"})
+ACTIVE_EVIDENCE_REASONS = frozenset(
+    {
+        "adjacent_authorized",
+        "boundary_authorized",
+        "missed_edge_authorized",
+        "prediction_confirmed",
+        "provisional_track_acquired",
+        "same_zone_authorized",
+        "track_confirmed",
+    }
+)
+PREDICTION_MATURITY_PROBABILITY = 0.85
+PREDICTION_MATURITY_SUPPORT = 5.0
 
 
 def require_utc(value: datetime, field: str) -> None:
@@ -200,7 +218,7 @@ class SensorProfile:
     assertion_trust_horizon: timedelta
     post_clear_residual: float
     traversal_context_window: timedelta
-    single_node_reacquisition: bool = False
+    track_bootstrap_window: timedelta
 
     def __post_init__(self) -> None:
         if not self.profile_id or not self.role:
@@ -211,6 +229,7 @@ class SensorProfile:
             self.hardware_hold_interval,
             self.assertion_trust_horizon,
             self.traversal_context_window,
+            self.track_bootstrap_window,
         )
         if any(not _finite_duration(value) for value in durations):
             raise ValueError("Profile durations must be finite and non-negative")
@@ -226,8 +245,14 @@ class SensorProfile:
             0.0 <= self.post_clear_residual <= 1.0
         ):
             raise ValueError("Profile post-clear residual must be finite and in [0, 1]")
-        if not isinstance(self.single_node_reacquisition, bool):
-            raise ValueError("Single-node reacquisition capability must be boolean")
+        if self.track_bootstrap_window == timedelta(0):
+            raise ValueError("Track-bootstrap window must be positive")
+
+    @property
+    def single_node_reacquisition(self) -> bool:
+        """Deprecated v2 behavior retained only until the atomic v3 cutover."""
+
+        return self.role == "stay"
 
 
 @dataclass(frozen=True)
@@ -238,6 +263,8 @@ class PhysicalNode:
     zone: str
     aliases: tuple[str, ...]
     profile_name: str
+    reliability: float = 1.0
+    route_prior_weight: float = 1.0
 
     def __post_init__(self) -> None:
         if not self.node_id or not self.zone:
@@ -248,6 +275,10 @@ class PhysicalNode:
             raise ValueError("Physical-node aliases must be non-empty")
         if self.profile_name not in PROFILE_NAMES:
             raise ValueError(f"Unknown sensor profile: {self.profile_name}")
+        if not math.isfinite(self.reliability) or not 0 < self.reliability <= 1:
+            raise ValueError("Physical-node reliability must be finite and in (0, 1]")
+        if not math.isfinite(self.route_prior_weight) or self.route_prior_weight <= 0:
+            raise ValueError("Physical-node route prior must be finite and positive")
 
 
 @dataclass(frozen=True)
@@ -257,6 +288,7 @@ class SensorInput:
     entity_id: str
     state: str
     event_at: datetime
+    reliability: float = 1.0
 
     def __post_init__(self) -> None:
         if not self.entity_id:
@@ -264,6 +296,8 @@ class SensorInput:
         if self.state not in SENSOR_STATES:
             raise ValueError("Sensor state must be on, off, unknown, or unavailable")
         require_utc(self.event_at, "Sensor event time")
+        if not math.isfinite(self.reliability) or not 0 < self.reliability <= 1:
+            raise ValueError("Sensor reliability must be finite and in (0, 1]")
 
 
 @dataclass(frozen=True)
@@ -275,9 +309,12 @@ class EpisodeEffect:
     episode_id: str
     kind: str
     at: datetime
+    reliability: float = 1.0
 
     def __post_init__(self) -> None:
         if self.kind not in {
+            "correlated_flap_ignored",
+            "impossible_cadence",
             "health_degraded",
             "health_recovered",
             "positive",
@@ -285,6 +322,8 @@ class EpisodeEffect:
         }:
             raise ValueError(f"Unknown episode effect: {self.kind}")
         require_utc(self.at, "Episode effect time")
+        if not math.isfinite(self.reliability) or not 0 < self.reliability <= 1:
+            raise ValueError("Episode reliability must be finite and in (0, 1]")
 
 
 @dataclass(frozen=True)
@@ -307,8 +346,10 @@ class EpisodeState:
     assertion_trust_until: datetime | None = None
     traversal_valid_until: datetime | None = None
     degraded_at: datetime | None = None
+    degradation_reason: str | None = None
     clear_emitted: bool = False
     health_warning: bool = False
+    cadence_warning: bool = False
 
     @property
     def known_on(self) -> bool:
@@ -336,6 +377,10 @@ class TraversalToken:
     episode_id: str
     accepted_at: datetime
     valid_until: datetime
+    track_confidence: str = "provisional"
+    path_node_ids: tuple[str, ...] = ()
+    provenance_kind: str = "adjacent"
+    equivalent_confirmed_strength: bool = False
 
     def __post_init__(self) -> None:
         if not all(
@@ -353,6 +398,48 @@ class TraversalToken:
         require_utc(self.valid_until, "Traversal token expiry")
         if self.valid_until <= self.accepted_at:
             raise ValueError("Traversal token expiry must follow acceptance")
+        if self.track_confidence not in TRACK_CONFIDENCES:
+            raise ValueError("Traversal token track confidence is invalid")
+        if not self.path_node_ids or len(self.path_node_ids) > 3:
+            raise ValueError("Traversal token path must contain one to three nodes")
+        if any(not node_id for node_id in self.path_node_ids):
+            raise ValueError("Traversal token path nodes must be non-empty")
+        if not self.provenance_kind:
+            raise ValueError("Traversal token provenance must be non-empty")
+        if not isinstance(self.equivalent_confirmed_strength, bool):
+            raise ValueError("Traversal equivalent-strength flag must be boolean")
+
+
+@dataclass(frozen=True)
+class PendingAcquisitionCandidate:
+    """One finite unsupported physical episode retained per zone."""
+
+    node_id: str
+    zone: str
+    profile_name: str
+    episode_id: str
+    created_at: datetime
+    expires_at: datetime
+    traversal_valid_until: datetime
+    reliability: float
+
+    def __post_init__(self) -> None:
+        if not all((self.node_id, self.zone, self.profile_name, self.episode_id)):
+            raise ValueError("Pending candidate identifiers must be non-empty")
+        if self.profile_name not in PROFILE_NAMES:
+            raise ValueError("Pending candidate profile is invalid")
+        for value, field in (
+            (self.created_at, "Pending candidate creation"),
+            (self.expires_at, "Pending candidate expiry"),
+            (self.traversal_valid_until, "Pending traversal expiry"),
+        ):
+            require_utc(value, field)
+        if self.expires_at <= self.created_at:
+            raise ValueError("Pending candidate expiry must follow creation")
+        if self.traversal_valid_until <= self.created_at:
+            raise ValueError("Pending traversal expiry must follow creation")
+        if not math.isfinite(self.reliability) or not 0 < self.reliability <= 1:
+            raise ValueError("Pending candidate reliability must be in (0, 1]")
 
 
 @dataclass(frozen=True)
@@ -382,6 +469,10 @@ class TraversalAuthorization:
     reason: str
     source_tokens: tuple[TraversalToken, ...] = ()
     new_uses: tuple[AuthorizationUse, ...] = ()
+    track_confidence: str | None = None
+    path_node_ids: tuple[str, ...] = ()
+    provenance_kind: str | None = None
+    equivalent_confirmed_strength: bool = False
 
     def __post_init__(self) -> None:
         if not (self.target_node_id and self.target_zone and self.target_episode_id):
@@ -389,6 +480,22 @@ class TraversalAuthorization:
         require_utc(self.authorized_at, "Traversal authorization frontier")
         if not isinstance(self.authorized, bool) or not self.reason:
             raise ValueError("Traversal authorization result is invalid")
+        if self.authorized:
+            if self.track_confidence not in TRACK_CONFIDENCES:
+                raise ValueError("Authorized traversal requires track confidence")
+            if not self.path_node_ids or len(self.path_node_ids) > 3:
+                raise ValueError("Authorized traversal path is invalid")
+            if not self.provenance_kind:
+                raise ValueError("Authorized traversal provenance is required")
+        elif any(
+            (
+                self.track_confidence is not None,
+                bool(self.path_node_ids),
+                self.provenance_kind is not None,
+                self.equivalent_confirmed_strength,
+            )
+        ):
+            raise ValueError("Rejected traversal cannot carry track provenance")
 
 
 @dataclass(frozen=True)
@@ -474,6 +581,68 @@ class CountDiagnostics:
 
 
 @dataclass(frozen=True)
+class StrongTrackedFront:
+    """One coalesced anonymous confirmed traversal front."""
+
+    front_id: str
+    token_ids: tuple[str, ...]
+    node_ids: tuple[str, ...]
+    zones: tuple[str, ...]
+    episode_ids: tuple[str, ...]
+    valid_until: datetime
+
+    def __post_init__(self) -> None:
+        if not self.front_id:
+            raise ValueError("Strong-front ID must be non-empty")
+        for values, label in (
+            (self.token_ids, "tokens"),
+            (self.node_ids, "nodes"),
+            (self.zones, "zones"),
+            (self.episode_ids, "episodes"),
+        ):
+            if not values or values != tuple(sorted(set(values))):
+                raise ValueError(f"Strong-front {label} must be unique and sorted")
+        require_utc(self.valid_until, "Strong-front expiry")
+
+
+@dataclass(frozen=True)
+class CountConflictState:
+    """One continuous count contradiction for an asserted stay episode."""
+
+    target_node_id: str
+    target_zone: str
+    target_episode_id: str
+    started_at: datetime
+    last_evaluated_at: datetime
+    deadline: datetime
+    strong_front_ids: tuple[str, ...]
+    degraded_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if not all((self.target_node_id, self.target_zone, self.target_episode_id)):
+            raise ValueError("Count-conflict identifiers must be non-empty")
+        for value, label in (
+            (self.started_at, "Count-conflict start"),
+            (self.last_evaluated_at, "Count-conflict evaluation"),
+            (self.deadline, "Count-conflict deadline"),
+        ):
+            require_utc(value, label)
+        if not self.started_at <= self.last_evaluated_at <= self.deadline:
+            if self.degraded_at is None or self.last_evaluated_at < self.started_at:
+                raise ValueError("Count-conflict frontiers are inconsistent")
+        if self.deadline <= self.started_at:
+            raise ValueError("Count-conflict deadline must follow its start")
+        if self.strong_front_ids != tuple(sorted(set(self.strong_front_ids))):
+            raise ValueError("Count-conflict front IDs must be unique and sorted")
+        if not self.strong_front_ids:
+            raise ValueError("Count conflict requires strong fronts")
+        if self.degraded_at is not None:
+            require_utc(self.degraded_at, "Count-conflict degradation")
+            if self.degraded_at < self.deadline:
+                raise ValueError("Count-conflict degradation predates its deadline")
+
+
+@dataclass(frozen=True)
 class PolicyCalibration:
     """Shared Schmitt thresholds and release dwell for one profile."""
 
@@ -520,17 +689,137 @@ class ZonePolicyState:
     last_evaluated_at: datetime
     pending_release_since: datetime | None = None
     refresh_dedup: tuple[RefreshDedupEntry, ...] = ()
+    phase: str = "inactive"
+    activation_provenance: str | None = None
+    prediction_expires_at: datetime | None = None
+    prediction_source_episode_id: str | None = None
+    prediction_probability: float | None = None
+    prediction_support: float | None = None
+    activation_episode_id: str | None = None
+    activation_at: datetime | None = None
+    activation_reason: str | None = None
+    activation_track_confidence: str | None = None
+    activation_path_node_ids: tuple[str, ...] = ()
+    activation_provenance_kind: str | None = None
+    activation_source_episode_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.zone or self.profile_name not in PROFILE_NAMES:
             raise ValueError("Policy state zone and profile must be valid")
         if not isinstance(self.active, bool):
             raise ValueError("Policy active state must be boolean")
+        if self.phase not in POLICY_PHASES:
+            raise ValueError("Policy phase is invalid")
         require_utc(self.last_evaluated_at, "Policy evaluation time")
         if self.pending_release_since is not None:
             require_utc(self.pending_release_since, "Pending release time")
             if not self.active or self.pending_release_since > self.last_evaluated_at:
                 raise ValueError("Pending release requires current active state")
+        if self.prediction_expires_at is not None:
+            require_utc(self.prediction_expires_at, "Prediction policy expiry")
+        if self.prediction_source_episode_id == "":
+            raise ValueError("Prediction source episode ID must be non-empty")
+        if self.activation_episode_id == "" or self.activation_reason == "":
+            raise ValueError("Policy activation evidence must be non-empty")
+        if self.activation_provenance_kind == "":
+            raise ValueError("Policy activation provenance must be non-empty")
+        if self.activation_track_confidence is not None and (
+            self.activation_track_confidence not in TRACK_CONFIDENCES
+        ):
+            raise ValueError("Policy activation track confidence is invalid")
+        if (
+            len(self.activation_path_node_ids) > 3
+            or any(not node_id for node_id in self.activation_path_node_ids)
+            or len(self.activation_source_episode_ids)
+            != len(set(self.activation_source_episode_ids))
+            or any(not episode_id for episode_id in self.activation_source_episode_ids)
+        ):
+            raise ValueError("Policy activation evidence references are invalid")
+        if self.activation_at is not None:
+            require_utc(self.activation_at, "Policy activation time")
+        for value in (self.prediction_probability, self.prediction_support):
+            if value is not None and (not math.isfinite(value) or value < 0):
+                raise ValueError(
+                    "Prediction policy metrics must be finite and non-negative"
+                )
+        prediction_fields = (
+            self.prediction_expires_at,
+            self.prediction_source_episode_id,
+            self.prediction_probability,
+            self.prediction_support,
+        )
+        if self.phase == "predicted":
+            if (
+                not self.active
+                or self.activation_provenance != "prediction"
+                or any(value is None for value in prediction_fields)
+                or self.prediction_expires_at is None
+                or self.prediction_expires_at <= self.last_evaluated_at
+                or self.prediction_probability is None
+                or not (
+                    PREDICTION_MATURITY_PROBABILITY
+                    <= self.prediction_probability
+                    <= 1.0
+                )
+                or self.prediction_support is None
+                or self.prediction_support < PREDICTION_MATURITY_SUPPORT
+            ):
+                raise ValueError("Predicted policy state is inconsistent")
+        elif any(value is not None for value in prediction_fields):
+            raise ValueError("Non-predicted policy retains prediction state")
+        if self.phase in {"inactive", "pending"} and self.active:
+            raise ValueError("Inactive policy phase cannot be active")
+        if self.phase == "active" and not self.active:
+            raise ValueError("Active policy phase must be active")
+        if (
+            self.phase in {"inactive", "pending"}
+            and self.activation_provenance is not None
+        ):
+            raise ValueError("Inactive policy phase retains activation provenance")
+        if (
+            self.phase == "active"
+            and self.activation_provenance not in ACTIVE_PROVENANCES
+        ):
+            raise ValueError("Active policy provenance is invalid")
+        activation_fields = (
+            self.activation_episode_id,
+            self.activation_at,
+            self.activation_reason,
+            self.activation_track_confidence,
+            self.activation_provenance_kind,
+        )
+        if self.phase == "active" and self.activation_provenance == "evidence":
+            if (
+                any(value is None for value in activation_fields[:3])
+                or self.activation_at is None
+                or self.activation_at > self.last_evaluated_at
+                or self.activation_reason not in ACTIVE_EVIDENCE_REASONS
+                or not self.activation_path_node_ids
+                or (
+                    self.activation_reason == "prediction_confirmed"
+                    and (
+                        self.activation_track_confidence is not None
+                        or self.activation_provenance_kind
+                        != "prediction_confirmation"
+                        or len(self.activation_path_node_ids) != 1
+                        or self.activation_source_episode_ids
+                    )
+                )
+                or (
+                    self.activation_reason != "prediction_confirmed"
+                    and (
+                        self.activation_track_confidence is None
+                        or self.activation_provenance_kind is None
+                    )
+                )
+            ):
+                raise ValueError("Evidence-active policy lacks acquisition evidence")
+        elif (
+            any(value is not None for value in activation_fields)
+            or self.activation_path_node_ids
+            or self.activation_source_episode_ids
+        ):
+            raise ValueError("Policy retains incompatible activation evidence")
         if len(self.refresh_dedup) > 256:
             raise ValueError("Refresh deduplication state exceeds its bound")
         episode_ids = tuple(item.episode_id for item in self.refresh_dedup)
@@ -602,6 +891,8 @@ class PolicyDecision:
     pending_release_since: datetime | None
     event_kind: str | None
     reason: str
+    count_conflict_front_ids: tuple[str, ...] = ()
+    reliability_result: str | None = None
 
     def __post_init__(self) -> None:
         require_utc(self.event_at, "Policy decision event time")
@@ -631,8 +922,10 @@ class PolicyDecision:
             raise ValueError("Policy decision flags must be boolean")
         if self.local_evidence_kind not in {
             None,
+            "correlated_flap_ignored",
             "health_degraded",
             "health_recovered",
+            "impossible_cadence",
             "positive",
             "stable_clear",
         }:
@@ -671,6 +964,18 @@ class PolicyDecision:
             raise ValueError("Policy decision event contradicts its active edge")
         if not self.reason:
             raise ValueError("Policy decision reason must be non-empty")
+        if self.count_conflict_front_ids != tuple(
+            sorted(set(self.count_conflict_front_ids))
+        ) or any(not front_id for front_id in self.count_conflict_front_ids):
+            raise ValueError(
+                "Policy decision count-conflict front IDs must be unique and sorted"
+            )
+        if self.reliability_result not in {None, "degraded", "recovered"}:
+            raise ValueError("Policy decision reliability result is invalid")
+        if bool(self.count_conflict_front_ids) != bool(self.reliability_result):
+            raise ValueError(
+                "Policy decision count-conflict diagnostics must be complete"
+            )
 
 
 @dataclass(frozen=True)
@@ -692,6 +997,9 @@ class ZoneModelSnapshot:
     authorization_uses: tuple[AuthorizationUse, ...]
     count_state: CountState
     policy_states: tuple[ZonePolicyState, ...]
+    pending_candidates: tuple[PendingAcquisitionCandidate, ...] = ()
+    strong_fronts: tuple[StrongTrackedFront, ...] = ()
+    count_conflicts: tuple[CountConflictState, ...] = ()
 
     def __post_init__(self) -> None:
         require_utc(self.updated_at, "Zone-model snapshot time")
@@ -712,6 +1020,15 @@ class ZoneModelSnapshot:
             raise ValueError(
                 "Zone-model current traversal tokens must be unique and sorted"
             )
+        pending_zones = tuple(item.zone for item in self.pending_candidates)
+        if pending_zones != tuple(sorted(set(pending_zones))):
+            raise ValueError("Pending candidates must be unique and sorted by zone")
+        front_ids = tuple(item.front_id for item in self.strong_fronts)
+        if front_ids != tuple(sorted(set(front_ids))):
+            raise ValueError("Strong fronts must be unique and sorted")
+        conflict_nodes = tuple(item.target_node_id for item in self.count_conflicts)
+        if conflict_nodes != tuple(sorted(set(conflict_nodes))):
+            raise ValueError("Count conflicts must be unique and sorted")
 
 
 @dataclass(frozen=True)

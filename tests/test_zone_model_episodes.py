@@ -95,11 +95,27 @@ def test_flap_reassertion_reuses_episode_but_later_positive_starts_another() -> 
 
     assert flap.disposition == "correlated_reassertion"
     assert flap.state.episode_id == first.state.episode_id
-    assert flap.state.traversal_valid_until == first.state.traversal_valid_until
-    assert flap.effects == ()
+    assert flap.state.traversal_valid_until is None
+    assert flap.state.cadence_warning
+    assert [effect.kind for effect in flap.effects] == ["impossible_cadence"]
     assert later.disposition == "accepted_positive"
     assert later.state.generation == 2
     assert [effect.kind for effect in later.effects] == ["positive"]
+
+
+def test_reassertion_after_hardware_hold_but_inside_burst_is_not_impossible() -> None:
+    model = episodes()
+    first = model.observe(sensor("binary_sensor.a", "on", 0))
+    model.observe(sensor("binary_sensor.a", "off", 16))
+
+    reasserted = model.observe(sensor("binary_sensor.a", "on", 17))
+
+    assert reasserted.state.episode_id == first.state.episode_id
+    assert reasserted.disposition == "correlated_reassertion"
+    assert not reasserted.state.cadence_warning
+    assert [effect.kind for effect in reasserted.effects] == [
+        "correlated_flap_ignored"
+    ]
 
 
 def test_unavailable_is_neutral_and_closes_traversal_authority() -> None:
@@ -415,6 +431,77 @@ def test_restore_rejects_impossible_clear_and_degradation_frontiers() -> None:
         target = episodes()
         with pytest.raises(ValueError, match=message):
             target.restore_snapshot((invalid_state,))
+
+
+def test_count_conflict_application_validates_target_health_and_frontier() -> None:
+    stay = episodes(profile="stay_pir")
+    asserted = stay.observe(sensor("binary_sensor.a", "on", 0)).state
+    assert asserted.episode_id is not None
+
+    with pytest.raises(ValueError, match="does not match"):
+        stay.apply_count_conflict("node", "other", NOW + timedelta(seconds=1))
+    with pytest.raises(ValueError, match="cannot move backward"):
+        stay.apply_count_conflict(
+            "node", asserted.episode_id, NOW - timedelta(microseconds=1)
+        )
+
+    degraded = stay.apply_count_conflict(
+        "node", asserted.episode_id, NOW + timedelta(seconds=1)
+    )
+    assert degraded.disposition == "count_conflict_degraded"
+    assert (
+        stay.apply_count_conflict(
+            "node", asserted.episode_id, NOW + timedelta(seconds=2)
+        ).disposition
+        == "unchanged"
+    )
+
+    transition = episodes(profile="transition_fast")
+    transition_state = transition.observe(sensor("binary_sensor.a", "on", 0)).state
+    assert transition_state.episode_id is not None
+    with pytest.raises(ValueError, match="trustworthy stay"):
+        transition.apply_count_conflict(
+            "node", transition_state.episode_id, NOW + timedelta(seconds=1)
+        )
+
+
+def test_restore_rejects_health_reason_and_count_conflict_time_mismatches() -> None:
+    model = episodes(profile="stay_pir")
+    asserted = model.observe(sensor("binary_sensor.a", "on", 0)).state
+    degraded_at = NOW + timedelta(seconds=10)
+    invalid_states = (
+        replace(
+            asserted,
+            status="degraded",
+            traversal_valid_until=None,
+            degraded_at=degraded_at,
+            health_warning=True,
+        ),
+        replace(
+            asserted,
+            status="degraded",
+            traversal_valid_until=None,
+            degraded_at=degraded_at,
+            degradation_reason="invalid",
+            health_warning=True,
+        ),
+        replace(
+            asserted,
+            status="degraded",
+            traversal_valid_until=None,
+            degraded_at=asserted.started_at,
+            degradation_reason="count_conflict",
+            health_warning=True,
+        ),
+    )
+    messages = (
+        "health reason is inconsistent",
+        "health reason is invalid",
+        "degradation time is inconsistent",
+    )
+    for invalid, message in zip(invalid_states, messages, strict=True):
+        with pytest.raises(ValueError, match=message):
+            episodes(profile="stay_pir").restore_snapshot((invalid,))
 
 
 def test_generation_zero_snapshot_restores_deterministically() -> None:

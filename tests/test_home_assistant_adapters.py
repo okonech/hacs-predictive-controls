@@ -13,20 +13,15 @@ import pytest
 
 from custom_components.predictive_controls.confidence import ZoneConfidenceEngine
 from custom_components.predictive_controls.const import (
-    CONF_ACTIONS_YAML,
     CONF_EXPECTED_OCCUPANTS,
     CONF_EXPECTED_OCCUPANTS_ENTITY,
     CONF_MAP_YAML,
-    CONF_PREDICTION_THRESHOLD,
     CONF_TRANSITION_WINDOW,
     DOMAIN,
 )
 from custom_components.predictive_controls.events import OccupancyEvent
 from custom_components.predictive_controls.model import PredictiveMap
-from custom_components.predictive_controls.yaml_config import (
-    DEFAULT_ACTIONS_YAML,
-    DEFAULT_MAP_YAML,
-)
+from custom_components.predictive_controls.yaml_config import DEFAULT_MAP_YAML
 
 
 def install_homeassistant(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
@@ -197,6 +192,11 @@ def install_homeassistant(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         "async_track_time_interval",
         lambda *_: lambda: None,
     )
+    set_attr(
+        modules["homeassistant.helpers.event"],
+        "async_call_later",
+        lambda *_: lambda: None,
+    )
 
     websocket_api = modules["homeassistant.components.websocket_api"]
     set_attr(websocket_api, "ActiveConnection", object)
@@ -271,9 +271,7 @@ def import_fresh(name: str) -> ModuleType:
 def valid_options() -> dict[str, object]:
     return {
         CONF_MAP_YAML: DEFAULT_MAP_YAML,
-        CONF_ACTIONS_YAML: DEFAULT_ACTIONS_YAML,
         CONF_TRANSITION_WINDOW: 30,
-        CONF_PREDICTION_THRESHOLD: 0.6,
         CONF_EXPECTED_OCCUPANTS: 1,
         CONF_EXPECTED_OCCUPANTS_ENTITY: "sensor.people_home",
     }
@@ -290,7 +288,6 @@ def test_config_flow_forms_validation_and_entries(
 
     invalid_cases = (
         (CONF_TRANSITION_WINDOW, 0, "positive"),
-        (CONF_PREDICTION_THRESHOLD, 1.1, "between"),
         (CONF_EXPECTED_OCCUPANTS, -1, "between zero and two"),
         (CONF_EXPECTED_OCCUPANTS, 3, "between zero and two"),
         (CONF_EXPECTED_OCCUPANTS_ENTITY, "people", "entity id"),
@@ -388,16 +385,15 @@ def test_websocket_commands_success_and_errors(monkeypatch: pytest.MonkeyPatch) 
         "id": 3,
         "entry_id": "entry1",
         "map_yaml": DEFAULT_MAP_YAML,
-        "actions_yaml": DEFAULT_ACTIONS_YAML,
         "transition_window_seconds": 10,
-        "prediction_threshold": 0.7,
         "expected_occupants": 2,
         "expected_occupants_entity": "sensor.people",
     }
     asyncio.run(module.websocket_save_config(hass, connection, save_message))
     assert config_entries.reloaded == ["entry1"]
+    assert "actions_yaml" not in entry.options
+    assert "prediction_threshold" not in entry.options
     for key, value in (
-        ("prediction_threshold", 2.0),
         ("transition_window_seconds", 0),
         ("expected_occupants", -1),
         ("expected_occupants", 6),
@@ -687,3 +683,84 @@ def test_integration_setup_unload_and_reload(
     assert not asyncio.run(integration.async_unload_entry(hass, second))
     asyncio.run(integration._async_update_listener(hass, second))  # noqa: SLF001
     assert ("reload", "entry2") in calls
+
+
+def test_integration_preserves_one_v2_rollback_backup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_homeassistant(monkeypatch)
+    saved: list[tuple[str, object]] = []
+    v2_payload: dict[str, object] = {
+        "schema": "zone-belief-v2",
+        "transition_counts": {},
+    }
+
+    class Store:
+        def __init__(self, _hass: object, _version: int, key: str) -> None:
+            self.key = key
+
+        async def async_load(self) -> dict[str, object] | None:
+            if self.key.endswith("_transitions"):
+                return v2_payload
+            if "preexisting" in self.key:
+                return {"schema": "existing-backup"}
+            return None
+
+        async def async_save(self, payload: object) -> None:
+            saved.append((self.key, payload))
+
+    class Runtime:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def restore_stored_state(self, _stored: object, _now: object) -> bool:
+            return True
+
+        def start(self) -> None:
+            pass
+
+    async def register_panel(_hass: object, **_kwargs: object) -> None:
+        pass
+
+    panel_module = ModuleType("custom_components.predictive_controls.panel")
+    panel_module.__dict__["async_register_panel"] = register_panel
+    runtime_module = ModuleType("custom_components.predictive_controls.runtime")
+    runtime_module.__dict__["PredictiveControlsRuntime"] = Runtime
+    websocket_module = ModuleType("custom_components.predictive_controls.websocket")
+    websocket_module.__dict__["async_register_websocket_commands"] = lambda _hass: None
+    monkeypatch.setitem(sys.modules, panel_module.__name__, panel_module)
+    monkeypatch.setitem(sys.modules, runtime_module.__name__, runtime_module)
+    monkeypatch.setitem(sys.modules, websocket_module.__name__, websocket_module)
+    sys.modules["homeassistant.helpers.storage"].__dict__["Store"] = Store
+    import_fresh("custom_components.predictive_controls.storage")
+    integration = import_fresh("custom_components.predictive_controls")
+
+    class ConfigEntries:
+        async def async_forward_entry_setups(
+            self, _entry: object, _platforms: object
+        ) -> None:
+            pass
+
+    hass = SimpleNamespace(data={}, config_entries=ConfigEntries())
+
+    class Entry:
+        options = valid_options()
+
+        def __init__(self, entry_id: str) -> None:
+            self.entry_id = entry_id
+
+        def add_update_listener(self, listener: object) -> object:
+            return listener
+
+        def async_on_unload(self, _listener: object) -> None:
+            pass
+
+    asyncio.run(integration.async_setup_entry(hass, Entry("newbackup")))
+    asyncio.run(integration.async_setup_entry(hass, Entry("preexisting")))
+
+    assert saved == [
+        (
+            "predictive_controls_newbackup_zone_belief_v2_rollback",
+            v2_payload,
+        )
+    ]

@@ -1,0 +1,9 @@
+## Maybe simplify modeling?
+I was thinking about what the model could look like. Really we just want to prevent false positives to watch for tracks trhough sensors, and only allow activations when adjacent sensors are triggered. WE currently do a bunch of predictive stuff. But one issue we have is moving back through senosrs. For example, if I go to upstarirs hallway, then alex office, then back to the hallway, then shaila office, then hallway.
+If the hallway sensor never turned off, we would get confused as to the user's location for the tracks. But really what we want is to allow lights for or adjacent to firing valid sensors to turn on, since it takes a bit for the sensor to stop registering motion.
+
+So in the above case,all of those would be valid and should turn on. If I then went to the hallway and went into master bedroom, triggering master entrance and closet, that is also valid. Only when the hallway/upstairs bathroom/shaila office went off respectively would we confidently update the path and start decaying confidences in the rooms and turn off the lights.
+So like a residual heatmap of sensors.
+The key would be to only allow lights to turn on for adjacent sensors that are still active.
+
+The decay can also use sensor adjacency to determine if we have a false negative, which is where I think we get into the probability modeling. So for the living room, if the sensor is off but we had no activity moving out of the living room, we can assume that the user is still there and keep the lights on. But if we have activity in adjacent rooms, we can start decaying the confidence for the living room and eventually turn off the lights.

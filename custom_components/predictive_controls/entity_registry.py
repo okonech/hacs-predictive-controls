@@ -25,7 +25,6 @@ ZONE_SENSOR_SUFFIXES = (
 
 ZONE_BINARY_SENSOR_SUFFIXES = (
     "active",
-    "prelight",
     "diagnostic_entry_path_plausible",
 )
 
@@ -41,6 +40,7 @@ LEGACY_ZONE_SUFFIXES = (
     "activation_plausible",
     "arrival_supported_probability",
     "keep_on",
+    "prelight",
     "prelight_plausible",
     "release_safe_probability",
 )

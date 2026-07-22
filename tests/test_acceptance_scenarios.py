@@ -86,7 +86,9 @@ def test_s20_corrupt_restore_is_atomic_and_diagnostic() -> None:
 
 def test_s26_prediction_state_cannot_change_occupancy_or_policy() -> None:
     payload = serialize_target_state(target_map(), occupied_engine())
-    payload["prediction"] = {"counts": {}, "leases": []}
+    prediction = payload["prediction"]
+    assert isinstance(prediction, dict)
+    prediction["leases"] = []
     tracker = OccupancyTracker(target_map(), TrackerConfig(1))
 
     assert tracker.restore_state(payload, NOW + timedelta(seconds=3))

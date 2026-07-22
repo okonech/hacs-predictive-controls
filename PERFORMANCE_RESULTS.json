@@ -2,22 +2,22 @@
   "counts": {
     "2": {
       "core": {
-        "audit_bytes": 971818,
+        "audit_bytes": 1060435,
         "audit_entry_count": 1600,
         "event_count": 100,
-        "max_ms": 1.402637,
+        "max_ms": 1.886292,
         "occupants": 2,
-        "p50_ms": 1.05545,
-        "p95_ms": 1.13699,
-        "p99_ms": 1.292338,
+        "p50_ms": 1.349877,
+        "p95_ms": 1.488237,
+        "p99_ms": 1.535836,
         "persistence_byte_stable": true,
-        "persistence_bytes": 1127526,
+        "persistence_bytes": 1215885,
         "public_policy_event_count": 11,
         "stale_event_count": 0,
-        "startup_ms": 0.264228,
+        "startup_ms": 0.301427,
         "token_limit": 64,
-        "token_max": 17,
-        "total_ms": 105.697399,
+        "token_max": 14,
+        "total_ms": 134.533594,
         "trace_profile": "deterministic",
         "zone_decision_count": 1600
       },
@@ -35,15 +35,121 @@
     }
   },
   "engine": "zone_belief",
+  "fast_paths": {
+    "adjacent_pair": {
+      "all_activated": true,
+      "all_path_qualified": true,
+      "all_publications_scheduled": true,
+      "hard_gate": true,
+      "max_ms": 0.878501,
+      "p99_gate": true,
+      "p99_ms": 0.818012,
+      "registered_entity_count": 34,
+      "sample_count": 100,
+      "update_subscriber_count": 18
+    },
+    "boundary": {
+      "all_activated": true,
+      "all_path_qualified": true,
+      "all_publications_scheduled": true,
+      "hard_gate": true,
+      "max_ms": 1.404217,
+      "p99_gate": true,
+      "p99_ms": 1.315278,
+      "registered_entity_count": 34,
+      "sample_count": 100,
+      "update_subscriber_count": 18
+    },
+    "confirmed_token": {
+      "all_activated": true,
+      "all_path_qualified": true,
+      "all_publications_scheduled": true,
+      "hard_gate": true,
+      "max_ms": 1.678444,
+      "p99_gate": true,
+      "p99_ms": 1.661245,
+      "registered_entity_count": 34,
+      "sample_count": 100,
+      "update_subscriber_count": 18
+    },
+    "mature_prediction": {
+      "all_activated": true,
+      "all_path_qualified": true,
+      "all_publications_scheduled": true,
+      "hard_gate": true,
+      "max_ms": 1.787104,
+      "p99_gate": true,
+      "p99_ms": 1.770003,
+      "registered_entity_count": 34,
+      "sample_count": 100,
+      "update_subscriber_count": 18
+    },
+    "missed_edge": {
+      "all_activated": true,
+      "all_path_qualified": true,
+      "all_publications_scheduled": true,
+      "hard_gate": true,
+      "max_ms": 2.143751,
+      "p99_gate": true,
+      "p99_ms": 1.700494,
+      "registered_entity_count": 34,
+      "sample_count": 100,
+      "update_subscriber_count": 18
+    },
+    "same_zone": {
+      "all_activated": true,
+      "all_path_qualified": true,
+      "all_publications_scheduled": true,
+      "hard_gate": true,
+      "max_ms": 1.956392,
+      "p99_gate": true,
+      "p99_ms": 1.858452,
+      "registered_entity_count": 34,
+      "sample_count": 100,
+      "update_subscriber_count": 18
+    },
+    "third_node_confirmation": {
+      "all_activated": true,
+      "all_path_qualified": true,
+      "all_publications_scheduled": true,
+      "hard_gate": true,
+      "max_ms": 2.565476,
+      "p99_gate": true,
+      "p99_ms": 2.444667,
+      "registered_entity_count": 34,
+      "sample_count": 100,
+      "update_subscriber_count": 18
+    }
+  },
+  "latency_endpoint": "accepted runtime observation through the full registered binary-sensor dispatcher fanout and the corresponding ZoneActiveSensor projection to async_write_ha_state",
   "map": {
     "nodes": 17,
     "occupants": [
       2
     ],
-    "path": "benchmarks/reference-map.yaml",
+    "path": "/home/alex/Documents/VSCode/hacs-predictive-controls/benchmarks/reference-map.yaml",
     "zones": 16
   },
   "passed": true,
-  "schema_version": 2,
+  "schema_version": 3,
+  "timer_latency_endpoint": "ZoneModelEngine.advance at the declared deadline with setup excluded",
+  "timer_work": {
+    "count_conflict": {
+      "all_completed": true,
+      "hard_gate": true,
+      "max_ms": 1.361067,
+      "p95_gate": true,
+      "p95_ms": 1.227509,
+      "sample_count": 100
+    },
+    "pending_expiry": {
+      "all_completed": true,
+      "hard_gate": true,
+      "max_ms": 0.270097,
+      "p95_gate": true,
+      "p95_ms": 0.205018,
+      "sample_count": 100
+    }
+  },
   "trace_profile": "deterministic"
 }

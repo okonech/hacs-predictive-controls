@@ -44,12 +44,28 @@ def test_event_from_entity_normalizes_mapped_binary_state() -> None:
     assert event.reliability == 0.9
 
 
-def test_event_from_entity_ignores_unmapped_or_unusable_states() -> None:
+def test_event_from_entity_preserves_health_states_and_rejects_junk() -> None:
     predictive_map = make_map()
     now = datetime(2026, 6, 7, tzinfo=UTC)
 
     assert event_from_entity(predictive_map, "binary_sensor.missing", "on", now) is None
+    unknown = event_from_entity(
+        predictive_map, "binary_sensor.living_still", "unknown", now
+    )
+    unavailable = event_from_entity(
+        predictive_map, "binary_sensor.living_still", "unavailable", now
+    )
+    assert unknown is not None and unknown.state == "unknown"
+    assert unavailable is not None and unavailable.state == "unavailable"
     assert (
-        event_from_entity(predictive_map, "binary_sensor.living_still", "unknown", now)
+        event_from_entity(predictive_map, "binary_sensor.living_still", "junk", now)
         is None
     )
+    normalized = event_from_entity(
+        predictive_map,
+        "binary_sensor.living_still",
+        "junk",
+        now,
+        allow_unsupported_state=True,
+    )
+    assert normalized is not None and normalized.state == "unknown"

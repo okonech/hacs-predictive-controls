@@ -89,7 +89,11 @@ class PhysicalEpisodes:
         effects = list(frontier_effects)
 
         if event.state in {"unknown", "unavailable"}:
-            if was_known_on and not is_known_on:
+            all_unavailable = all(
+                value in {"unknown", "unavailable"}
+                for value in alias_states.values()
+            )
+            if (was_known_on and not is_known_on) or all_unavailable:
                 state = replace(
                     state,
                     status="unavailable",
@@ -102,15 +106,48 @@ class PhysicalEpisodes:
             if was_known_on:
                 disposition = "correlated_alias"
             elif self._continues_flap(state, event.event_at):
+                impossible = bool(
+                    state.hold_until is not None
+                    and event.event_at < state.hold_until
+                )
                 state = replace(
                     state,
                     status="asserted",
                     clear_started_at=None,
                     clear_deadline=None,
+                    traversal_valid_until=(
+                        None if impossible else state.traversal_valid_until
+                    ),
+                    cadence_warning=state.cadence_warning or impossible,
                 )
+                assert state.episode_id is not None
+                if impossible:
+                    effects.append(
+                        EpisodeEffect(
+                            state.node_id,
+                            state.zone,
+                            state.episode_id,
+                            "impossible_cadence",
+                            event.event_at,
+                            event.reliability,
+                        )
+                    )
+                else:
+                    effects.append(
+                        EpisodeEffect(
+                            state.node_id,
+                            state.zone,
+                            state.episode_id,
+                            "correlated_flap_ignored",
+                            event.event_at,
+                            event.reliability,
+                        )
+                    )
                 disposition = "correlated_reassertion"
             else:
-                state, start_effects = self._start_episode(state, event.event_at)
+                state, start_effects = self._start_episode(
+                    state, event.event_at, event.reliability
+                )
                 effects.extend(start_effects)
                 disposition = "accepted_positive"
         elif was_known_on:
@@ -146,6 +183,51 @@ class PhysicalEpisodes:
             self._states[node_id] = state
             updates.append(EpisodeUpdate("advanced", state, effects))
         return tuple(updates)
+
+    def apply_count_conflict(
+        self, node_id: str, episode_id: str, at: datetime
+    ) -> EpisodeUpdate:
+        """Health-degrade one still-asserted stay episode after count conflict."""
+
+        require_utc(at, "Count-conflict degradation time")
+        state = self._states[node_id]
+        if state.episode_id != episode_id:
+            raise ValueError("Count conflict does not match the current episode")
+        if state.status == "degraded" and state.health_warning:
+            return EpisodeUpdate("unchanged", state)
+        if (
+            state.status != "asserted"
+            or state.health_warning
+            or not state.known_on
+            or self._profile(state).role != "stay"
+        ):
+            raise ValueError("Count conflict target is not a trustworthy stay episode")
+        if self._is_stale(state, at):
+            raise ValueError("Count-conflict degradation cannot move backward")
+        state = replace(
+            state,
+            status="degraded",
+            advanced_at=at,
+            traversal_valid_until=None,
+            degraded_at=at,
+            degradation_reason="count_conflict",
+            health_warning=True,
+        )
+        self._states[node_id] = state
+        return EpisodeUpdate(
+            "count_conflict_degraded",
+            state,
+            (
+                EpisodeEffect(
+                    state.node_id,
+                    state.zone,
+                    episode_id,
+                    "health_degraded",
+                    at,
+                    self._nodes[node_id].reliability,
+                ),
+            ),
+        )
 
     @staticmethod
     def _is_stale(state: EpisodeState, at: datetime) -> bool:
@@ -201,6 +283,14 @@ class PhysicalEpisodes:
                 raise ValueError("Episode snapshot frontiers are inconsistent")
         if state.health_warning != (state.degraded_at is not None):
             raise ValueError("Episode snapshot health state is inconsistent")
+        if state.health_warning != (state.degradation_reason is not None):
+            raise ValueError("Episode snapshot health reason is inconsistent")
+        if state.degradation_reason not in {
+            None,
+            "assertion_timeout",
+            "count_conflict",
+        }:
+            raise ValueError("Episode snapshot health reason is invalid")
         if state.clear_emitted != (state.status == "clear"):
             raise ValueError("Episode snapshot clear state is inconsistent")
         if state.generation > 0:
@@ -216,9 +306,14 @@ class PhysicalEpisodes:
                 raise ValueError("Episode snapshot hold frontier is inconsistent")
             if state.assertion_trust_until != expected_trust_until:
                 raise ValueError("Episode snapshot trust frontier is inconsistent")
-            if (
-                state.degraded_at is not None
-                and state.degraded_at != expected_trust_until
+            if state.degradation_reason == "assertion_timeout" and (
+                state.degraded_at != expected_trust_until
+            ):
+                raise ValueError("Episode snapshot degradation time is inconsistent")
+            if state.degradation_reason == "count_conflict" and (
+                state.degraded_at is None
+                or state.advanced_at is None
+                or not state.started_at < state.degraded_at <= state.advanced_at
             ):
                 raise ValueError("Episode snapshot degradation time is inconsistent")
             if state.traversal_valid_until is not None:
@@ -269,16 +364,23 @@ class PhysicalEpisodes:
         return SHARED_PROFILES[state.profile_name]
 
     def _continues_flap(self, state: EpisodeState, at: datetime) -> bool:
-        if state.clear_started_at is None or state.episode_id is None:
+        if state.episode_id is None or state.status == "unavailable":
             return False
-        return (
-            at <= state.clear_started_at + self._profile(state).burst_correlation_window
+        return bool(
+            (
+                state.clear_started_at is not None
+                and at
+                <= state.clear_started_at
+                + self._profile(state).burst_correlation_window
+            )
+            or (state.hold_until is not None and at < state.hold_until)
         )
 
     def _start_episode(
         self,
         state: EpisodeState,
         at: datetime,
+        reliability: float,
     ) -> tuple[EpisodeState, tuple[EpisodeEffect, ...]]:
         profile = self._profile(state)
         generation = state.generation + 1
@@ -292,6 +394,7 @@ class PhysicalEpisodes:
                     episode_id,
                     "health_recovered",
                     at,
+                    reliability,
                 )
             )
         effects.append(
@@ -301,6 +404,7 @@ class PhysicalEpisodes:
                 episode_id,
                 "positive",
                 at,
+                reliability,
             )
         )
         trust_until = at + profile.assertion_trust_horizon
@@ -321,8 +425,10 @@ class PhysicalEpisodes:
                 assertion_trust_until=trust_until,
                 traversal_valid_until=traversal_until,
                 degraded_at=None,
+                degradation_reason=None,
                 clear_emitted=False,
                 health_warning=False,
+                cadence_warning=False,
             ),
             tuple(effects),
         )
@@ -347,6 +453,7 @@ class PhysicalEpisodes:
                     state.episode_id,
                     "stable_clear",
                     state.clear_deadline,
+                    self._nodes[state.node_id].reliability,
                 )
             )
             state = replace(
@@ -372,6 +479,7 @@ class PhysicalEpisodes:
                     state.episode_id,
                     "health_degraded",
                     state.assertion_trust_until,
+                    self._nodes[state.node_id].reliability,
                 )
             )
             state = replace(
@@ -379,6 +487,7 @@ class PhysicalEpisodes:
                 status="degraded",
                 traversal_valid_until=None,
                 degraded_at=state.assertion_trust_until,
+                degradation_reason="assertion_timeout",
                 health_warning=True,
             )
         return state, tuple(effects)

@@ -9,7 +9,7 @@ _LEGACY_EXACT_SCHEMA = "exact-augmented-v6"
 
 
 class PredictiveControlsStore(Store):
-    """Persist zone-belief state across the schema-6 cutover."""
+    """Persist zone-belief state across schema-6, v2, and v3 cutovers."""
 
     async def _async_migrate_func(
         self,

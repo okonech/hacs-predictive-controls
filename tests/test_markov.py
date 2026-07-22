@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from custom_components.predictive_controls.markov import MarkovChain
+from custom_components.predictive_controls.markov import MARKOV_COUNT_LIMIT, MarkovChain
 from custom_components.predictive_controls.model import PredictiveMap
 
 
@@ -11,7 +11,10 @@ def make_map() -> PredictiveMap:
         {
             "nodes": {
                 "entry": {"adjacent": ["hall", "kitchen"]},
-                "hall": {"adjacent": ["entry", "kitchen"], "initial_weight": 2},
+                "hall": {
+                    "adjacent": ["entry", "kitchen"],
+                    "route_prior_weight": 2,
+                },
                 "kitchen": {"adjacent": ["entry", "hall"]},
                 "office": {"adjacent": []},
             }
@@ -115,6 +118,8 @@ def test_weight_and_horizon_must_be_positive() -> None:
 
     with pytest.raises(ValueError, match="weight"):
         chain.observe("entry", "hall", weight=0)
+    with pytest.raises(ValueError, match="finite"):
+        chain.observe("entry", "hall", weight=float("inf"))
     with pytest.raises(ValueError, match="horizon"):
         chain.predict({"entry": 1}, horizon=0)
 
@@ -133,3 +138,20 @@ def test_zero_smoothing_without_counts_falls_back_to_equal_probabilities() -> No
         "hall": pytest.approx(0.5),
         "kitchen": pytest.approx(0.5),
     }
+
+
+def test_route_counts_are_finite_and_saturate_at_the_declared_bound() -> None:
+    chain = MarkovChain(make_map())
+    chain.restore_counts(
+        {
+            "entry": {
+                "hall": float("inf"),
+                "kitchen": MARKOV_COUNT_LIMIT + 1,
+            }
+        }
+    )
+    assert chain.counts["entry"] == {"hall": 0.0, "kitchen": 0.0}
+
+    assert chain.observe("entry", "hall", MARKOV_COUNT_LIMIT)
+    assert chain.observe("entry", "hall", 1.0)
+    assert chain.counts["entry"]["hall"] == MARKOV_COUNT_LIMIT

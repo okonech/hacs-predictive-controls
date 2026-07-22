@@ -69,6 +69,12 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
                 "profile": state.profile_name,
                 "last_evaluated_at": state.last_evaluated_at.isoformat(),
                 "pending_release_since": _iso(state.pending_release_since),
+                "phase": state.phase,
+                "activation_provenance": state.activation_provenance,
+                "prediction_expires_at": _iso(state.prediction_expires_at),
+                "prediction_source_episode_id": state.prediction_source_episode_id,
+                "prediction_probability": state.prediction_probability,
+                "prediction_support": state.prediction_support,
             }
             for zone, state in diagnostics.policy_states.items()
         },
@@ -81,6 +87,9 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
                 "status": state.status,
                 "last_event_at": _iso(state.last_event_at),
                 "health_warning": state.health_warning,
+                "cadence_warning": state.cadence_warning,
+                "degradation_reason": state.degradation_reason,
+                "reliability": diagnostics.sensor_reliability[state.node_id],
             }
             for state in diagnostics.episode_states
         ],
@@ -92,6 +101,12 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
                 "episode_id": token.episode_id,
                 "accepted_at": token.accepted_at.isoformat(),
                 "valid_until": token.valid_until.isoformat(),
+                "track_confidence": token.track_confidence,
+                "path_node_ids": list(token.path_node_ids),
+                "provenance_kind": token.provenance_kind,
+                "equivalent_confirmed_strength": (
+                    token.equivalent_confirmed_strength
+                ),
             }
             for token in diagnostics.traversal_tokens
         ],
@@ -104,6 +119,9 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
                 "authorized": item.authorized,
                 "reason": item.reason,
                 "source_token_ids": [token.token_id for token in item.source_tokens],
+                "track_confidence": item.track_confidence,
+                "path_node_ids": list(item.path_node_ids),
+                "provenance_kind": item.provenance_kind,
             }
             for item in diagnostics.authorizations
         ],
@@ -131,6 +149,9 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
                     "target_node_id": lease.target_node_id,
                     "target_zone": lease.target_zone,
                     "probability": lease.probability,
+                    "support": lease.support,
+                    "source_episode_id": lease.source_episode_id,
+                    "mature": lease.mature,
                     "created_at": lease.created_at.isoformat(),
                     "expires_at": lease.expires_at.isoformat(),
                     "reason": lease.reason,
@@ -138,6 +159,44 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
                 for lease in diagnostics.prediction_leases
             ],
         },
+        "pending_candidates": [
+            {
+                "node_id": candidate.node_id,
+                "zone": candidate.zone,
+                "episode_id": candidate.episode_id,
+                "created_at": candidate.created_at.isoformat(),
+                "expires_at": candidate.expires_at.isoformat(),
+                "reliability": candidate.reliability,
+            }
+            for candidate in diagnostics.pending_candidates
+        ],
+        "strong_fronts": [
+            {
+                "front_id": front.front_id,
+                "node_ids": list(front.node_ids),
+                "zones": list(front.zones),
+                "episode_ids": list(front.episode_ids),
+                "valid_until": front.valid_until.isoformat(),
+            }
+            for front in diagnostics.strong_fronts
+        ],
+        "count_conflicts": [
+            {
+                "target_node_id": conflict.target_node_id,
+                "target_zone": conflict.target_zone,
+                "target_episode_id": conflict.target_episode_id,
+                "started_at": conflict.started_at.isoformat(),
+                "deadline": conflict.deadline.isoformat(),
+                "strong_front_ids": list(conflict.strong_front_ids),
+                "degraded_at": _iso(conflict.degraded_at),
+                "reason": (
+                    "stuck_count_conflict"
+                    if conflict.degraded_at is not None
+                    else "count_conflict_pending"
+                ),
+            }
+            for conflict in diagnostics.count_conflicts
+        ],
         "event_disposition": diagnostics.event_disposition,
         "restore": {
             "status": diagnostics.restore_status,
@@ -148,6 +207,19 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
             state.node_id
             for state in diagnostics.episode_states
             if state.health_warning
+        ],
+        "active_without_current_evidence": [
+            zone
+            for zone, policy in diagnostics.policy_states.items()
+            if policy.active
+            and policy.phase == "active"
+            and not any(
+                episode.zone == zone
+                and episode.status == "asserted"
+                and not episode.health_warning
+                and not episode.cadence_warning
+                for episode in diagnostics.episode_states
+            )
         ],
     }
 
@@ -177,6 +249,8 @@ def policy_decision_payload(row: Any) -> dict[str, Any]:
         "pending_release_since": _iso(row.pending_release_since),
         "event_kind": row.event_kind,
         "reason": row.reason,
+        "count_conflict_front_ids": list(row.count_conflict_front_ids),
+        "reliability_result": row.reliability_result,
     }
 
 

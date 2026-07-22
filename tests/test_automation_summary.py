@@ -37,7 +37,7 @@ def test_automation_summary_is_derived_from_target_belief_and_policy() -> None:
     assert "Probably occupied" in summary.explanation
 
 
-def test_automation_summary_keeps_prediction_downstream_only() -> None:
+def test_automation_summary_exposes_prediction_only_as_diagnostics() -> None:
     predictive_map = target_map()
     confidence = ZoneConfidenceEngine(predictive_map, expected_occupants=1)
     runtime = SimpleNamespace(
@@ -49,11 +49,11 @@ def test_automation_summary_keeps_prediction_downstream_only() -> None:
     summary = runtime_automation_summary(runtime)
 
     assert summary.keep_on_zones == ()
-    assert summary.prelight_plausible_zones == ()
+    assert not hasattr(summary, "prelight_plausible_zones")
     assert summary.diagnostic_predicted_next_zone is None
 
 
-def test_automation_summary_avoids_audit_and_caches_per_threshold(
+def test_automation_summary_avoids_audit_and_caches_v3_projection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     predictive_map = target_map()

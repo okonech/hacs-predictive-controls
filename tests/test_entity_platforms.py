@@ -118,14 +118,12 @@ def test_binary_sensor_platform_exports_only_automation_facing_entities(
         "entry123_predictive_controls_problem",
         "entry123_living_room_active",
         "entry123_kitchen_active",
-        "entry123_living_room_prelight",
-        "entry123_kitchen_prelight",
         "entry123_living_room_diagnostic_entry_path_plausible",
         "entry123_kitchen_diagnostic_entry_path_plausible",
     }
 
 
-def test_production_binary_sensor_publishes_only_edges_with_explanation(
+def test_production_binary_sensor_publishes_edges_and_attribute_changes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _, binary_sensor_module, _ = load_platform_modules(monkeypatch)
@@ -150,11 +148,20 @@ def test_production_binary_sensor_publishes_only_edges_with_explanation(
     assert isinstance(entity.extra_state_attributes["explanation"], str)
     assert entity.extra_state_attributes["explanation"]
 
+    runtime.problem_reasons = ("different_problem",)
+    runtime.problem_sources = ("different_source",)
+    entity._handle_update()  # noqa: SLF001
+    entity._handle_update()  # noqa: SLF001
+    assert entity.state_write_count == 2
+
     runtime.problem_reasons = ()
     runtime.problem_sources = ()
     entity._handle_update()  # noqa: SLF001
     entity._handle_update()  # noqa: SLF001
-    assert entity.state_write_count == 2
+    assert entity.state_write_count == 3
+    assert binary_sensor_module._freeze(  # noqa: SLF001
+        {"nested": ["a"], "unordered": {"b", "a"}}
+    ) == (("nested", ("a",)), ("unordered", ("a", "b")))
 
 
 def test_diagnostic_sensor_subscribes_to_sampled_updates(
@@ -434,6 +441,7 @@ def install_fake_homeassistant(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     set_module_attr(event, "async_track_state_change_event", unsubscribe_factory)
     set_module_attr(event, "async_track_time_interval", unsubscribe_factory)
+    set_module_attr(event, "async_call_later", unsubscribe_factory)
 
     set_module_attr(homeassistant, "components", components)
     set_module_attr(homeassistant, "config_entries", config_entries)

@@ -123,7 +123,6 @@ class DiagnosticPredictedNextZoneSensor(RuntimeSensor):
         summary = runtime_automation_summary(self.runtime)
         return {
             "probability": summary.diagnostic_predicted_next_probability,
-            "prelight_plausible_zones": list(summary.prelight_plausible_zones),
             "zone_probabilities": {
                 zone: state.prediction_probability
                 for zone, state in summary.zones.items()

@@ -64,7 +64,7 @@ def test_replay_events_applies_sorted_trace_and_snapshots_states() -> None:
 
     assert len(result.steps) == 2
     assert result.steps[0].event.state == "on"
-    assert result.steps[0].zone_states["office"].status == "probable"
+    assert result.steps[0].zone_states["office"].status == "possible"
     assert result.steps[0].diagnostics.expected_occupants == 1
     assert result.final_states["office"].status in {"possible", "probable"}
     assert result.final_diagnostics.expected_occupants == 1
@@ -121,7 +121,7 @@ def test_history_events_from_states_imports_home_assistant_history_rows() -> Non
         ],
     )
 
-    assert [event.state for event in events] == ["on", "off"]
+    assert [event.state for event in events] == ["on", "off", "unknown"]
     assert events[1].event_at == datetime(2026, 6, 7, 12, 5, tzinfo=UTC)
 
 
@@ -150,6 +150,6 @@ def test_replay_history_states_imports_and_summarizes_real_history_shape() -> No
         "possible",
         "probable",
     }
-    assert summary["active_zones"] == ["office"]
-    assert summary["traversal_token_count"] == 1
+    assert summary["active_zones"] == []
+    assert summary["traversal_token_count"] == 0
     assert summary["health_warning_count"] == 0

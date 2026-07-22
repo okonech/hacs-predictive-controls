@@ -9,7 +9,6 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
 from .const import (
-    CONF_ACTIONS_YAML,
     CONF_EXPECTED_OCCUPANTS,
     CONF_EXPECTED_OCCUPANTS_ENTITY,
     CONF_MAP_YAML,
@@ -22,12 +21,7 @@ from .const import (
     STORAGE_VERSION,
     WEBSOCKET_REGISTERED,
 )
-from .yaml_config import (
-    DEFAULT_ACTIONS_YAML,
-    DEFAULT_MAP_YAML,
-    load_predictive_actions,
-    load_predictive_map,
-)
+from .yaml_config import DEFAULT_MAP_YAML, load_predictive_map
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -54,9 +48,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     options = dict(entry.options)
     predictive_map = load_predictive_map(options.get(CONF_MAP_YAML, DEFAULT_MAP_YAML))
-    actions = load_predictive_actions(
-        options.get(CONF_ACTIONS_YAML, DEFAULT_ACTIONS_YAML)
-    )
     transition_window = int(
         options.get(CONF_TRANSITION_WINDOW, DEFAULT_TRANSITION_WINDOW)
     )
@@ -72,11 +63,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         f"{DOMAIN}_{entry.entry_id}_transitions",
     )
     stored_transitions = await transition_store.async_load() or {}
+    if stored_transitions.get("schema") == "zone-belief-v2":
+        rollback_store = PredictiveControlsStore(
+            hass,
+            STORAGE_VERSION,
+            f"{DOMAIN}_{entry.entry_id}_zone_belief_v2_rollback",
+        )
+        if not await rollback_store.async_load():
+            await rollback_store.async_save(stored_transitions)
 
     runtime = PredictiveControlsRuntime(
         hass,
         predictive_map,
-        actions,
+        (),
         transition_window,
         expected_occupants=expected_occupants,
         expected_occupants_entity=expected_occupants_entity,

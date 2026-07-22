@@ -147,3 +147,22 @@ target outcome required by the sole specification.
 | `t05_stuck_transition_degrades.json`                  | Stuck transition loses authority, reports health, and releases                        | `REQ-EVID-005`, `REQ-TRAV-004`, `REQ-POLICY-004`     | 5            |
 | `t06_stuck_stay_degrades.json`                        | Held stay remains active locally while its traversal authority expires                | `REQ-EVID-004`, `REQ-EVID-005`, `REQ-PROFILE-003`    | 5            |
 | `t07_manual_off_refresh.json`                         | External output is not evidence; one accepted distinct episode emits one refresh      | `REQ-POLICY-005`, `REQ-PUBLIC-002`, `REQ-PUBLIC-003` | 5            |
+
+## v3 Migration Dispositions
+
+This section supersedes earlier rows where v2 preserved prelight,
+downstream-only prediction, source-free stay bootstrap, or prediction actions.
+
+| Changed v2 contract or test | v3 disposition and named replacement | Requirements |
+| --- | --- | --- |
+| `test_engine_direct_stay_assertion_can_acquire_without_a_hallway_edge` | Replace with `test_inc_2026_07_21_isolated_master_closet_never_acquires` and `test_isolated_positive_expires_without_activation` | `REQ-EVID-008`, `REQ-TRAV-005`, `REQ-POLICY-001`, `REQ-GOV-005` |
+| `test_engine_bootstrap_projects_current_stay_assertion_without_public_edge` | Replace with `test_bootstrap_asserted_stay_seeds_belief_but_not_active` | `REQ-STATE-006`, `REQ-PUBLIC-002` |
+| traversal tests asserting `source_free_corroborated` | Replace with `test_pending_adjacent_pair_activates_only_leading_zone`, `test_third_distinct_adjacent_node_confirms_track`, and `test_two_node_backtracking_remains_provisional` | `REQ-TRAV-007`, `REQ-TRAV-009`, `REQ-TRAV-010`, `REQ-TRAV-011` |
+| `test_prediction.py` downstream-only lease assertions | Replace with `test_mature_prediction_activates_same_active_entity`, `test_prediction_confirmation_emits_no_second_edge`, `test_unconfirmed_prediction_expires_after_ten_seconds`, and sparse/provisional inverse tests in the same module | `REQ-PRED-001` through `REQ-PRED-006`, `REQ-POLICY-010` |
+| `test_actions.py` prediction-driven normal light actions | Retire normal prediction action cases after `test_runtime_prediction_publishes_active_before_dispatch` passes; retain non-occupancy effect serialization only | `REQ-GOAL-012`, `REQ-PUBLIC-003`, `REQ-PUBLIC-005` |
+| `test_automation_summary.py` prelight booleans | Replace with active phase/provenance plus diagnostic probability assertions | `REQ-PUBLIC-003`, `REQ-PUBLIC-005`, `REQ-DIAG-001` |
+| `test_entity_platforms.py` and `test_entity_registry.py` prelight IDs | Replace with stable active/home-active IDs and explicit stale-prelight cleanup assertions | `REQ-PUBLIC-003`, `REQ-PUBLIC-005` |
+| v2 persistence tests | Preserve v2 decoder tests as legacy importer coverage; add v3 pending, provisional, confirmed, predicted, conflict, exact-deadline, byte-stable, and atomic-corruption round trips in `test_zone_model_persistence.py` | `REQ-STATE-001` through `REQ-STATE-009` |
+| held stay without contradiction (`t06`) | Preserve; add `test_confirmed_outside_fronts_health_degrade_stuck_stay_after_dwell` and front-loss/provisional/count-one/count-zero inverse tests | `REQ-EVID-005`, `REQ-COUNT-008`, `REQ-COUNT-009` |
+| configurable prediction threshold tests | Replace with fixed-0.85 activation and legacy-option-ignored migration tests | `REQ-PRED-001`, `REQ-PRED-005`, `REQ-POLICY-006` |
+| existing performance benchmark | Preserve and extend with path-qualified adjacent-token, adjacent-pair, same-zone, boundary, missed-edge, third-node-confirmation, and mature-prediction traces measured through the publication schedule hook | `REQ-PERF-001`, `REQ-PERF-002`, `REQ-PERF-006`, `REQ-PERF-007` |

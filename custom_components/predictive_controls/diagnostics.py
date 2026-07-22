@@ -45,5 +45,4 @@ async def async_get_config_entry_diagnostics(
         "probabilities": runtime.probabilities,
         "transition_counts": status["transition_counts"],
         "latency": status.get("latency", {}),
-        "actions": [action.action_id for action in runtime.actions],
     }

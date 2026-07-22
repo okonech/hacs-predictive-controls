@@ -19,7 +19,7 @@ TRANSITION_FAST = SensorProfile(
     assertion_trust_horizon=timedelta(seconds=60),
     post_clear_residual=0.1,
     traversal_context_window=timedelta(seconds=45),
-    single_node_reacquisition=False,
+    track_bootstrap_window=timedelta(seconds=45),
 )
 STAY_PIR = SensorProfile(
     "stay_pir",
@@ -30,7 +30,7 @@ STAY_PIR = SensorProfile(
     assertion_trust_horizon=timedelta(seconds=900),
     post_clear_residual=0.65,
     traversal_context_window=timedelta(seconds=90),
-    single_node_reacquisition=True,
+    track_bootstrap_window=timedelta(seconds=90),
 )
 STAY_PRESENCE = SensorProfile(
     "stay_presence",
@@ -41,7 +41,7 @@ STAY_PRESENCE = SensorProfile(
     assertion_trust_horizon=timedelta(seconds=1800),
     post_clear_residual=0.8,
     traversal_context_window=timedelta(seconds=120),
-    single_node_reacquisition=True,
+    track_bootstrap_window=timedelta(seconds=120),
 )
 ENTRY_BOUNDARY = SensorProfile(
     "entry_boundary",
@@ -52,7 +52,7 @@ ENTRY_BOUNDARY = SensorProfile(
     assertion_trust_horizon=timedelta(seconds=45),
     post_clear_residual=0.05,
     traversal_context_window=timedelta(seconds=30),
-    single_node_reacquisition=False,
+    track_bootstrap_window=timedelta(seconds=30),
 )
 SHARED_PROFILES: Mapping[str, SensorProfile] = MappingProxyType(
     {
@@ -222,6 +222,8 @@ def build_physical_nodes(predictive_map: PredictiveMap) -> PhysicalNodeBuild:
                 node.occupancy_zone,
                 aliases,
                 assignment.profile_name,
+                node.reliability,
+                node.route_prior_weight,
             )
         )
     return PhysicalNodeBuild(tuple(nodes), tuple(errors))

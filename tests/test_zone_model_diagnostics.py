@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 import pytest
 
@@ -104,6 +105,34 @@ def test_audit_rejects_non_monotonic_time_and_invalid_bounds() -> None:
     audit.append(decision(NOW))
     with pytest.raises(ValueError, match="backward"):
         audit.append(decision(NOW - timedelta(seconds=1)))
+
+
+def test_audit_deferral_materializes_only_after_flush_and_aborts_cleanly() -> None:
+    audit = PolicyAuditLog()
+    with pytest.raises(RuntimeError, match="not active"):
+        audit.flush_deferred()
+    audit.begin_defer()
+    with pytest.raises(RuntimeError, match="already active"):
+        audit.begin_defer()
+    first = decision(NOW, episode_id="one")
+    second = decision(NOW + timedelta(seconds=1), episode_id="two")
+    assert audit.append(first)
+    assert audit.append(second)
+    assert len(audit.rows) == 0
+    assert audit.encoded_bytes == 0
+    with pytest.raises(ValueError, match="backward"):
+        audit.append(decision(NOW - timedelta(seconds=1)))
+
+    audit.flush_deferred()
+
+    flushed = cast(tuple[PolicyDecision, ...], audit.rows)
+    assert flushed == (first, second)
+    assert audit.encoded_bytes > 0
+    audit.begin_defer()
+    audit.append(decision(NOW + timedelta(seconds=2), episode_id="discarded"))
+    audit.discard_deferred()
+    retained = cast(tuple[PolicyDecision, ...], audit.rows)
+    assert retained == (first, second)
 
 
 def test_policy_event_validates_public_edge_contract() -> None:

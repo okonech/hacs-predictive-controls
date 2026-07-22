@@ -45,9 +45,7 @@ test("panel module registers and renders websocket data", async () => {
           entry_id: "abc123",
           map: { nodes: {} },
           map_yaml: "nodes: {}\n",
-          actions_yaml: "actions: {}\n",
           transition_window_seconds: 30,
-          prediction_threshold: 0.6,
           expected_occupants: 2,
         });
       }
@@ -90,9 +88,7 @@ test("panel remains usable when runtime status is unavailable", async () => {
           entry_id: "abc123",
           map: { nodes: {} },
           map_yaml: "nodes: {}\n",
-          actions_yaml: "",
           transition_window_seconds: 30,
-          prediction_threshold: 0.6,
           expected_occupants: 2,
         });
       }
@@ -121,9 +117,7 @@ test("panel defaults to occupancy first and renders requested tab order", async 
   panel._config = {
     map: { nodes: {} },
     map_yaml: "nodes: {}\n",
-    actions_yaml: "actions: {}\n",
     transition_window_seconds: 30,
-    prediction_threshold: 0.6,
     expected_occupants: 2,
   };
   panel._status = { zone_states: {}, occupancy_diagnostics: { model: "zone_belief", beliefs: {} } };
@@ -133,7 +127,7 @@ test("panel defaults to occupancy first and renders requested tab order", async 
   assert.match(panel.innerHTML, /<main class="occupancy-layout">/);
   assert.match(
     panel.innerHTML,
-    /data-tab="occupancy">Occupancy<\/button>\s*<button[^>]+data-tab="reliability">Reliability<\/button>\s*<button[^>]+data-tab="activity">Activity<\/button>\s*<button[^>]+data-tab="map">Map<\/button>\s*<button[^>]+data-tab="yaml">YAML<\/button>\s*<button[^>]+data-tab="actions">Actions<\/button>\s*<button[^>]+data-tab="settings">Settings<\/button>/,
+    /data-tab="occupancy">Occupancy<\/button>\s*<button[^>]+data-tab="reliability">Reliability<\/button>\s*<button[^>]+data-tab="activity">Activity<\/button>\s*<button[^>]+data-tab="map">Map<\/button>\s*<button[^>]+data-tab="yaml">YAML<\/button>\s*<button[^>]+data-tab="settings">Settings<\/button>/,
   );
   assert.match(panel.innerHTML, /Believed Occupancy Graph/);
   assert.doesNotMatch(panel.innerHTML, /Zone Beliefs/);
@@ -644,9 +638,7 @@ test("panel marks raw map yaml dirty only for yaml editor saves", async () => {
     entry_id: "abc123",
     map: { nodes: { entry: { adjacent: [] } } },
     map_yaml: "nodes:\n  entry:\n    adjacent:\n[]\n",
-    actions_yaml: "actions: {}\n",
     transition_window_seconds: 30,
-    prediction_threshold: 0.6,
     expected_occupants: 2,
     expected_occupants_entity: "input_number.expected_occupants",
   };
@@ -657,6 +649,8 @@ test("panel marks raw map yaml dirty only for yaml editor saves", async () => {
 
   assert.equal(calls[0].map_yaml_dirty, false);
   assert.equal(calls[0].expected_occupants_entity, "input_number.expected_occupants");
+  assert.equal("actions_yaml" in calls[0], false);
+  assert.equal("prediction_threshold" in calls[0], false);
   assert.equal(calls[1].map_yaml_dirty, true);
 });
 
@@ -666,7 +660,6 @@ test("panel renders expected occupants setting", async () => {
   panel._hass = {};
   panel._config = {
     transition_window_seconds: 30,
-    prediction_threshold: 0.6,
     expected_occupants: 2,
     expected_occupants_entity: "input_number.expected_occupants",
   };
@@ -679,6 +672,8 @@ test("panel renders expected occupants setting", async () => {
   assert.match(panel.innerHTML, /Expected occupants entity/);
   assert.match(panel.innerHTML, /input_number\.expected_occupants/);
   assert.match(panel.innerHTML, /Clean Stale Entities/);
+  assert.doesNotMatch(panel.innerHTML, /Prediction threshold/);
+  assert.doesNotMatch(panel.innerHTML, /Predictive Actions/);
 });
 
 test("panel cleans stale entities after preview and confirmation", async () => {

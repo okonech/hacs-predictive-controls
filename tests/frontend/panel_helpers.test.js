@@ -69,7 +69,8 @@ test("creates a node from a live-shaped motion entity", () => {
     adjacent: [],
     role: "room_occupancy",
     occupancy_behavior: "sustained",
-    initial_weight: 1,
+    reliability: 1,
+    route_prior_weight: 1,
     position: { x: 32, y: 106 },
   });
 });

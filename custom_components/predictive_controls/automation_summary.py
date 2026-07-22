@@ -20,7 +20,6 @@ class ZoneAutomationState:
     possible_occupancy: bool
     activation_plausible: bool
     keep_on: bool
-    prelight_plausible: bool
     diagnostic_entry_path_plausible: bool
     prediction_probability: float
 
@@ -38,21 +37,17 @@ class AutomationSummary:
     keep_on_zones: tuple[str, ...]
     diagnostic_entry_path_plausible_zones: tuple[str, ...]
     active_movement_corridor: tuple[str, ...]
-    prelight_plausible_zones: tuple[str, ...]
     diagnostic_predicted_next_zone: str | None
     diagnostic_predicted_next_probability: float | None
     explanation: str
     zones: dict[str, ZoneAutomationState] = field(default_factory=dict)
 
 
-def runtime_automation_summary(
-    runtime: Any,
-    prediction_threshold: float = PROBABLE_CONFIDENCE,
-) -> AutomationSummary:
+def runtime_automation_summary(runtime: Any) -> AutomationSummary:
     """Build the public summary directly from zone-belief state."""
 
     cache = getattr(runtime, "_automation_summary_cache", None)
-    cache_key = float(prediction_threshold)
+    cache_key = "v3"
     if isinstance(cache, dict):
         cached = cache.get(cache_key)
         if isinstance(cached, AutomationSummary):
@@ -68,7 +63,7 @@ def runtime_automation_summary(
     boundary = {
         item.target_zone
         for item in confidence.authorizations
-        if item.authorized and item.reason == "boundary_reacquisition"
+        if item.authorized and item.reason == "boundary_authorized"
     }
     zones = {
         zone: _zone_state(
@@ -78,14 +73,12 @@ def runtime_automation_summary(
             predictions.get(zone, 0.0),
             zone in authorized,
             zone in boundary,
-            prediction_threshold,
         )
         for zone in runtime.map.zones()
     }
     probable = tuple(zone for zone, state in zones.items() if state.probable_occupancy)
     possible = tuple(zone for zone, state in zones.items() if state.possible_occupancy)
     active = tuple(zone for zone, state in zones.items() if state.keep_on)
-    prelight = tuple(zone for zone, state in zones.items() if state.prelight_plausible)
     top_zone, top_probability = _top_prediction(predictions)
     summary = AutomationSummary(
         expected_inside_count=int(runtime.expected_occupants or 0),
@@ -101,7 +94,6 @@ def runtime_automation_summary(
         active_movement_corridor=tuple(
             sorted({token.zone for token in confidence.traversal_tokens})
         ),
-        prelight_plausible_zones=prelight,
         diagnostic_predicted_next_zone=top_zone,
         diagnostic_predicted_next_probability=top_probability,
         explanation=_explanation(probable, top_zone, top_probability),
@@ -119,7 +111,6 @@ def _zone_state(
     prediction_probability: float,
     activation_plausible: bool,
     boundary_plausible: bool,
-    prediction_threshold: float,
 ) -> ZoneAutomationState:
     status = _status(confidence)
     return ZoneAutomationState(
@@ -130,7 +121,6 @@ def _zone_state(
         possible_occupancy=status in POSSIBLE_STATUSES,
         activation_plausible=activation_plausible,
         keep_on=bool(getattr(policy, "active", False)),
-        prelight_plausible=prediction_probability >= prediction_threshold,
         diagnostic_entry_path_plausible=boundary_plausible,
         prediction_probability=prediction_probability,
     )

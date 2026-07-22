@@ -11,6 +11,7 @@ from custom_components.predictive_controls.automation_summary import (
     _status,
     _top_prediction,
 )
+from custom_components.predictive_controls.model import ZoneConfig
 from custom_components.predictive_controls.occupancy_settings import (
     authoritative_occupants_from_state_value,
 )
@@ -22,7 +23,10 @@ from custom_components.predictive_controls.occupancy_tracker import (
 )
 from custom_components.predictive_controls.zone_model.engine import ZoneModelEngine
 from custom_components.predictive_controls.zone_model.persistence import (
-    target_map_fingerprint,
+    LegacyV2Seed,
+    legacy_target_map_fingerprint,
+    migrate_v2_seed,
+    serialize_target_state,
 )
 from custom_components.predictive_controls.zone_model.types import (
     CountInput,
@@ -30,6 +34,7 @@ from custom_components.predictive_controls.zone_model.types import (
 )
 from tests.test_confidence import event
 from tests.test_zone_model_engine import target_map
+from tests.test_zone_model_persistence import legacy_v2_payload
 
 NOW = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
 
@@ -88,11 +93,11 @@ def test_tracker_validation_bootstrap_advancement_and_transient_expiry() -> None
 
 def test_tracker_empty_store_schema6_migration_and_prediction_restore_failure() -> None:
     empty = OccupancyTracker(target_map(), TrackerConfig(1))
-    assert empty.occupancy_store_data(NOW)["schema"] == "zone-belief-v2"
+    assert empty.occupancy_store_data(NOW)["schema"] == "zone-belief-v3"
     tracker = OccupancyTracker(target_map(), TrackerConfig(1))
     schema6 = {
         "schema": "exact-augmented-v6",
-        "map_fingerprint": target_map_fingerprint(target_map()),
+        "map_fingerprint": legacy_target_map_fingerprint(target_map()),
         "occupants": 1,
         "policy": {
             "states": {
@@ -124,9 +129,166 @@ def test_tracker_empty_store_schema6_migration_and_prediction_restore_failure() 
 
     without_prediction = deepcopy(payload)
     without_prediction.pop("prediction")
-    assert OccupancyTracker(target_map(), TrackerConfig(1)).restore_state(
-        without_prediction, NOW
+    missing = OccupancyTracker(target_map(), TrackerConfig(1))
+    assert not missing.restore_state(without_prediction, NOW)
+    assert missing.diagnostics.restore_status == "rejected"
+
+
+def test_tracker_rejects_corrupt_schema6_before_deferred_cold_bootstrap() -> None:
+    tracker = OccupancyTracker(target_map(), TrackerConfig(1))
+    corrupt = {
+        "schema": "exact-augmented-v6",
+        "map_fingerprint": "wrong",
+        "occupants": 1,
+    }
+
+    assert not tracker.restore_state(corrupt, NOW)
+    assert tracker.diagnostics.restore_status == "rejected"
+    tracker.bootstrap_state(
+        (
+            event("hall", "hall", "off", NOW),
+            event("room", "room", "on", NOW),
+        ),
+        cold_start=True,
     )
+
+    assert tracker.diagnostics.restore_status == "rejected"
+    assert set(tracker.diagnostics.beliefs) == {"hall", "room"}
+
+
+def test_tracker_rejects_schema6_seed_for_zone_without_physical_filter() -> None:
+    predictive_map = target_map()
+    predictive_map.zone_configs["ghost"] = ZoneConfig("ghost")
+    tracker = OccupancyTracker(predictive_map, TrackerConfig(1))
+    payload = {
+        "schema": "exact-augmented-v6",
+        "map_fingerprint": legacy_target_map_fingerprint(predictive_map),
+        "occupants": 1,
+        "policy": {"states": {"ghost": {"keep_on": True}}},
+    }
+
+    assert not tracker.restore_state(payload, NOW)
+    assert tracker.diagnostics.restore_status == "rejected"
+
+
+def test_tracker_rejects_v2_seed_for_zone_without_physical_filter() -> None:
+    predictive_map = target_map()
+    predictive_map.zone_configs["ghost"] = ZoneConfig("ghost")
+    payload = legacy_v2_payload(traversal_reason="adjacent_current")
+    snapshot = payload["snapshot"]
+    assert isinstance(snapshot, dict)
+    policy_states = snapshot["policy_states"]
+    assert isinstance(policy_states, list) and policy_states
+    ghost = deepcopy(policy_states[0])
+    assert isinstance(ghost, dict)
+    ghost["zone"] = "ghost"
+    ghost["active"] = False
+    policy_states.append(ghost)
+    tracker = OccupancyTracker(predictive_map, TrackerConfig(1))
+
+    assert not tracker.restore_state(payload, NOW)
+    assert tracker.diagnostics.restore_status == "rejected"
+
+
+def test_tracker_defers_valid_v2_migration_and_rejects_invalid_v2_seed() -> None:
+    payload = legacy_v2_payload(traversal_reason="adjacent_current")
+    tracker = OccupancyTracker(target_map(), TrackerConfig(1))
+
+    assert tracker.restore_state(payload, NOW)
+    assert tracker.diagnostics.restore_status == "v2_pending"
+    tracker.bootstrap_state(
+        (
+            event("hall", "hall", "off", NOW),
+            event("room", "room", "on", NOW),
+        ),
+        cold_start=False,
+    )
+    assert tracker.diagnostics.restore_status == "v2_migrated"
+    assert tracker.config.expected_occupants == 1
+
+    invalid = deepcopy(payload)
+    invalid["map_fingerprint"] = "wrong"
+    rejected = OccupancyTracker(target_map(), TrackerConfig(1))
+    assert not rejected.restore_state(invalid, NOW)
+    assert rejected.diagnostics.restore_status == "rejected"
+
+
+@pytest.mark.parametrize("legacy_kind", ("schema6", "v2"))
+def test_deferred_migration_uses_reconciled_authoritative_count(
+    legacy_kind: str,
+) -> None:
+    if legacy_kind == "schema6":
+        payload: dict[str, object] = {
+            "schema": "exact-augmented-v6",
+            "map_fingerprint": legacy_target_map_fingerprint(target_map()),
+            "occupants": 1,
+            "policy": {"states": {"room": {"keep_on": True}}},
+        }
+    else:
+        payload = legacy_v2_payload(traversal_reason="adjacent_current")
+    tracker = OccupancyTracker(target_map(), TrackerConfig(1))
+
+    assert tracker.restore_state(payload, NOW)
+    tracker.reconcile_expected_occupants(2, NOW + timedelta(seconds=1))
+    tracker.bootstrap_state(
+        (
+            event("hall", "hall", "off", NOW + timedelta(seconds=2)),
+            event("room", "room", "on", NOW + timedelta(seconds=2)),
+        ),
+        cold_start=False,
+    )
+
+    assert tracker.config.expected_occupants == 2
+    assert tracker.diagnostics.expected_occupants == 2
+    assert tracker.diagnostics.restore_status == f"{legacy_kind}_migrated"
+
+
+@pytest.mark.parametrize(
+    ("seed", "authoritative"),
+    ((LegacyV2Seed(1, {}), True), (LegacyV2Seed(3, {}), None)),
+)
+def test_v2_migration_rejects_invalid_stored_or_authoritative_count(
+    seed: LegacyV2Seed,
+    authoritative: int | None,
+) -> None:
+    with pytest.raises(ValueError, match="Migration occupant count"):
+        migrate_v2_seed(
+            target_map(),
+            seed,
+            (),
+            NOW,
+            expected_count=authoritative,
+        )
+
+
+def test_tracker_adopts_restored_count_as_reconciliation_frontier() -> None:
+    stored = ZoneModelEngine(target_map(), 2, NOW)
+    payload = serialize_target_state(target_map(), stored)
+    tracker = OccupancyTracker(target_map(), TrackerConfig(0))
+
+    assert tracker.restore_state(payload, NOW)
+    assert tracker.config.expected_occupants == 2
+    assert tracker.requested_expected_occupants == 2
+
+    tracker.reconcile_expected_occupants(0, NOW, evidence_id="external_zero")
+    assert tracker.config.expected_occupants == 0
+    assert tracker.requested_expected_occupants == 0
+    assert all(not state.active for state in tracker.policy_states.values())
+
+
+def test_tracker_no_engine_learning_commit_and_active_hold_are_bounded() -> None:
+    tracker = OccupancyTracker(target_map(), TrackerConfig(1))
+    tracker.commit_prediction_learning()
+    tracker.observe(event("hall", "hall", "on", NOW))
+    tracker.observe(event("room", "room", "on", NOW + timedelta(seconds=2)))
+    tracker.observe(event("room", "room", "off", NOW + timedelta(seconds=40)))
+    tracker.refresh_active(NOW + timedelta(seconds=45))
+
+    held = tracker.observe(
+        event("room", "room", "on", NOW + timedelta(seconds=50))
+    )
+
+    assert held.current.explanation["active"] is True
 
 
 def test_tracker_refresh_builds_timer_updates_and_recent_event_bound() -> None:

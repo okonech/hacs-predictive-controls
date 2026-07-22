@@ -2,8 +2,7 @@
 
 Predictive Controls is a Home Assistant custom integration that turns a graph of
 motion and presence sensors into stable zone-level automation entities. Its
-first use case is lighting, while configured actions may call other Home
-Assistant services.
+first use case is fast, accurate lighting through one `active` entity per zone.
 
 ## Design and Current Model
 
@@ -13,9 +12,11 @@ remain consistent with it.
 
 The integration now runs graph-local per-zone probability filters, bounded
 anonymous traversal context, and hysteretic probability-driven `active`
-decisions. Home Assistant Store schema 7 can import schema-6 state once to seed
-public active state, then persists only `zone-belief-v2` state. Older
-`zone-belief-v1` inference is rejected and rebuilt from current sensor states.
+decisions. Home Assistant Store schema 7 can import schema-6 state once and can
+conservatively migrate `zone-belief-v2`; current state persists as
+`zone-belief-v3`. Unsafe v2 traversal, prediction, and source-free authority are
+discarded. Older `zone-belief-v1` inference is rejected and rebuilt from current
+sensor states.
 Historical changelog entries may still describe the retired architecture.
 
 ## Installation
@@ -30,9 +31,8 @@ Historical changelog entries may still describe the retired architecture.
 
 ## Configuration
 
-The integration stores its node map and action configuration in config-entry
-options. Use the Predictive Controls sidebar panel or Configure on the
-integration entry to edit them.
+The integration stores its node map in config-entry options. Use the Predictive
+Controls sidebar panel or Configure on the integration entry to edit it.
 
 The map groups raw entity aliases into physical nodes, assigns nodes to zones,
 and declares physical adjacency. Current maps may use role names such as
@@ -53,6 +53,8 @@ nodes:
     zone: entry
     role: transition_gate
     occupancy_behavior: transient
+    reliability: 0.98
+    route_prior_weight: 1
     entities:
       motion: binary_sensor.example_entry_motion
     adjacent:
@@ -93,12 +95,11 @@ The normal automation surface is intentionally small:
 | Entity                                      | Meaning                                                  |
 | ------------------------------------------- | -------------------------------------------------------- |
 | `binary_sensor.<zone>_active`               | Desired normal-output state for the zone                 |
-| `binary_sensor.<zone>_prelight`             | Optional bounded predictive-lighting lease               |
 | `binary_sensor.home_active`                 | Logical OR of per-zone `active` states                   |
 | `binary_sensor.predictive_controls_problem` | Diagnostic integration problem state; never policy input |
 
 Optional probability and path diagnostics are disabled by default. The current
-surface keeps the stable `active`, `prelight`, and `home_active` IDs, adds a
+surface keeps the stable `active` and `home_active` IDs, adds a
 deduplicated `refreshed` type on optional `event.<zone>_arrival` for accepted
 evidence while already active, and exposes zone belief, authorization reason,
 release dwell, sensor health, and bounded policy audit diagnostics.
@@ -118,10 +119,6 @@ triggers:
     entity_id: binary_sensor.living_room_active
     to: "off"
     id: inactive
-  - trigger: state
-    entity_id: binary_sensor.living_room_prelight
-    to: "on"
-    id: prelight
 actions:
   - choose:
       - conditions: [{ condition: trigger, id: active }]
@@ -132,17 +129,13 @@ actions:
         sequence:
           - action: light.turn_off
             target: { entity_id: light.living_room }
-      - conditions: [{ condition: trigger, id: prelight }]
-        sequence:
-          - action: light.turn_on
-            target: { entity_id: light.living_room }
-            data: { brightness_pct: 20 }
 mode: restart
 ```
 
-Remove the prelight branch when predictive lighting is not useful. Ordinary
-automations should consume public desired-state edges rather than duplicate map,
-probability, or timing logic.
+Mature predictions are internal authorization for this same `active` entity;
+there is no separate prelight control or prediction-driven service action.
+Automations should consume public desired-state edges rather than duplicate map,
+probability, authorization, or timing logic.
 
 ## Sensor Timing
 
@@ -185,6 +178,8 @@ quality gates.
 ## Repository Documents
 
 - [`SPECIFICATION.md`](SPECIFICATION.md): sole normative design authority.
+- [`MIGRATION_PLAN.md`](MIGRATION_PLAN.md): phased implementation, compatibility,
+  validation, rollout, and backout plan for the v3 acquisition model.
 - [`CHANGELOG.md`](CHANGELOG.md): historical release record.
 - [`PERFORMANCE_RESULTS.json`](PERFORMANCE_RESULTS.json): latest checked-in
   performance artifact where applicable.
