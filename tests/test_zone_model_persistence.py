@@ -30,7 +30,7 @@ from tests.test_zone_model_count import (
     conflict_map,
     engine_with_two_front_conflict,
 )
-from tests.test_zone_model_engine import target_map
+from tests.test_zone_model_engine import correlated_continuity_map, target_map
 
 NOW = datetime(2026, 7, 18, 23, 0, tzinfo=UTC)
 pytestmark = pytest.mark.target_model
@@ -106,6 +106,40 @@ def test_target_state_round_trips_deterministically() -> None:
     assert restored.snapshot == engine.snapshot
     assert restored.audit_rows == engine.audit_rows
     assert serialize_target_state(target_map(), restored) == payload
+
+
+def test_correlated_continuity_lineage_round_trips_dormant_and_reopened() -> None:
+    predictive_map = correlated_continuity_map()
+    engine = ZoneModelEngine(predictive_map, 2, NOW)
+    top_at = NOW + timedelta(seconds=7)
+    top_off_at = NOW + timedelta(seconds=50)
+    dormant_at = top_at + timedelta(seconds=45, milliseconds=100)
+    reasserted_at = top_off_at + timedelta(seconds=2, milliseconds=200)
+
+    engine.observe(SensorInput("binary_sensor.bottom", "on", NOW))
+    engine.observe(SensorInput("binary_sensor.top", "on", top_at))
+    engine.observe(
+        SensorInput("binary_sensor.bottom", "off", NOW + timedelta(seconds=21))
+    )
+    engine.observe(SensorInput("binary_sensor.top", "off", top_off_at))
+    engine.advance(dormant_at)
+    assert engine.snapshot.traversal_tokens == ()
+    assert engine.snapshot.retained_traversal_tokens
+
+    dormant_payload = serialize_target_state(predictive_map, engine)
+    dormant = restore_target_state(predictive_map, dormant_payload, dormant_at)
+    assert dormant.snapshot == engine.snapshot
+    assert serialize_target_state(predictive_map, dormant) == dormant_payload
+
+    reopened = dormant.observe(SensorInput("binary_sensor.top", "on", reasserted_at))
+    assert any(token.node_id == "top" for token in reopened.snapshot.traversal_tokens)
+    assert all(
+        token.node_id != "top" for token in reopened.snapshot.retained_traversal_tokens
+    )
+    reopened_payload = serialize_target_state(predictive_map, dormant)
+    restored = restore_target_state(predictive_map, reopened_payload, reasserted_at)
+    assert restored.snapshot == dormant.snapshot
+    assert serialize_target_state(predictive_map, restored) == reopened_payload
 
 
 @pytest.mark.parametrize("frontier", ("idle", "unavailable", "count_arrival"))
@@ -217,6 +251,8 @@ def test_restore_rejects_lease_canceled_by_later_target_evidence() -> None:
             payload,
             PREDICTION_NOW + timedelta(seconds=3),
         )
+
+
 def test_count_conflict_dwell_survives_restart_without_extension() -> None:
     engine = engine_with_two_front_conflict()
     predictive_map = conflict_map()
@@ -280,9 +316,7 @@ def test_late_count_conflict_degradation_round_trips_after_trust_horizon() -> No
     restored = restore_target_state(predictive_map, payload, conflict.deadline)
 
     target = next(
-        state
-        for state in restored.snapshot.episode_states
-        if state.node_id == "target"
+        state for state in restored.snapshot.episode_states if state.node_id == "target"
     )
     assert target.degradation_reason == "count_conflict"
     assert target.degraded_at == conflict.deadline
@@ -517,6 +551,7 @@ def test_target_decoder_rejects_each_malformed_boundary() -> None:
         lambda root: root["snapshot"]["belief_states"][0].__setitem__("log_odds", True)
     )
     rejected(lambda root: root["snapshot"].__setitem__("current_token_ids", [1]))
+    rejected(lambda root: root["snapshot"].__setitem__("retained_traversal_tokens", {}))
     rejected(
         lambda root: root["snapshot"]["count_state"].__setitem__("diagnostics", [])
     )
@@ -572,9 +607,7 @@ def test_zero_count_migrations_never_restore_active_zones() -> None:
         "policy": {"states": {"room": {"keep_on": True}}},
     }
     migrated_schema6 = migrate_schema6_seed(target_map(), schema6, (), NOW)
-    assert all(
-        not state.active for state in migrated_schema6.snapshot.policy_states
-    )
+    assert all(not state.active for state in migrated_schema6.snapshot.policy_states)
 
     v2 = legacy_v2_payload(traversal_reason="adjacent_current")
     snapshot = v2["snapshot"]
@@ -885,8 +918,7 @@ def test_v3_restore_accepts_unexpired_tokens_from_overlapping_generations() -> N
 
     assert restored.snapshot == engine.snapshot
     assert (
-        restored.prediction_manager.serialize()
-        == engine.prediction_manager.serialize()
+        restored.prediction_manager.serialize() == engine.prediction_manager.serialize()
     )
 
 
@@ -1049,9 +1081,7 @@ def test_v3_restore_rejects_cross_component_fabricated_authority(
             token["accepted_at"] = (NOW + timedelta(seconds=1)).isoformat()
         elif mutation == "token_expiry":
             valid_until = datetime.fromisoformat(str(token["valid_until"]))
-            token["valid_until"] = (
-                valid_until + timedelta(seconds=1)
-            ).isoformat()
+            token["valid_until"] = (valid_until + timedelta(seconds=1)).isoformat()
         elif mutation == "token_provenance":
             token["provenance_kind"] = "junk"
         elif mutation == "confirmed_without_path":
@@ -1113,17 +1143,13 @@ def test_v3_restore_rejects_cross_component_fabricated_authority(
     elif mutation == "count_conflict":
         conflicts = snapshot["count_conflicts"]
         assert (
-            isinstance(conflicts, list)
-            and conflicts
-            and isinstance(conflicts[0], dict)
+            isinstance(conflicts, list) and conflicts and isinstance(conflicts[0], dict)
         )
         conflicts[0]["target_zone"] = "wrong"
     else:
         conflicts = snapshot["count_conflicts"]
         assert (
-            isinstance(conflicts, list)
-            and conflicts
-            and isinstance(conflicts[0], dict)
+            isinstance(conflicts, list) and conflicts and isinstance(conflicts[0], dict)
         )
         started_at = datetime.fromisoformat(str(conflicts[0]["started_at"]))
         conflicts[0]["deadline"] = (started_at + timedelta(days=1)).isoformat()
@@ -1132,8 +1158,7 @@ def test_v3_restore_rejects_cross_component_fabricated_authority(
         restore_target_state(predictive_map, payload, restore_at)
 
 
-def test_v3_restore_rejects_historical_episode_after_current_generation_start(
-) -> None:
+def test_v3_restore_rejects_historical_episode_after_current_generation_start() -> None:
     predictive_map = target_map()
     engine = ZoneModelEngine(predictive_map, 1, NOW)
     engine.observe(SensorInput("binary_sensor.hall", "on", NOW))
@@ -1169,8 +1194,7 @@ def test_v3_restore_rejects_historical_episode_after_current_generation_start(
         restore_target_state(predictive_map, payload, started_at)
 
 
-def test_v3_restore_rejects_extended_count_transition_and_invalid_seen_ids(
-) -> None:
+def test_v3_restore_rejects_extended_count_transition_and_invalid_seen_ids() -> None:
     engine = ZoneModelEngine(target_map(), 0, NOW)
     engine.observe_count(CountInput("arrival", 1, True, NOW))
     payload = serialize_target_state(target_map(), engine)
@@ -1193,8 +1217,7 @@ def test_v3_restore_rejects_extended_count_transition_and_invalid_seen_ids(
             restore_target_state(target_map(), invalid, NOW)
 
 
-def test_v3_restore_rejects_zero_count_with_residual_belief_and_pending_track(
-) -> None:
+def test_v3_restore_rejects_zero_count_with_residual_belief_and_pending_track() -> None:
     engine = ZoneModelEngine(target_map(), 1, NOW)
     engine.observe(SensorInput("binary_sensor.room", "on", NOW))
     payload = serialize_target_state(target_map(), engine)

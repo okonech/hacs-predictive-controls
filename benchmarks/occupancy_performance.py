@@ -313,6 +313,8 @@ def _measure_fast_paths(
             "living_left_sensor",
             "living_right_sensor",
             "stairs_bottom_sensor",
+            "stairs_top_sensor",
+            "upstairs_bathroom_sensor",
         )
     }
     boundary_map = _benchmark_map(
@@ -360,6 +362,7 @@ def _measure_fast_paths(
         "adjacent_pair": [],
         "boundary": [],
         "confirmed_token": [],
+        "correlated_continuity": [],
         "missed_edge": [],
         "same_zone": [],
         "third_node_confirmation": [],
@@ -388,10 +391,7 @@ def _measure_fast_paths(
                 else active_entity_type(runtime, "benchmark", zone)
                 for zone in zones
             ),
-            *(
-                diagnostic_entity_type(runtime, "benchmark", zone)
-                for zone in zones
-            ),
+            *(diagnostic_entity_type(runtime, "benchmark", zone) for zone in zones),
         ]
         for entity in entities:
             entity.hass = runtime.hass
@@ -447,8 +447,7 @@ def _measure_fast_paths(
             for policy in third_result.policy_states.values()
         )
         qualifications["third_node_confirmation"] += any(
-            item.reason == "track_confirmed"
-            for item in third_result.authorizations
+            item.reason == "track_confirmed" for item in third_result.authorizations
         )
 
         confirmed = make_runtime(predictive_map, 2)
@@ -470,6 +469,42 @@ def _measure_fast_paths(
             item.reason == "adjacent_authorized"
             and item.track_confidence == "confirmed"
             for item in confirmed_result.authorizations
+        )
+
+        continuity = make_runtime(predictive_map, 2)
+        observe(continuity, "stairs_bottom_sensor", 1)
+        observe(continuity, "stairs_top_sensor", 2)
+        continuity.observe_entity(
+            entities["stairs_bottom_sensor"],
+            "off",
+            started_at + timedelta(milliseconds=20_000),
+        )
+        continuity.observe_entity(
+            entities["stairs_top_sensor"],
+            "off",
+            started_at + timedelta(milliseconds=43_502),
+        )
+        observe(continuity, "stairs_top_sensor", 45_702)
+        continuity_result = measured_observe(
+            "correlated_continuity",
+            continuity,
+            "upstairs_bathroom_sensor",
+            52_402,
+            "upstairs_bathroom",
+        )
+        activations["correlated_continuity"] += any(
+            policy.zone == "upstairs_bathroom" and policy.active
+            for policy in continuity_result.policy_states.values()
+        )
+        qualifications["correlated_continuity"] += any(
+            item.reason == "track_confirmed"
+            and item.path_node_ids
+            == (
+                "stairs_bottom_sensor",
+                "stairs_top_sensor",
+                "upstairs_bathroom_sensor",
+            )
+            for item in continuity_result.authorizations
         )
 
         prediction = make_runtime(predictive_map, 2)
@@ -585,9 +620,7 @@ def _benchmark_map(
     """Clone the reference graph with one reviewed fast-path calibration."""
 
     role_overrides = {} if role_overrides is None else role_overrides
-    transition_overrides = (
-        {} if transition_overrides is None else transition_overrides
-    )
+    transition_overrides = {} if transition_overrides is None else transition_overrides
     nodes: dict[str, dict[str, object]] = {}
     for node_id, node in predictive_map.nodes.items():
         role, behavior = role_overrides.get(
@@ -684,9 +717,7 @@ def _measure_timer_work(
         pending_deadline = pending.snapshot.pending_candidates[0].expires_at
         began = perf_counter_ns()
         pending_result = pending.advance(pending_deadline)
-        samples["pending_expiry"].append(
-            (perf_counter_ns() - began) / 1_000_000
-        )
+        samples["pending_expiry"].append((perf_counter_ns() - began) / 1_000_000)
         completed["pending_expiry"] += not pending_result.snapshot.pending_candidates
 
         conflict = ZoneModelEngine(conflict_map, 2, started_at)
@@ -710,9 +741,7 @@ def _measure_timer_work(
         conflict_deadline = conflict.snapshot.count_conflicts[0].deadline
         began = perf_counter_ns()
         conflict_result = conflict.advance(conflict_deadline)
-        samples["count_conflict"].append(
-            (perf_counter_ns() - began) / 1_000_000
-        )
+        samples["count_conflict"].append((perf_counter_ns() - began) / 1_000_000)
         target = next(
             state
             for state in conflict_result.snapshot.episode_states

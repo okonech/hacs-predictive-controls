@@ -92,6 +92,7 @@ target outcome required by the sole specification.
 | `INC current sustained sensor retains high occupancy probability`         | Preserve while asserted with finite saturated belief and bounded traversal                        | `REQ-EVID-004`, `REQ-EVID-005`, `REQ-BELIEF-005` |
 | `INC two supported occupants release held transition zone`                | Preserve public release; replace support-certificate mechanism                                    | `REQ-GOAL-006`, `REQ-POLICY-004`                 |
 | `INC long-held source routes through hall to activate target`             | Preserve distinct target authorization through bounded open context                               | `REQ-EVID-007`, `REQ-TRAV-003`                   |
+| `INC authorized hallway reasserts just after token expiry`                | Reopen only the same bounded authorized lineage; activate a fresh adjacent target without adding local evidence | `REQ-EVID-002`, `REQ-TRAV-001`, `REQ-TRAV-013` |
 | `INC two outside tracks release cleared master-suite zones`               | Preserve public release; replace track ownership with local belief and outward decay              | `REQ-BELIEF-003`, `REQ-POLICY-002`               |
 
 ### Remediation Scenarios
@@ -162,7 +163,7 @@ downstream-only prediction, source-free stay bootstrap, or prediction actions.
 | `test_actions.py` prediction-driven normal light actions | Retire normal prediction action cases after `test_runtime_prediction_publishes_active_before_dispatch` passes; retain non-occupancy effect serialization only | `REQ-GOAL-012`, `REQ-PUBLIC-003`, `REQ-PUBLIC-005` |
 | `test_automation_summary.py` prelight booleans | Replace with active phase/provenance plus diagnostic probability assertions | `REQ-PUBLIC-003`, `REQ-PUBLIC-005`, `REQ-DIAG-001` |
 | `test_entity_platforms.py` and `test_entity_registry.py` prelight IDs | Replace with stable active/home-active IDs and explicit stale-prelight cleanup assertions | `REQ-PUBLIC-003`, `REQ-PUBLIC-005` |
-| v2 persistence tests | Preserve v2 decoder tests as legacy importer coverage; add v3 pending, provisional, confirmed, predicted, conflict, exact-deadline, byte-stable, and atomic-corruption round trips in `test_zone_model_persistence.py` | `REQ-STATE-001` through `REQ-STATE-009` |
+| v2 persistence tests | Preserve v2 decoder tests as legacy importer coverage; add v3 pending, provisional, confirmed, correlated-continuity, predicted, conflict, exact-deadline, byte-stable, and atomic-corruption round trips in `test_zone_model_persistence.py` | `REQ-STATE-001` through `REQ-STATE-009`, `REQ-TRAV-013` |
 | held stay without contradiction (`t06`) | Preserve; add `test_confirmed_outside_fronts_health_degrade_stuck_stay_after_dwell` and front-loss/provisional/count-one/count-zero inverse tests | `REQ-EVID-005`, `REQ-COUNT-008`, `REQ-COUNT-009` |
 | configurable prediction threshold tests | Replace with fixed-0.85 activation and legacy-option-ignored migration tests | `REQ-PRED-001`, `REQ-PRED-005`, `REQ-POLICY-006` |
 | existing performance benchmark | Preserve and extend with path-qualified adjacent-token, adjacent-pair, same-zone, boundary, missed-edge, third-node-confirmation, and mature-prediction traces measured through the publication schedule hook | `REQ-PERF-001`, `REQ-PERF-002`, `REQ-PERF-006`, `REQ-PERF-007` |

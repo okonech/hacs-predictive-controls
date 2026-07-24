@@ -537,7 +537,11 @@ class ZonePolicy:
             event is None
             and local_effect is not None
             and local_effect.kind
-            in {"correlated_flap_ignored", "impossible_cadence"}
+            in {
+                "correlated_continuity_authorized",
+                "correlated_flap_ignored",
+                "impossible_cadence",
+            }
         ):
             reason = local_effect.kind
         decision = self._decision(

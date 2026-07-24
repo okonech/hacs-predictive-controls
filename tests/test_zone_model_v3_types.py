@@ -206,10 +206,22 @@ def test_v3_snapshot_auxiliary_state_must_be_unique_and_sorted() -> None:
         NOW + timedelta(seconds=30),
         ("front",),
     )
+    retained = TraversalToken(
+        "node:episode",
+        "node",
+        "room",
+        "stay",
+        "stay_pir",
+        "episode",
+        NOW,
+        NOW + timedelta(seconds=90),
+        path_node_ids=("node",),
+    )
     invalid_snapshots: tuple[dict[str, object], ...] = (
         {"pending_candidates": (pending, pending)},
         {"strong_fronts": (front, front)},
         {"count_conflicts": (conflict, conflict)},
+        {"retained_traversal_tokens": (retained, retained)},
     )
     for changes in invalid_snapshots:
         with pytest.raises(ValueError, match="unique"):

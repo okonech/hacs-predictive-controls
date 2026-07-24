@@ -89,6 +89,7 @@ def test_target_benchmark_reports_required_bounded_metrics() -> None:
         "adjacent_pair",
         "boundary",
         "confirmed_token",
+        "correlated_continuity",
         "missed_edge",
         "mature_prediction",
         "same_zone",

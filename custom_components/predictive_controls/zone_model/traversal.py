@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from datetime import datetime
 
 from ..model import PredictiveMap
@@ -47,6 +48,7 @@ class TraversalFrontier:
         self._token_limit = token_limit
         self._use_limit = use_limit
         self._tokens: dict[str, TraversalToken] = {}
+        self._retained: dict[str, TraversalToken] = {}
         self._current: set[str] = set()
         self._uses: dict[tuple[str, str], AuthorizationUse] = {}
         self._pending_by_zone: dict[str, PendingAcquisitionCandidate] = {}
@@ -58,6 +60,12 @@ class TraversalFrontier:
     @property
     def tokens(self) -> tuple[TraversalToken, ...]:
         return tuple(sorted(self._tokens.values(), key=lambda item: item.token_id))
+
+    @property
+    def retained_tokens(self) -> tuple[TraversalToken, ...]:
+        """Authorized but currently unusable episode lineage."""
+
+        return tuple(sorted(self._retained.values(), key=lambda item: item.token_id))
 
     @property
     def uses(self) -> tuple[AuthorizationUse, ...]:
@@ -101,10 +109,17 @@ class TraversalFrontier:
         uses: tuple[AuthorizationUse, ...],
         at: datetime,
         pending_candidates: tuple[PendingAcquisitionCandidate, ...] = (),
+        retained_tokens: tuple[TraversalToken, ...] = (),
     ) -> None:
         self.validate_time(at)
         restored_tokens = {token.token_id: token for token in tokens}
-        if len(restored_tokens) != len(tokens) or len(tokens) > self._token_limit:
+        restored_retained = {token.token_id: token for token in retained_tokens}
+        if (
+            len(restored_tokens) != len(tokens)
+            or len(restored_retained) != len(retained_tokens)
+            or set(restored_tokens) & set(restored_retained)
+            or len(tokens) + len(retained_tokens) > self._token_limit
+        ):
             raise ValueError("Traversal token snapshot is duplicated or exceeds bounds")
         for token in tokens:
             node = self._nodes.get(token.node_id)
@@ -116,9 +131,26 @@ class TraversalFrontier:
                 or token.token_id != f"{token.node_id}:{token.episode_id}"
                 or token.accepted_at > at
                 or token.valid_until <= at
+                or not self._token_timing_valid(token)
                 or token.path_node_ids[-1] != token.node_id
             ):
                 raise ValueError("Traversal token snapshot is incompatible")
+        for token in retained_tokens:
+            node = self._nodes.get(token.node_id)
+            continuity_until = self._continuity_until(token)
+            if (
+                node is None
+                or token.zone != node.zone
+                or token.profile_name != node.profile_name
+                or token.role != SHARED_PROFILES[node.profile_name].role
+                or token.token_id != f"{token.node_id}:{token.episode_id}"
+                or token.accepted_at > at
+                or token.valid_until > at
+                or continuity_until <= at
+                or not self._token_timing_valid(token)
+                or token.path_node_ids[-1] != token.node_id
+            ):
+                raise ValueError("Retained traversal snapshot is incompatible")
         current = set(current_token_ids)
         if len(current) != len(current_token_ids) or not current <= set(
             restored_tokens
@@ -127,8 +159,9 @@ class TraversalFrontier:
         restored_uses = {(use.token_id, use.target_episode_id): use for use in uses}
         if len(restored_uses) != len(uses) or len(uses) > self._use_limit:
             raise ValueError("Traversal use snapshot is duplicated or exceeds bounds")
+        known_token_ids = set(restored_tokens) | set(restored_retained)
         if any(
-            use.token_id not in restored_tokens or use.authorized_at > at
+            use.token_id not in known_token_ids or use.authorized_at > at
             for use in uses
         ):
             raise ValueError("Traversal use snapshot is incompatible")
@@ -146,10 +179,55 @@ class TraversalFrontier:
             ):
                 raise ValueError("Pending candidate snapshot is incompatible")
         self._tokens = restored_tokens
+        self._retained = restored_retained
         self._current = current
         self._uses = restored_uses
         self._pending_by_zone = pending_by_zone
         self._advanced_at = at
+
+    def reopen_authorized_continuity(
+        self,
+        state: EpisodeState,
+        effect: EpisodeEffect,
+    ) -> bool:
+        """Reopen one authorized correlated episode without adding evidence."""
+
+        self.advance(effect.at)
+        self._validated_episode(state)
+        if (
+            effect.kind != "correlated_flap_ignored"
+            or effect.node_id != state.node_id
+            or effect.zone != state.zone
+            or effect.episode_id != state.episode_id
+            or state.status != "asserted"
+            or state.health_warning
+            or state.cadence_warning
+            or state.hold_until is None
+            or effect.at < state.hold_until
+            or state.assertion_trust_until is None
+            or effect.at >= state.assertion_trust_until
+        ):
+            return False
+        token_id = f"{state.node_id}:{state.episode_id}"
+        token = self._tokens.get(token_id)
+        if token is not None:
+            self._current.add(token_id)
+            return True
+        token = self._retained.pop(token_id, None)
+        if token is None:
+            return False
+        valid_until = min(
+            effect.at + SHARED_PROFILES[state.profile_name].traversal_context_window,
+            state.assertion_trust_until,
+        )
+        self._tokens[token_id] = replace(
+            token,
+            valid_until=valid_until,
+            continuity_reopened_at=effect.at,
+        )
+        self._current.add(token_id)
+        self._enforce_token_bound()
+        return True
 
     def issue(
         self,
@@ -206,11 +284,12 @@ class TraversalFrontier:
                 for zone, candidate in self._pending_by_zone.items()
                 if candidate.node_id != state.node_id
             }
-            for token_id in tuple(
+            token_ids = tuple(
                 token_id
-                for token_id, token in self._tokens.items()
+                for token_id, token in (*self._tokens.items(), *self._retained.items())
                 if token.node_id == state.node_id
-            ):
+            )
+            for token_id in token_ids:
                 self._remove_token(token_id)
             return
         token_id = f"{state.node_id}:{state.episode_id}"
@@ -502,6 +581,18 @@ class TraversalFrontier:
             if token.valid_until <= at
         )
         for token_id in expired:
+            token = self._tokens.pop(token_id)
+            self._current.discard(token_id)
+            if at < self._continuity_until(token):
+                self._retained[token_id] = token
+            else:
+                self._remove_uses(token_id)
+        expired_retained = tuple(
+            token_id
+            for token_id, token in self._retained.items()
+            if self._continuity_until(token) <= at
+        )
+        for token_id in expired_retained:
             self._remove_token(token_id)
         expired_pending = tuple(
             candidate
@@ -520,6 +611,7 @@ class TraversalFrontier:
     def clear(self, at: datetime) -> None:
         self.advance(at)
         self._tokens.clear()
+        self._retained.clear()
         self._current.clear()
         self._uses.clear()
         self._pending_by_zone.clear()
@@ -599,18 +691,58 @@ class TraversalFrontier:
 
     def _remove_token(self, token_id: str) -> None:
         self._tokens.pop(token_id, None)
+        self._retained.pop(token_id, None)
         self._current.discard(token_id)
+        self._remove_uses(token_id)
+
+    def _remove_uses(self, token_id: str) -> None:
         self._uses = {
             key: use for key, use in self._uses.items() if use.token_id != token_id
         }
 
     def _enforce_token_bound(self) -> None:
-        while len(self._tokens) > self._token_limit:
-            oldest = min(
-                self._tokens.values(),
-                key=lambda item: (item.valid_until, item.token_id),
-            )
+        while len(self._tokens) + len(self._retained) > self._token_limit:
+            if self._retained:
+                oldest = min(
+                    self._retained.values(),
+                    key=lambda item: (self._continuity_until(item), item.token_id),
+                )
+            else:
+                oldest = min(
+                    self._tokens.values(),
+                    key=lambda item: (item.valid_until, item.token_id),
+                )
             self._remove_token(oldest.token_id)
+
+    @staticmethod
+    def _continuity_until(token: TraversalToken) -> datetime:
+        return (
+            token.accepted_at
+            + SHARED_PROFILES[token.profile_name].assertion_trust_horizon
+        )
+
+    @staticmethod
+    def _token_timing_valid(token: TraversalToken) -> bool:
+        profile = SHARED_PROFILES[token.profile_name]
+        trust_until = token.accepted_at + profile.assertion_trust_horizon
+        reopened_at = token.continuity_reopened_at
+        if reopened_at is None:
+            expected = min(
+                token.accepted_at + profile.traversal_context_window,
+                trust_until,
+            )
+        else:
+            if not (
+                token.accepted_at + profile.hardware_hold_interval
+                <= reopened_at
+                < trust_until
+            ):
+                return False
+            expected = min(
+                reopened_at + profile.traversal_context_window,
+                trust_until,
+            )
+        return token.valid_until == expected
 
     def _enforce_use_bound(self) -> None:
         while len(self._uses) > self._use_limit:

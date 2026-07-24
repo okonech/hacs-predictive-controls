@@ -313,6 +313,7 @@ class EpisodeEffect:
 
     def __post_init__(self) -> None:
         if self.kind not in {
+            "correlated_continuity_authorized",
             "correlated_flap_ignored",
             "impossible_cadence",
             "health_degraded",
@@ -381,6 +382,7 @@ class TraversalToken:
     path_node_ids: tuple[str, ...] = ()
     provenance_kind: str = "adjacent"
     equivalent_confirmed_strength: bool = False
+    continuity_reopened_at: datetime | None = None
 
     def __post_init__(self) -> None:
         if not all(
@@ -396,8 +398,17 @@ class TraversalToken:
             raise ValueError("Traversal token identifiers must be non-empty")
         require_utc(self.accepted_at, "Traversal token acceptance time")
         require_utc(self.valid_until, "Traversal token expiry")
+        if self.continuity_reopened_at is not None:
+            require_utc(
+                self.continuity_reopened_at,
+                "Traversal token continuity reopening",
+            )
         if self.valid_until <= self.accepted_at:
             raise ValueError("Traversal token expiry must follow acceptance")
+        if self.continuity_reopened_at is not None and not (
+            self.accepted_at < self.continuity_reopened_at < self.valid_until
+        ):
+            raise ValueError("Traversal continuity reopening must be within token time")
         if self.track_confidence not in TRACK_CONFIDENCES:
             raise ValueError("Traversal token track confidence is invalid")
         if not self.path_node_ids or len(self.path_node_ids) > 3:
@@ -922,6 +933,7 @@ class PolicyDecision:
             raise ValueError("Policy decision flags must be boolean")
         if self.local_evidence_kind not in {
             None,
+            "correlated_continuity_authorized",
             "correlated_flap_ignored",
             "health_degraded",
             "health_recovered",
@@ -1000,6 +1012,7 @@ class ZoneModelSnapshot:
     pending_candidates: tuple[PendingAcquisitionCandidate, ...] = ()
     strong_fronts: tuple[StrongTrackedFront, ...] = ()
     count_conflicts: tuple[CountConflictState, ...] = ()
+    retained_traversal_tokens: tuple[TraversalToken, ...] = ()
 
     def __post_init__(self) -> None:
         require_utc(self.updated_at, "Zone-model snapshot time")
@@ -1020,6 +1033,9 @@ class ZoneModelSnapshot:
             raise ValueError(
                 "Zone-model current traversal tokens must be unique and sorted"
             )
+        retained_ids = tuple(item.token_id for item in self.retained_traversal_tokens)
+        if retained_ids != tuple(sorted(set(retained_ids))):
+            raise ValueError("Retained traversal tokens must be unique and sorted")
         pending_zones = tuple(item.zone for item in self.pending_candidates)
         if pending_zones != tuple(sorted(set(pending_zones))):
             raise ValueError("Pending candidates must be unique and sorted by zone")

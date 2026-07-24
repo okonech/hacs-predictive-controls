@@ -366,6 +366,9 @@ def _validated_active_seed(
 
 def _decode_snapshot(value: object) -> ZoneModelSnapshot:
     data = _mapping(value, "Target snapshot")
+    retained_raw = data.get("retained_traversal_tokens", [])
+    if not isinstance(retained_raw, list):
+        raise ValueError("Retained traversal tokens must be a list")
     return ZoneModelSnapshot(
         _datetime(data.get("updated_at"), "snapshot updated_at"),
         tuple(_decode_episode(item) for item in _list(data, "episode_states")),
@@ -383,6 +386,7 @@ def _decode_snapshot(value: object) -> ZoneModelSnapshot:
         tuple(
             _decode_count_conflict(item) for item in _list(data, "count_conflicts")
         ),
+        tuple(_decode_token(item) for item in retained_raw),
     )
 
 
@@ -482,6 +486,10 @@ def _decode_token(value: object) -> TraversalToken:
         tuple(_strings(data.get("path_node_ids"), "token path node IDs")),
         _string(data, "provenance_kind"),
         _boolean(data, "equivalent_confirmed_strength"),
+        _optional_datetime(
+            data.get("continuity_reopened_at"),
+            "token continuity reopening",
+        ),
     )
 
 

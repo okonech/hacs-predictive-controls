@@ -91,6 +91,7 @@ class TrackerDiagnostics:
     authorizations: tuple[TraversalAuthorization, ...]
     episode_states: tuple[EpisodeState, ...]
     traversal_tokens: tuple[TraversalToken, ...]
+    retained_traversal_tokens: tuple[TraversalToken, ...]
     pending_candidates: tuple[PendingAcquisitionCandidate, ...]
     strong_fronts: tuple[StrongTrackedFront, ...]
     count_conflicts: tuple[CountConflictState, ...]
@@ -245,6 +246,9 @@ class OccupancyTracker:
             authorizations=() if result is None else result.authorizations,
             episode_states=() if snapshot is None else snapshot.episode_states,
             traversal_tokens=() if snapshot is None else snapshot.traversal_tokens,
+            retained_traversal_tokens=(
+                () if snapshot is None else snapshot.retained_traversal_tokens
+            ),
             pending_candidates=(
                 () if snapshot is None else snapshot.pending_candidates
             ),
@@ -270,6 +274,9 @@ class OccupancyTracker:
                 "token_count": 0
                 if snapshot is None
                 else len(snapshot.traversal_tokens),
+                "retained_token_count": 0
+                if snapshot is None
+                else len(snapshot.retained_traversal_tokens),
                 "pending_candidate_count": 0
                 if snapshot is None
                 else len(snapshot.pending_candidates),
@@ -366,9 +373,7 @@ class OccupancyTracker:
         self._record_result(
             self._ensure_engine(at).observe_count(
                 CountInput(evidence_id, expected_occupants, True, at),
-                processing_at=(
-                    at if processing_at is None else _as_utc(processing_at)
-                ),
+                processing_at=(at if processing_at is None else _as_utc(processing_at)),
             )
         )
 
@@ -676,6 +681,7 @@ def _transient_projection(engine: ZoneModelEngine) -> tuple[object, ...]:
     snapshot = engine.snapshot
     return (
         snapshot.traversal_tokens,
+        snapshot.retained_traversal_tokens,
         snapshot.current_token_ids,
         tuple(
             (state.node_id, state.status, state.health_warning)

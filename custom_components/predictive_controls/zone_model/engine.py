@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from datetime import datetime
 
 from ..model import PredictiveMap
@@ -154,6 +155,7 @@ class ZoneModelEngine:
             snapshot.authorization_uses,
             snapshot.updated_at,
             snapshot.pending_candidates,
+            snapshot.retained_traversal_tokens,
         )
         candidate._count = CountContext.restore(snapshot.count_state)
         candidate._count_conflicts.restore(
@@ -198,6 +200,7 @@ class ZoneModelEngine:
             self._frontier.pending_candidates,
             self._count_conflicts.fronts,
             self._count_conflicts.conflicts,
+            self._frontier.retained_tokens,
         )
 
     @property
@@ -380,10 +383,10 @@ class ZoneModelEngine:
         for effect in effects:
             self._advance_components(effect.at)
             current_before = self._filters[effect.zone].state
-            authorization = self._apply_effect(update.state, effect)
+            authorization, applied_effect = self._apply_effect(update.state, effect)
             if authorization is not None:
                 authorizations.append(authorization)
-            final_effect = effect
+            final_effect = applied_effect
             final_authorization = authorization
             belief_before = current_before
 
@@ -602,7 +605,7 @@ class ZoneModelEngine:
         self,
         state: EpisodeState,
         effect: EpisodeEffect,
-    ) -> TraversalAuthorization | None:
+    ) -> tuple[TraversalAuthorization | None, EpisodeEffect]:
         filter_ = self._filters[effect.zone]
         if effect.kind == "positive":
             filter_.apply_positive(effect.episode_id, effect.at, effect.reliability)
@@ -621,10 +624,16 @@ class ZoneModelEngine:
                 effect.at,
                 state.traversal_valid_until,
             )
-            return authorization
-        if effect.kind in {"correlated_flap_ignored", "impossible_cadence"}:
+            return authorization, effect
+        if effect.kind == "correlated_flap_ignored":
+            if self._frontier.reopen_authorized_continuity(state, effect):
+                effect = replace(effect, kind="correlated_continuity_authorized")
+            else:
+                self._frontier.sync(state, effect.at)
+            return None, effect
+        if effect.kind == "impossible_cadence":
             self._frontier.sync(state, effect.at)
-            return None
+            return None, effect
         if effect.kind == "stable_clear":
             filter_.apply_stable_clear(
                 effect.episode_id, effect.at, effect.reliability
@@ -635,7 +644,7 @@ class ZoneModelEngine:
             assert effect.kind == "health_recovered"
             filter_.apply_health_recovered(effect.episode_id, effect.at)
         self._frontier.sync(state, effect.at)
-        return None
+        return None, effect
 
     def _advance_components(self, at: datetime) -> None:
         for filter_ in self._filters.values():
@@ -1062,9 +1071,19 @@ class ZoneModelEngine:
             "same_zone",
         }
         tokens = {token.token_id: token for token in snapshot.traversal_tokens}
-        if len(tokens) != len(snapshot.traversal_tokens):
+        retained_tokens = {
+            token.token_id: token for token in snapshot.retained_traversal_tokens
+        }
+        if (
+            len(tokens) != len(snapshot.traversal_tokens)
+            or len(retained_tokens) != len(snapshot.retained_traversal_tokens)
+            or set(tokens) & set(retained_tokens)
+        ):
             raise ValueError("Traversal token snapshot is duplicated")
-        for token in snapshot.traversal_tokens:
+        for token in (
+            *snapshot.traversal_tokens,
+            *snapshot.retained_traversal_tokens,
+        ):
             state, created_at = self._episode_reference(
                 token.episode_id,
                 episodes,
@@ -1076,10 +1095,28 @@ class ZoneModelEngine:
                 created_at + profile.traversal_context_window,
                 created_at + profile.assertion_trust_horizon,
             )
+            trust_until = created_at + profile.assertion_trust_horizon
+            reopened_at = token.continuity_reopened_at
+            if reopened_at is not None:
+                expected_valid_until = min(
+                    reopened_at + profile.traversal_context_window,
+                    trust_until,
+                )
+            retained = token.token_id in retained_tokens
             if (
                 state.node_id != token.node_id
                 or created_at != token.accepted_at
                 or token.valid_until != expected_valid_until
+                or (
+                    reopened_at is not None
+                    and not (
+                        created_at + profile.hardware_hold_interval
+                        <= reopened_at
+                        < trust_until
+                    )
+                )
+                or (retained and not token.valid_until <= at < trust_until)
+                or (not retained and token.valid_until <= at)
             ):
                 raise ValueError("Traversal token is not bound to its physical episode")
             if token.provenance_kind not in allowed_provenance:
@@ -1169,7 +1206,7 @@ class ZoneModelEngine:
                 raise ValueError("Pending candidate is not bound to its episode")
 
         for use in snapshot.authorization_uses:
-            source = tokens.get(use.token_id)
+            source = tokens.get(use.token_id) or retained_tokens.get(use.token_id)
             if source is None or not source.accepted_at <= use.authorized_at <= at:
                 raise ValueError("Traversal use has an incompatible source frontier")
             _state, target_created_at = self._episode_reference(
@@ -1387,6 +1424,7 @@ class ZoneModelEngine:
     def _validate_zero_count_snapshot(snapshot: ZoneModelSnapshot) -> None:
         forbidden = (
             snapshot.traversal_tokens,
+            snapshot.retained_traversal_tokens,
             snapshot.current_token_ids,
             snapshot.authorization_uses,
             snapshot.pending_candidates,

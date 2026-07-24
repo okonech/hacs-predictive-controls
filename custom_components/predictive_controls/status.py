@@ -104,11 +104,33 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
                 "track_confidence": token.track_confidence,
                 "path_node_ids": list(token.path_node_ids),
                 "provenance_kind": token.provenance_kind,
-                "equivalent_confirmed_strength": (
-                    token.equivalent_confirmed_strength
+                "equivalent_confirmed_strength": (token.equivalent_confirmed_strength),
+                "continuity_reopened_at": (
+                    None
+                    if token.continuity_reopened_at is None
+                    else token.continuity_reopened_at.isoformat()
                 ),
             }
             for token in diagnostics.traversal_tokens
+        ],
+        "retained_traversal_lineage": [
+            {
+                "token_id": token.token_id,
+                "node_id": token.node_id,
+                "zone": token.zone,
+                "episode_id": token.episode_id,
+                "accepted_at": token.accepted_at.isoformat(),
+                "last_valid_until": token.valid_until.isoformat(),
+                "track_confidence": token.track_confidence,
+                "path_node_ids": list(token.path_node_ids),
+                "provenance_kind": token.provenance_kind,
+                "continuity_reopened_at": (
+                    None
+                    if token.continuity_reopened_at is None
+                    else token.continuity_reopened_at.isoformat()
+                ),
+            }
+            for token in diagnostics.retained_traversal_tokens
         ],
         "authorizations": [
             {

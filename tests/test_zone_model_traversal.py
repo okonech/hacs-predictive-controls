@@ -244,6 +244,161 @@ def test_expiry_degradation_unavailable_and_self_authorization_are_bounded() -> 
     assert not frontier.tokens
 
 
+def test_authorized_correlated_reassertion_reopens_bounded_path_continuity() -> None:
+    frontier = TraversalFrontier(graph(), NODES)
+    hall = replace(
+        episode("hall", "hall", "transition_fast", NOW),
+        hold_until=NOW + timedelta(seconds=15),
+        assertion_trust_until=NOW + timedelta(seconds=60),
+    )
+    effect = EpisodeEffect("hall", "hall", hall.episode_id or "", "positive", NOW)
+    authorization = TraversalAuthorization(
+        "hall",
+        "hall",
+        hall.episode_id or "",
+        NOW,
+        True,
+        "adjacent_authorized",
+        track_confidence="provisional",
+        path_node_ids=("entry", "hall"),
+        provenance_kind="adjacent",
+    )
+    original = frontier.issue(hall, effect, authorization)
+    frontier.advance(NOW + timedelta(seconds=45))
+
+    assert not frontier.tokens
+    assert len(frontier.retained_tokens) == 1
+    assert frontier.retained_tokens[0] == original
+
+    reasserted_at = NOW + timedelta(seconds=46)
+    reasserted = replace(
+        hall,
+        last_event_at=reasserted_at,
+        advanced_at=reasserted_at,
+    )
+    flap = EpisodeEffect(
+        "hall",
+        "hall",
+        hall.episode_id or "",
+        "correlated_flap_ignored",
+        reasserted_at,
+    )
+
+    assert frontier.reopen_authorized_continuity(reasserted, flap)
+    reopened_tokens = frontier.tokens
+    assert len(reopened_tokens) == 1
+    reopened = reopened_tokens[0]
+    assert not frontier.retained_tokens
+    assert reopened.token_id == original.token_id
+    assert reopened.accepted_at == original.accepted_at
+    assert reopened.path_node_ids == ("entry", "hall")
+    assert reopened.continuity_reopened_at == reasserted_at
+    assert reopened.valid_until == NOW + timedelta(seconds=60)
+
+    room = episode(
+        "room_a",
+        "room_a",
+        "stay_pir",
+        NOW + timedelta(seconds=52),
+    )
+    result = frontier.authorize(room, room.started_at or NOW, count=None)
+    assert result.authorized
+    assert result.reason == "track_confirmed"
+    assert result.track_confidence == "confirmed"
+    assert result.path_node_ids == ("entry", "hall", "room_a")
+
+    frontier.advance(NOW + timedelta(seconds=60))
+    assert not frontier.tokens
+    assert not frontier.retained_tokens
+    assert not frontier.reopen_authorized_continuity(
+        replace(
+            reasserted,
+            last_event_at=NOW + timedelta(seconds=60),
+            advanced_at=NOW + timedelta(seconds=60),
+        ),
+        replace(flap, at=NOW + timedelta(seconds=60)),
+    )
+
+
+def test_correlated_reassertion_without_authorized_lineage_remains_ignored() -> None:
+    frontier = TraversalFrontier(graph(), NODES)
+    reasserted_at = NOW + timedelta(seconds=46)
+    hall = replace(
+        episode("hall", "hall", "transition_fast", NOW),
+        last_event_at=reasserted_at,
+        advanced_at=reasserted_at,
+        hold_until=NOW + timedelta(seconds=15),
+        assertion_trust_until=NOW + timedelta(seconds=60),
+    )
+    flap = EpisodeEffect(
+        "hall",
+        "hall",
+        hall.episode_id or "",
+        "correlated_flap_ignored",
+        reasserted_at,
+    )
+
+    assert not frontier.reopen_authorized_continuity(hall, flap)
+    assert frontier.tokens == ()
+    assert frontier.retained_tokens == ()
+    assert not frontier.reopen_authorized_continuity(
+        replace(hall, cadence_warning=True),
+        replace(flap, kind="impossible_cadence"),
+    )
+
+
+def test_authorized_reassertion_preserves_a_still_valid_token() -> None:
+    frontier = TraversalFrontier(graph(), NODES)
+    hall = replace(
+        episode("hall", "hall", "transition_fast", NOW),
+        hold_until=NOW + timedelta(seconds=15),
+        assertion_trust_until=NOW + timedelta(seconds=60),
+    )
+    original = issue(frontier, hall)
+    reasserted_at = NOW + timedelta(seconds=20)
+    reasserted = replace(
+        hall,
+        last_event_at=reasserted_at,
+        advanced_at=reasserted_at,
+    )
+    flap = EpisodeEffect(
+        "hall",
+        "hall",
+        hall.episode_id or "",
+        "correlated_flap_ignored",
+        reasserted_at,
+    )
+
+    assert frontier.reopen_authorized_continuity(reasserted, flap)
+    assert frontier.tokens == (original,)
+    assert frontier.current_token_ids == (original.token_id,)
+
+
+def test_retained_authorized_lineage_round_trips_before_reassertion() -> None:
+    source = TraversalFrontier(graph(), NODES)
+    hall = replace(
+        episode("hall", "hall", "transition_fast", NOW),
+        hold_until=NOW + timedelta(seconds=15),
+        assertion_trust_until=NOW + timedelta(seconds=60),
+    )
+    issue(source, hall)
+    at = NOW + timedelta(seconds=45)
+    source.advance(at)
+
+    restored = TraversalFrontier(graph(), NODES)
+    restored.restore_snapshot(
+        source.tokens,
+        source.current_token_ids,
+        source.uses,
+        at,
+        source.pending_candidates,
+        source.retained_tokens,
+    )
+
+    assert restored.tokens == ()
+    assert restored.retained_tokens == source.retained_tokens
+
+
 def test_boundary_and_same_zone_pending_require_fresh_support() -> None:
     frontier = TraversalFrontier(graph(), NODES)
     count_context = CountContext(0)
@@ -274,9 +429,7 @@ def test_boundary_and_same_zone_pending_require_fresh_support() -> None:
         corroborating.started_at or NOW,
         count=count.state,
     )
-    isolated = episode(
-        "isolated", "isolated", "stay_pir", NOW + timedelta(seconds=33)
-    )
+    isolated = episode("isolated", "isolated", "stay_pir", NOW + timedelta(seconds=33))
     same_zone = frontier.authorize(
         isolated,
         isolated.started_at or NOW,
@@ -323,6 +476,25 @@ def test_frontier_enforces_deterministic_token_and_use_bounds() -> None:
     room_a = episode("room_a", "room_a", "stay_pir", NOW + timedelta(seconds=1))
     room_a_token = issue(token_frontier, room_a)
     assert token_frontier.tokens == (room_a_token,)
+
+    retention_frontier = TraversalFrontier(graph(), NODES, token_limit=1)
+    retained_hall_token = issue(retention_frontier, hall)
+    retention_frontier.advance(NOW + timedelta(seconds=45))
+    dormant_tokens = retention_frontier.tokens
+    dormant_retained = retention_frontier.retained_tokens
+    assert dormant_tokens == ()
+    assert dormant_retained == (retained_hall_token,)
+    middle = episode(
+        "middle",
+        "middle",
+        "transition_fast",
+        NOW + timedelta(seconds=46),
+    )
+    middle_token = issue(retention_frontier, middle)
+    active_tokens = retention_frontier.tokens
+    active_retained = retention_frontier.retained_tokens
+    assert active_tokens == (middle_token,)
+    assert active_retained == ()
 
     use_frontier = TraversalFrontier(graph(), NODES, use_limit=1)
     issue(use_frontier, hall)
@@ -471,6 +643,8 @@ def test_traversal_value_types_reject_invalid_identity_and_time() -> None:
         replace(token, accepted_at=NOW.replace(tzinfo=None))
     with pytest.raises(ValueError, match="must follow"):
         replace(token, valid_until=NOW)
+    with pytest.raises(ValueError, match="continuity reopening"):
+        replace(token, continuity_reopened_at=NOW)
 
     use = AuthorizationUse("token", "target", "adjacent_current", NOW)
     with pytest.raises(ValueError, match="identifiers"):
@@ -511,6 +685,31 @@ def test_restore_rejects_each_bounded_snapshot_incompatibility() -> None:
         restored = TraversalFrontier(graph(), NODES)
         with pytest.raises(ValueError, match=message):
             restored.restore_snapshot(tokens, current, uses, at)
+
+    invalid_continuity = replace(
+        token,
+        valid_until=NOW + timedelta(seconds=50),
+        continuity_reopened_at=NOW + timedelta(seconds=10),
+    )
+    with pytest.raises(ValueError, match="token snapshot"):
+        TraversalFrontier(graph(), NODES).restore_snapshot(
+            (invalid_continuity,), (), (), NOW + timedelta(seconds=20)
+        )
+
+    retained_source = TraversalFrontier(graph(), NODES)
+    retained_hall = episode("hall", "hall", "transition_fast", NOW)
+    issue(retained_source, retained_hall)
+    retained_at = NOW + timedelta(seconds=45)
+    retained_source.advance(retained_at)
+    retained = retained_source.retained_tokens[0]
+    with pytest.raises(ValueError, match="Retained traversal"):
+        TraversalFrontier(graph(), NODES).restore_snapshot(
+            (),
+            (),
+            (),
+            retained_at,
+            retained_tokens=(replace(retained, zone="wrong"),),
+        )
 
     pending_source = TraversalFrontier(graph(), NODES)
     isolated = episode("isolated", "isolated", "stay_pir", NOW)

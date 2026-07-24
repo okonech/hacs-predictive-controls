@@ -37,6 +37,33 @@ def target_map() -> PredictiveMap:
     )
 
 
+def correlated_continuity_map() -> PredictiveMap:
+    return PredictiveMap.from_mapping(
+        {
+            "nodes": {
+                "bottom": {
+                    "role": "transition_gate",
+                    "occupancy_behavior": "transient",
+                    "entities": {"motion": "binary_sensor.bottom"},
+                    "adjacent": ["top"],
+                },
+                "top": {
+                    "role": "transition_gate",
+                    "occupancy_behavior": "transient",
+                    "entities": {"motion": "binary_sensor.top"},
+                    "adjacent": ["bottom", "bathroom"],
+                },
+                "bathroom": {
+                    "role": "room_occupancy",
+                    "occupancy_behavior": "sustained",
+                    "entities": {"motion": "binary_sensor.bathroom"},
+                    "adjacent": ["top"],
+                },
+            }
+        }
+    )
+
+
 def test_engine_composes_transition_authorization_and_policy_acquisition() -> None:
     engine = ZoneModelEngine(target_map(), 1, NOW)
 
@@ -53,6 +80,66 @@ def test_engine_composes_transition_authorization_and_policy_acquisition() -> No
         "hall": False,
         "room": True,
     }
+
+
+def test_incident_correlated_hallway_reassertion_preserves_authorized_path() -> None:
+    engine = ZoneModelEngine(correlated_continuity_map(), 2, NOW)
+    bottom_at = NOW
+    top_at = NOW + timedelta(seconds=7, microseconds=93785)
+    top_off_at = top_at + timedelta(seconds=43, microseconds=488547)
+    token_expiry = top_at + timedelta(seconds=45)
+    reasserted_at = top_off_at + timedelta(seconds=2, microseconds=200084)
+    bathroom_at = reasserted_at + timedelta(seconds=6, microseconds=712904)
+
+    engine.observe(SensorInput("binary_sensor.bottom", "on", bottom_at))
+    top = engine.observe(SensorInput("binary_sensor.top", "on", top_at))
+    assert top.authorizations[0].reason == "provisional_track_acquired"
+    engine.observe(
+        SensorInput(
+            "binary_sensor.bottom",
+            "off",
+            bottom_at + timedelta(seconds=21, microseconds=339468),
+        )
+    )
+    engine.observe(SensorInput("binary_sensor.top", "off", top_off_at))
+    engine.advance(token_expiry + timedelta(milliseconds=50))
+
+    top_token = next(
+        token
+        for token in engine.snapshot.retained_traversal_tokens
+        if token.node_id == "top"
+    )
+    assert top_token.path_node_ids == ("bottom", "top")
+
+    reasserted = engine.observe(SensorInput("binary_sensor.top", "on", reasserted_at))
+    top_decision = next(
+        decision for decision in reasserted.policy_decisions if decision.zone == "top"
+    )
+    assert reasserted.disposition == "correlated_reassertion"
+    assert reasserted.policy_events == ()
+    assert top_decision.reason == "correlated_continuity_authorized"
+    assert top_decision.local_evidence_kind == "correlated_continuity_authorized"
+    assert top_decision.belief_before == top_decision.belief_after
+    reopened = next(
+        token
+        for token in reasserted.snapshot.traversal_tokens
+        if token.node_id == "top"
+    )
+    assert reopened.token_id == top_token.token_id
+    assert reopened.accepted_at == top_token.accepted_at
+    assert reopened.path_node_ids == top_token.path_node_ids
+    assert reopened.continuity_reopened_at == reasserted_at
+    assert reopened.valid_until == top_at + timedelta(seconds=60)
+
+    bathroom = engine.observe(SensorInput("binary_sensor.bathroom", "on", bathroom_at))
+    authorization = bathroom.authorizations[0]
+    assert authorization.authorized
+    assert authorization.reason == "track_confirmed"
+    assert authorization.track_confidence == "confirmed"
+    assert authorization.path_node_ids == ("bottom", "top", "bathroom")
+    assert [(event.zone, event.kind) for event in bathroom.policy_events] == [
+        ("bathroom", "acquired")
+    ]
 
 
 def test_supported_edge_callback_precedes_whole_house_count_work(
@@ -174,8 +261,7 @@ def test_publication_callback_failure_reports_after_atomic_engine_commit() -> No
     assert follow_up.disposition == "clear_pending"
 
 
-def test_publication_callback_deferral_discards_on_engine_validation_failure(
-) -> None:
+def test_publication_callback_deferral_discards_on_engine_validation_failure() -> None:
     engine = ZoneModelEngine(target_map(), 1, NOW)
     baseline = engine.audit_rows
 
@@ -233,9 +319,7 @@ def test_accepted_off_ends_unavailable_belief_context(
     if previously_asserted:
         engine.observe(SensorInput("binary_sensor.room", "on", NOW))
     unavailable_at = NOW + timedelta(seconds=1)
-    engine.observe(
-        SensorInput("binary_sensor.room", "unavailable", unavailable_at)
-    )
+    engine.observe(SensorInput("binary_sensor.room", "unavailable", unavailable_at))
     unavailable = next(
         state for state in engine.snapshot.belief_states if state.zone == "room"
     )
@@ -259,6 +343,7 @@ def test_accepted_off_ends_unavailable_belief_context(
         assert recovered.contributions[-1].log_odds_delta == 0.0
     else:
         assert recovered.probability == pytest.approx(0.05)
+
 
 def test_engine_count_zero_resets_beliefs_frontier_and_active_state() -> None:
     engine = ZoneModelEngine(target_map(), 1, NOW)
@@ -342,8 +427,7 @@ def test_isolated_positive_expires_without_activation() -> None:
         )
     )
     assert all(
-        decision.reason != "untracked_expired"
-        for decision in before.policy_decisions
+        decision.reason != "untracked_expired" for decision in before.policy_decisions
     )
     expiry = next(
         decision
@@ -456,8 +540,7 @@ def test_same_node_flap_cannot_bootstrap_or_activate() -> None:
     assert flap.policy_events == ()
     assert flap.disposition == "correlated_reassertion"
     assert any(
-        decision.reason == "impossible_cadence"
-        for decision in flap.policy_decisions
+        decision.reason == "impossible_cadence" for decision in flap.policy_decisions
     )
     assert flap.snapshot.traversal_tokens == ()
 

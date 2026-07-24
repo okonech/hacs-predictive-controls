@@ -45,6 +45,12 @@ high-confidence graph-adjacent prediction may activate the same public `active`
 entity early, but it must never change zone belief, create traversal context, or
 learn from its own outcome.
 
+Adjacency evidence is derived only from raw physical-sensor episodes and their
+bounded internal traversal provenance. Public predictive `active` entities and
+actuator states are model outputs, never recursive evidence inputs. A raw
+sensor's current `on` state is likewise insufficient by itself: adjacency uses
+an authorized episode or bounded pending candidate, not an unproven level.
+
 ## 2. Design Principles
 
 - **REQ-GOAL-001, local control:** A zone decision should depend primarily on
@@ -180,7 +186,11 @@ Every sensor profile declares independently:
   creates no token.
 - **REQ-EVID-002:** Same-state callbacks, alias edges while the physical node is
   already asserted, timer reevaluation, and flap edges in one episode contribute
-  no independent evidence and create no extra traversal tokens.
+  no independent evidence and create no extra traversal tokens. A reliable
+  correlated reassertion after the hardware hold interval may only reopen the
+  adjacency usability of that episode's previously authorized token under
+  `REQ-TRAV-013`; it does not add likelihood, change count, activate its own
+  zone, or authorize without a later distinct target episode.
 - **REQ-EVID-003:** A stable clear contributes one calibrated weak absence update.
   It starts residual decay but does not prove departure.
 - **REQ-EVID-004:** A current assertion is a bounded correlated observation.
@@ -220,7 +230,10 @@ Every sensor profile declares independently:
   Clear/reassert cycles faster than the declared hardware can reliably re-arm are
   one correlated episode, add no likelihood or traversal authority, and emit a
   sensor-health cadence warning. Later support from a distinct adjacent physical
-  node remains valid and is not delayed by the warning.
+  node remains valid and is not delayed by the warning. A correlated reassertion
+  after hardware re-arm is not impossible cadence: it still adds no evidence,
+  but may preserve bounded continuity of an already-authorized path under
+  `REQ-TRAV-013`.
 
 ## 6. Per-Zone Belief Model
 
@@ -388,6 +401,16 @@ callbacks, and flaps do not satisfy the third-node requirement. Once confirmed,
 fresh compatible adjacent episodes inherit confirmed provenance while the
 frontier remains valid.
 
+An authorized token whose ordinary traversal window expires may retain dormant
+lineage only until its physical episode's original assertion trust horizon. A
+reliable correlated reassertion of that same episode after the hardware hold
+interval may reopen the same token for adjacency use. Reopening retains the
+token ID, accepted time, path, confidence, and provenance; its new expiry is the
+earlier of one traversal-context window after the reassertion and the original
+assertion trust horizon. It is not a new positive, token, candidate, count
+observation, or source-zone acquisition. Dormant lineage cannot authorize a
+target until such a reassertion occurs.
+
 Compatible same-zone independent, boundary, bounded missed-edge, or mature
 prediction support may also promote a pending candidate immediately. At its
 deadline, an unsupported candidate expires as rejected regardless of count,
@@ -406,7 +429,8 @@ been considered as compatible support in event-time and node-ID order. A
 candidate used as the first half of an adjacent pair is removed atomically.
 
 - **REQ-TRAV-001:** Tokens expire by event time and shared graph/profile timing.
-  Expired tokens cannot authorize activation or learning.
+  Expired tokens cannot directly authorize activation or learning. Dormant
+  lineage retained solely for `REQ-TRAV-013` is not a usable token.
 - **REQ-TRAV-002:** Tokens are anonymous and independently consumable by distinct
   target episodes. Each token carries `provisional` or `confirmed` track
   provenance and never becomes persistent occupant identity.
@@ -452,6 +476,15 @@ candidate used as the first half of an adjacent pair is removed atomically.
   independent corroboration may authorize the zone but cannot substitute for
   any of the three distinct sequential adjacent physical nodes required for
   confirmed provenance.
+- **REQ-TRAV-013:** A correlated reassertion may reopen adjacency use of the same
+  previously authorized episode token only when it occurs after the profile's
+  hardware hold interval, before the episode's original assertion trust horizon,
+  and without a cadence or health warning. It preserves rather than duplicates
+  path provenance and may not extend validity beyond that original trust horizon.
+  Repeated reassertions cannot extend authority indefinitely. An episode that
+  never received authorization has no lineage to reopen and remains
+  `correlated_flap_ignored`. The reopened token can authorize only a fresh
+  distinct compatible target episode under the normal graph rules.
 
 ## 8. Authoritative Count
 
@@ -828,19 +861,20 @@ assignment graph.
   `same_zone_authorized`, `adjacent_authorized`, `boundary_authorized`,
   `missed_edge_authorized`, `prediction_authorized`, `track_bootstrap_pending`,
   `provisional_track_acquired`, `track_confirmed`, `untracked_expired`,
-  `correlated_flap_ignored`, `impossible_cadence`, `stuck_count_conflict`,
-  `stuck_conflict_cleared`, and `prediction_unconfirmed`. A single local episode
-  with only positive count is never labeled `source_free_corroborated`.
+  `correlated_flap_ignored`, `correlated_continuity_authorized`,
+  `impossible_cadence`, `stuck_count_conflict`, `stuck_conflict_cleared`, and
+  `prediction_unconfirmed`. A single local episode with only positive count is
+  never labeled `source_free_corroborated`.
 - **REQ-DIAG-005:** A count-conflict audit row identifies the conflicting strong
   tracked fronts and reliability result without claiming occupant identities.
 
 ## 15. Performance and Determinism
 
-- **REQ-PERF-001:** An adjacent-token, adjacent-pair bootstrap, same-zone
-  independent, boundary, bounded missed-edge, or mature prediction authorization
-  produces its in-memory policy decision with p99 latency at or below 5 ms and
-  hard latency below 10 ms on the 16-zone reference map at $N=2$. The integration
-  schedules the corresponding
+- **REQ-PERF-001:** An adjacent-token, reopened correlated-continuity,
+  adjacent-pair bootstrap, same-zone independent, boundary, bounded missed-edge,
+  or mature prediction authorization produces its in-memory policy decision with
+  p99 latency at or below 5 ms and hard latency below 10 ms on the 16-zone
+  reference map at $N=2$. The integration schedules the corresponding
   `active` publication in the same Home Assistant event-loop update in which it
   receives the accepted evidence. No confirmation timer, blocking I/O,
   persistence, audit materialization, or learning update may precede that
