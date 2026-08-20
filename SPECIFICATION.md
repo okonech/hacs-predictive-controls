@@ -672,12 +672,12 @@ Current shared policy calibration is:
 
 The supported profiles and current asserted-state calibration are:
 
-| Profile           | Hardware clear/reset recommendation                                                         | Asserted local baseline | Track-bootstrap window | Software interpretation                                                                                              |
-| ----------------- | ------------------------------------------------------------------------------------------- | ----------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `transition_fast` | Use the shortest reliable device setting, initially 5-15 seconds where hardware supports it | 0.15                    | 45 seconds             | Short zone persistence; may be the first or second observation that bootstraps a new adjacent track                  |
+| Profile           | Hardware clear/reset recommendation                                                         | Asserted local baseline | Track-bootstrap window | Software interpretation                                                                                             |
+| ----------------- | ------------------------------------------------------------------------------------------- | ----------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `transition_fast` | Use the shortest reliable device setting, initially 5-15 seconds where hardware supports it | 0.15                    | 45 seconds             | Short zone persistence; may be the first or second observation that bootstraps a new adjacent track                 |
 | `stay_pir`        | Start near 30 seconds; increase only if measured false clears are excessive                 | 0.90                    | 90 seconds             | Strong local retention evidence; a lone unsupported episode remains publicly off and creates no traversal authority |
 | `stay_presence`   | Use the device's shortest stable presence/absence reporting                                 | 0.95                    | 120 seconds            | Strong current presence evidence; acquisition still requires graph, pair, boundary, missed-edge, or prediction      |
-| `entry_boundary`  | Use a short reliable reset consistent with the physical crossing                            | 0.10                    | 30 seconds             | Boundary reacquisition and count context, not long-lived room occupancy                                              |
+| `entry_boundary`  | Use a short reliable reset consistent with the physical crossing                            | 0.10                    | 30 seconds             | Boundary reacquisition and count context, not long-lived room occupancy                                             |
 
 The hardware recommendations are deployment starting points. The asserted local
 baselines and track-bootstrap windows are normative current shared calibration.
