@@ -57,6 +57,30 @@ def occupied_engine() -> ZoneModelEngine:
     return engine
 
 
+def as_legacy_v3(payload: dict[str, object]) -> dict[str, object]:
+    legacy = deepcopy(payload)
+    legacy["schema"] = "zone-belief-v3"
+    snapshot = legacy["snapshot"]
+    assert isinstance(snapshot, dict)
+    snapshot.pop("anonymous_supports")
+    snapshot.pop("support_token_bindings")
+    snapshot["strong_fronts"] = []
+    snapshot["stationary_anchors"] = []
+    conflicts = snapshot["count_conflicts"]
+    assert isinstance(conflicts, list)
+    for conflict in conflicts:
+        assert isinstance(conflict, dict)
+        conflict["strong_front_ids"] = conflict.pop("support_ids")
+    audit = legacy["audit"]
+    assert isinstance(audit, list)
+    for row in audit:
+        assert isinstance(row, dict)
+        row["count_conflict_front_ids"] = row.pop(
+            "count_conflict_support_ids"
+        )
+    return legacy
+
+
 def predicted_payload() -> tuple[PredictiveMap, dict[str, object]]:
     predictive_map = prediction_map()
     engine = ZoneModelEngine(predictive_map, 1, PREDICTION_NOW)
@@ -100,6 +124,9 @@ def engine_at_restart_frontier(frontier: str) -> ZoneModelEngine:
 def test_target_state_round_trips_deterministically() -> None:
     engine = occupied_engine()
     payload = serialize_target_state(target_map(), engine)
+    encoded = str(payload)
+    assert "strong_front" not in encoded
+    assert "stationary_anchor" not in encoded
 
     restored = restore_target_state(target_map(), payload, engine.snapshot.updated_at)
 
@@ -282,7 +309,181 @@ def test_count_conflict_dwell_survives_restart_without_extension() -> None:
     row = next(
         item for item in exact.audit_rows if item.reason == "stuck_count_conflict"
     )
-    assert row.count_conflict_front_ids == conflict.strong_front_ids
+    assert row.count_conflict_support_ids == conflict.support_ids
+
+
+def test_v3_import_invents_no_support_and_keeps_only_degraded_provenance() -> None:
+    predictive_map = conflict_map()
+    pending = engine_with_two_front_conflict()
+    pending_payload = as_legacy_v3(
+        serialize_target_state(predictive_map, pending)
+    )
+
+    imported_pending = restore_target_state(
+        predictive_map,
+        pending_payload,
+        pending.snapshot.updated_at,
+    )
+
+    assert imported_pending.snapshot.anonymous_supports == ()
+    assert imported_pending.snapshot.support_token_bindings == ()
+    assert imported_pending.snapshot.count_conflicts == ()
+
+    deadline = pending.snapshot.count_conflicts[0].deadline
+    pending.advance(deadline)
+    degraded_payload = as_legacy_v3(
+        serialize_target_state(predictive_map, pending)
+    )
+    degraded_snapshot = degraded_payload["snapshot"]
+    assert isinstance(degraded_snapshot, dict)
+    conflicts = degraded_snapshot["count_conflicts"]
+    assert isinstance(conflicts, list) and isinstance(conflicts[0], dict)
+    conflicts[0]["strong_front_ids"] = ["legacy-front-a", "legacy-front-b"]
+
+    imported_degraded = restore_target_state(
+        predictive_map,
+        degraded_payload,
+        deadline,
+    )
+
+    assert imported_degraded.snapshot.anonymous_supports == ()
+    assert imported_degraded.snapshot.count_conflicts[0].support_ids == (
+        "legacy-front-a",
+        "legacy-front-b",
+    )
+
+
+def test_settled_supports_survive_restart_after_source_tokens_expire() -> None:
+    predictive_map = conflict_map()
+    engine = engine_with_two_front_conflict()
+    engine.advance(NOW + timedelta(seconds=100))
+    assert engine.snapshot.traversal_tokens == ()
+    supports = engine.snapshot.anonymous_supports
+    assert len(supports) == 2
+
+    restored = restore_target_state(
+        predictive_map,
+        serialize_target_state(predictive_map, engine),
+        NOW + timedelta(seconds=100),
+    )
+
+    assert restored.snapshot.anonymous_supports == supports
+
+
+def test_weak_clear_retained_support_survives_restart() -> None:
+    predictive_map = conflict_map()
+    engine = engine_with_two_front_conflict()
+    support = engine.snapshot.anonymous_supports[0]
+    clear_started_at = engine.snapshot.updated_at + timedelta(seconds=1)
+    engine.observe(
+        SensorInput(
+            f"binary_sensor.{support.current_node_id}",
+            "off",
+            clear_started_at,
+        )
+    )
+    clearing = next(
+        state
+        for state in engine.snapshot.episode_states
+        if state.node_id == support.current_node_id
+    )
+    assert clearing.clear_deadline is not None
+    engine.advance(clearing.clear_deadline)
+    retained = next(
+        item
+        for item in engine.snapshot.anonymous_supports
+        if item.support_id == support.support_id
+    )
+    endpoint = next(
+        state
+        for state in engine.snapshot.episode_states
+        if state.node_id == retained.current_node_id
+    )
+    assert endpoint.status == "clear"
+
+    payload = serialize_target_state(predictive_map, engine)
+    restored = restore_target_state(
+        predictive_map,
+        payload,
+        engine.snapshot.updated_at,
+    )
+
+    assert restored.snapshot == engine.snapshot
+
+    invalid = deepcopy(payload)
+    invalid_snapshot = invalid["snapshot"]
+    assert isinstance(invalid_snapshot, dict)
+    beliefs = invalid_snapshot["belief_states"]
+    assert isinstance(beliefs, list)
+    endpoint_belief = next(
+        item
+        for item in beliefs
+        if isinstance(item, dict) and item["zone"] == retained.current_zone
+    )
+    endpoint_belief["context"] = "cleared_with_outward"
+    endpoint_belief["outward_context"] = {
+        "source_episode_id": retained.current_episode_id,
+        "valid_until": (
+            engine.snapshot.updated_at + timedelta(seconds=1)
+        ).isoformat(),
+    }
+
+    with pytest.raises(ValueError, match="Settled anonymous support"):
+        restore_target_state(
+            predictive_map,
+            invalid,
+            engine.snapshot.updated_at,
+        )
+
+
+def test_moving_support_with_exact_target_binding_survives_restart() -> None:
+    predictive_map = conflict_map()
+    payload = serialize_target_state(
+        predictive_map,
+        engine_with_two_front_conflict(),
+    )
+    snapshot = payload["snapshot"]
+    assert isinstance(snapshot, dict)
+    supports = snapshot["anonymous_supports"]
+    bindings = snapshot["support_token_bindings"]
+    tokens = snapshot["traversal_tokens"]
+    assert (
+        isinstance(supports, list)
+        and supports
+        and isinstance(supports[0], dict)
+        and isinstance(bindings, list)
+        and isinstance(tokens, list)
+    )
+    support = supports[0]
+    bound_token_ids = {
+        binding["token_id"]
+        for binding in bindings
+        if isinstance(binding, dict)
+        and binding["support_id"] == support["support_id"]
+    }
+    target = next(
+        token
+        for token in tokens
+        if isinstance(token, dict)
+        and token["token_id"] in bound_token_ids
+        and token["node_id"] == support["current_node_id"]
+        and token["episode_id"] == support["current_episode_id"]
+    )
+    support["state"] = "moving"
+    support["valid_until"] = target["valid_until"]
+    support["last_transition"] = "advanced"
+
+    restored = restore_target_state(
+        predictive_map,
+        payload,
+        datetime.fromisoformat(str(snapshot["updated_at"])),
+    )
+
+    restored_support = restored.snapshot.anonymous_supports[0]
+    assert restored_support.state == "moving"
+    assert restored_support.valid_until == datetime.fromisoformat(
+        str(target["valid_until"])
+    )
 
 
 def test_late_count_conflict_degradation_round_trips_after_trust_horizon() -> None:
@@ -1015,12 +1216,12 @@ def test_v3_restore_rejects_component_newer_than_snapshot_frontier(
         ("refresh_expiry", "episode-derived"),
         ("missing_use_source", "source frontier"),
         ("use_before_target", "predates its target"),
-        ("strong_front", "not evidence-derived"),
+        ("anonymous_support", "endpoint is incompatible"),
         ("count_conflict", "Count-conflict snapshot is incompatible"),
         ("conflict_deadline", "Count-conflict snapshot is incompatible"),
     ),
 )
-def test_v3_restore_rejects_cross_component_fabricated_authority(
+def test_v4_restore_rejects_cross_component_fabricated_authority(
     mutation: str,
     message: str,
 ) -> None:
@@ -1034,7 +1235,11 @@ def test_v3_restore_rejects_cross_component_fabricated_authority(
     elif mutation == "pending_calibration":
         engine = ZoneModelEngine(predictive_map, 1, NOW)
         engine.observe(SensorInput("binary_sensor.hall", "on", NOW))
-    elif mutation in {"strong_front", "count_conflict", "conflict_deadline"}:
+    elif mutation in {
+        "anonymous_support",
+        "count_conflict",
+        "conflict_deadline",
+    }:
         predictive_map = conflict_map()
         engine = engine_with_two_front_conflict()
     payload = serialize_target_state(predictive_map, engine)
@@ -1135,11 +1340,14 @@ def test_v3_restore_rejects_cross_component_fabricated_authority(
             uses[0]["token_id"] = "missing"
         else:
             uses[0]["authorized_at"] = (NOW + timedelta(seconds=1)).isoformat()
-    elif mutation == "strong_front":
-        fronts = snapshot["strong_fronts"]
-        assert isinstance(fronts, list) and fronts and isinstance(fronts[0], dict)
-        current = datetime.fromisoformat(str(fronts[0]["valid_until"]))
-        fronts[0]["valid_until"] = (current + timedelta(seconds=1)).isoformat()
+    elif mutation == "anonymous_support":
+        supports = snapshot["anonymous_supports"]
+        assert (
+            isinstance(supports, list)
+            and supports
+            and isinstance(supports[0], dict)
+        )
+        supports[0]["current_zone"] = "target"
     elif mutation == "count_conflict":
         conflicts = snapshot["count_conflicts"]
         assert (
@@ -1156,6 +1364,141 @@ def test_v3_restore_rejects_cross_component_fabricated_authority(
 
     with pytest.raises(ValueError, match=message):
         restore_target_state(predictive_map, payload, restore_at)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "missing_support_field",
+        "missing_binding_field",
+        "duplicate_support",
+        "unsorted_supports",
+        "over_cap",
+        "future_support",
+        "graph_path",
+        "missing_binding_token",
+        "missing_binding_support",
+        "duplicate_binding",
+        "unsorted_bindings",
+        "moving_without_target_binding",
+        "moving_deadline_mismatch",
+        "settled_with_deadline",
+    ),
+)
+def test_v4_restore_strictly_rejects_malformed_support_tables(
+    mutation: str,
+) -> None:
+    predictive_map = conflict_map()
+    payload = serialize_target_state(
+        predictive_map,
+        engine_with_two_front_conflict(),
+    )
+    snapshot = payload["snapshot"]
+    assert isinstance(snapshot, dict)
+    supports = snapshot["anonymous_supports"]
+    bindings = snapshot["support_token_bindings"]
+    tokens = [
+        *snapshot["traversal_tokens"],
+        *snapshot["retained_traversal_tokens"],
+    ]
+    assert (
+        isinstance(supports, list)
+        and len(supports) == 2
+        and all(isinstance(item, dict) for item in supports)
+        and isinstance(bindings, list)
+        and len(bindings) >= 2
+        and all(isinstance(item, dict) for item in bindings)
+        and all(isinstance(item, dict) for item in tokens)
+    )
+    first = supports[0]
+    if mutation == "missing_support_field":
+        first.pop("current_zone")
+    elif mutation == "missing_binding_field":
+        bindings[0].pop("support_id")
+    elif mutation == "duplicate_support":
+        supports[:] = [first, deepcopy(first)]
+        bindings[:] = [
+            binding
+            for binding in bindings
+            if binding["support_id"] == first["support_id"]
+        ]
+        snapshot["count_conflicts"] = []
+    elif mutation == "unsorted_supports":
+        supports.reverse()
+        snapshot["count_conflicts"] = []
+    elif mutation == "over_cap":
+        extra = deepcopy(first)
+        extra["support_id"] = "support:over-cap"
+        supports.append(extra)
+    elif mutation == "future_support":
+        first["updated_at"] = (
+            datetime.fromisoformat(str(snapshot["updated_at"]))
+            + timedelta(microseconds=1)
+        ).isoformat()
+    elif mutation == "graph_path":
+        other = supports[1]
+        first["path_node_ids"] = [
+            other["current_node_id"],
+            first["current_node_id"],
+        ]
+    elif mutation == "missing_binding_token":
+        bindings[0]["token_id"] = "missing-token"
+        bindings.sort(key=lambda item: item["token_id"])
+    elif mutation == "missing_binding_support":
+        bindings[0]["support_id"] = "support:missing"
+    elif mutation == "duplicate_binding":
+        bindings.append(deepcopy(bindings[0]))
+    elif mutation == "unsorted_bindings":
+        bindings.reverse()
+    elif mutation == "moving_without_target_binding":
+        target_token = next(
+            token
+            for token in tokens
+            if token["node_id"] == first["current_node_id"]
+            and token["episode_id"] == first["current_episode_id"]
+        )
+        first["state"] = "moving"
+        first["valid_until"] = target_token["valid_until"]
+        bindings[:] = [
+            binding
+            for binding in bindings
+            if binding["token_id"] != target_token["token_id"]
+        ]
+    elif mutation == "moving_deadline_mismatch":
+        target_token = next(
+            token
+            for token in tokens
+            if token["node_id"] == first["current_node_id"]
+            and token["episode_id"] == first["current_episode_id"]
+        )
+        first["state"] = "moving"
+        first["valid_until"] = (
+            datetime.fromisoformat(str(target_token["valid_until"]))
+            + timedelta(microseconds=1)
+        ).isoformat()
+    else:
+        first["valid_until"] = (
+            datetime.fromisoformat(str(snapshot["updated_at"]))
+            + timedelta(seconds=1)
+        ).isoformat()
+
+    expected_message = (
+        "unique and sorted"
+        if mutation
+        in {
+            "duplicate_support",
+            "unsorted_supports",
+            "duplicate_binding",
+            "unsorted_bindings",
+        }
+        else None
+    )
+    with pytest.raises(ValueError, match=expected_message):
+        restore_target_state(
+            predictive_map,
+            payload,
+            datetime.fromisoformat(str(snapshot["updated_at"])),
+        )
 
 
 def test_v3_restore_rejects_historical_episode_after_current_generation_start() -> None:

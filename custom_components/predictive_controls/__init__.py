@@ -83,7 +83,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         transition_counts=stored_transitions.get("transition_counts"),
     )
     now = datetime.now().astimezone()
-    runtime.restore_stored_state(stored_transitions, now)
+    restored = runtime.restore_stored_state(stored_transitions, now)
+    if restored and stored_transitions.get("schema") == "zone-belief-v3":
+        rollback_store = PredictiveControlsStore(
+            hass,
+            STORAGE_VERSION,
+            f"{DOMAIN}_{entry.entry_id}_zone_belief_v3_rollback",
+        )
+        if not await rollback_store.async_load():
+            await rollback_store.async_save(stored_transitions)
     runtime.start()
 
     domain_data[entry.entry_id] = runtime

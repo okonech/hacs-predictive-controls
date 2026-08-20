@@ -16,6 +16,7 @@ from time import perf_counter_ns
 from types import ModuleType
 from typing import Any
 
+from custom_components.predictive_controls.const import PRODUCT_MAX_OCCUPANTS
 from custom_components.predictive_controls.model import PredictiveMap
 from custom_components.predictive_controls.yaml_config import load_predictive_map
 from custom_components.predictive_controls.zone_model.engine import ZoneModelEngine
@@ -23,6 +24,7 @@ from custom_components.predictive_controls.zone_model.persistence import (
     serialize_target_state,
 )
 from custom_components.predictive_controls.zone_model.policy import PolicyAuditLog
+from custom_components.predictive_controls.zone_model.traversal import TOKEN_LIMIT
 from custom_components.predictive_controls.zone_model.types import (
     SensorInput,
 )
@@ -129,6 +131,8 @@ def _measure_core(
     policy_decisions = 0
     policy_events = 0
     token_max = 0
+    support_max = 0
+    support_binding_max = 0
     for event, received_at in zip(workload.events, workload.receive_at, strict=True):
         started_ns = perf_counter_ns()
         result = engine.observe(event, processing_at=received_at)
@@ -137,6 +141,14 @@ def _measure_core(
         policy_decisions += len(result.policy_decisions)
         policy_events += len(result.policy_events)
         token_max = max(token_max, len(result.snapshot.traversal_tokens))
+        support_max = max(
+            support_max,
+            len(result.snapshot.anonymous_supports),
+        )
+        support_binding_max = max(
+            support_binding_max,
+            len(result.snapshot.support_token_bindings),
+        )
     payload = serialize_target_state(predictive_map, engine)
     encoded = json.dumps(
         payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
@@ -163,7 +175,11 @@ def _measure_core(
             "zone_decision_count": policy_decisions,
             "public_policy_event_count": policy_events,
             "token_max": token_max,
-            "token_limit": 64,
+            "token_limit": TOKEN_LIMIT,
+            "support_max": support_max,
+            "support_limit": PRODUCT_MAX_OCCUPANTS,
+            "support_binding_max": support_binding_max,
+            "support_binding_limit": TOKEN_LIMIT,
             "audit_entry_count": len(engine.audit_rows),
             "audit_bytes": audit_bytes,
             "persistence_bytes": len(encoded),
@@ -808,6 +824,9 @@ def run_benchmark(
             "preferred_callback": core["p95_ms"] <= PREFERRED_CALLBACK_MS,
             "hard_callback": core["max_ms"] <= HARD_CALLBACK_MS,
             "bounded_tokens": core["token_max"] <= core["token_limit"],
+            "bounded_supports": core["support_max"] <= core["support_limit"],
+            "bounded_support_bindings": core["support_binding_max"]
+            <= core["support_binding_limit"],
             "byte_stable_persistence": core["persistence_byte_stable"],
         }
         passed = passed and all(gates.values())

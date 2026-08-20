@@ -27,6 +27,7 @@ from .profiles import (
 from .types import (
     PREDICTION_MATURITY_PROBABILITY,
     PREDICTION_MATURITY_SUPPORT,
+    AnonymousOccupancySupport,
     AuthorizationUse,
     BeliefContribution,
     CountConflictState,
@@ -37,7 +38,7 @@ from .types import (
     PolicyDecision,
     RefreshDedupEntry,
     SensorInput,
-    StrongTrackedFront,
+    SupportTokenBinding,
     TraversalToken,
     ZoneBeliefState,
     ZoneModelSnapshot,
@@ -45,7 +46,8 @@ from .types import (
     require_utc,
 )
 
-TARGET_SCHEMA = "zone-belief-v3"
+TARGET_SCHEMA = "zone-belief-v4"
+LEGACY_V3_SCHEMA = "zone-belief-v3"
 LEGACY_V2_SCHEMA = "zone-belief-v2"
 LEGACY_TARGET_SCHEMA = "zone-belief-shadow-v1"
 LEGACY_EXACT_SCHEMA = "exact-augmented-v6"
@@ -165,15 +167,20 @@ def restore_target_state(
 ) -> ZoneModelEngine:
     require_utc(restore_at, "Target restore time")
     root = _mapping(payload, "Target state")
-    if root.get("schema") != TARGET_SCHEMA:
+    schema = root.get("schema")
+    if schema not in {TARGET_SCHEMA, LEGACY_V3_SCHEMA}:
         raise ValueError("Target schema is incompatible")
     if root.get("map_fingerprint") != target_map_fingerprint(predictive_map):
         raise ValueError("Target map fingerprint is incompatible")
-    snapshot = _decode_snapshot(root.get("snapshot"))
+    legacy_v3 = schema == LEGACY_V3_SCHEMA
+    snapshot = _decode_snapshot(root.get("snapshot"), legacy_v3=legacy_v3)
     audit_payload = root.get("audit")
     if not isinstance(audit_payload, list):
         raise ValueError("Target audit must be a list")
-    audit = tuple(_decode_policy_decision(item) for item in audit_payload)
+    audit = tuple(
+        _decode_policy_decision(item, legacy_v3=legacy_v3)
+        for item in audit_payload
+    )
     prediction = root.get("prediction")
     if prediction is None:
         raise ValueError("Target prediction state is missing")
@@ -364,29 +371,61 @@ def _validated_active_seed(
     return dict(active_seed)
 
 
-def _decode_snapshot(value: object) -> ZoneModelSnapshot:
+def _decode_snapshot(value: object, *, legacy_v3: bool = False) -> ZoneModelSnapshot:
     data = _mapping(value, "Target snapshot")
     retained_raw = data.get("retained_traversal_tokens", [])
     if not isinstance(retained_raw, list):
         raise ValueError("Retained traversal tokens must be a list")
+    conflicts = tuple(
+        _decode_count_conflict(item, legacy_v3=legacy_v3)
+        for item in _list(data, "count_conflicts")
+    )
+    if legacy_v3:
+        conflicts = tuple(
+            conflict for conflict in conflicts if conflict.degraded_at is not None
+        )
+        supports: tuple[AnonymousOccupancySupport, ...] = ()
+        bindings: tuple[SupportTokenBinding, ...] = ()
+    else:
+        supports = tuple(
+            _decode_anonymous_support(item)
+            for item in _list(data, "anonymous_supports")
+        )
+        bindings = tuple(
+            _decode_support_binding(item)
+            for item in _list(data, "support_token_bindings")
+        )
     return ZoneModelSnapshot(
-        _datetime(data.get("updated_at"), "snapshot updated_at"),
-        tuple(_decode_episode(item) for item in _list(data, "episode_states")),
-        tuple(_decode_belief(item) for item in _list(data, "belief_states")),
-        tuple(_decode_token(item) for item in _list(data, "traversal_tokens")),
-        tuple(_strings(data.get("current_token_ids"), "current token IDs")),
-        tuple(_decode_use(item) for item in _list(data, "authorization_uses")),
-        _decode_count(data.get("count_state")),
-        tuple(_decode_policy_state(item) for item in _list(data, "policy_states")),
-        tuple(
+        updated_at=_datetime(data.get("updated_at"), "snapshot updated_at"),
+        episode_states=tuple(
+            _decode_episode(item) for item in _list(data, "episode_states")
+        ),
+        belief_states=tuple(
+            _decode_belief(item) for item in _list(data, "belief_states")
+        ),
+        traversal_tokens=tuple(
+            _decode_token(item) for item in _list(data, "traversal_tokens")
+        ),
+        current_token_ids=tuple(
+            _strings(data.get("current_token_ids"), "current token IDs")
+        ),
+        authorization_uses=tuple(
+            _decode_use(item) for item in _list(data, "authorization_uses")
+        ),
+        count_state=_decode_count(data.get("count_state")),
+        policy_states=tuple(
+            _decode_policy_state(item) for item in _list(data, "policy_states")
+        ),
+        pending_candidates=tuple(
             _decode_pending_candidate(item)
             for item in _list(data, "pending_candidates")
         ),
-        tuple(_decode_strong_front(item) for item in _list(data, "strong_fronts")),
-        tuple(
-            _decode_count_conflict(item) for item in _list(data, "count_conflicts")
+        count_conflicts=conflicts,
+        retained_traversal_tokens=tuple(
+            _decode_token(item) for item in retained_raw
         ),
-        tuple(_decode_token(item) for item in retained_raw),
+        anonymous_supports=supports,
+        support_token_bindings=bindings,
     )
 
 
@@ -507,20 +546,38 @@ def _decode_pending_candidate(value: object) -> PendingAcquisitionCandidate:
     )
 
 
-def _decode_strong_front(value: object) -> StrongTrackedFront:
-    data = _mapping(value, "Target strong front")
-    return StrongTrackedFront(
-        _string(data, "front_id"),
-        tuple(_strings(data.get("token_ids"), "strong-front token IDs")),
-        tuple(_strings(data.get("node_ids"), "strong-front node IDs")),
-        tuple(_strings(data.get("zones"), "strong-front zones")),
-        tuple(_strings(data.get("episode_ids"), "strong-front episode IDs")),
-        _datetime(data.get("valid_until"), "strong-front expiry"),
+def _decode_anonymous_support(value: object) -> AnonymousOccupancySupport:
+    data = _mapping(value, "Target anonymous support")
+    return AnonymousOccupancySupport(
+        _string(data, "support_id"),
+        _string(data, "state"),
+        _datetime(data.get("created_at"), "anonymous-support creation"),
+        _datetime(data.get("updated_at"), "anonymous-support update"),
+        _string(data, "current_episode_id"),
+        _string(data, "current_node_id"),
+        _string(data, "current_zone"),
+        tuple(_strings(data.get("path_node_ids"), "anonymous-support path nodes")),
+        _string(data, "provenance_kind"),
+        _optional_datetime(data.get("valid_until"), "anonymous-support expiry"),
+        _string(data, "last_transition"),
     )
 
 
-def _decode_count_conflict(value: object) -> CountConflictState:
+def _decode_support_binding(value: object) -> SupportTokenBinding:
+    data = _mapping(value, "Target support-token binding")
+    return SupportTokenBinding(
+        _string(data, "token_id"),
+        _string(data, "support_id"),
+    )
+
+
+def _decode_count_conflict(
+    value: object,
+    *,
+    legacy_v3: bool = False,
+) -> CountConflictState:
     data = _mapping(value, "Target count conflict")
+    support_field = "strong_front_ids" if legacy_v3 else "support_ids"
     return CountConflictState(
         _string(data, "target_node_id"),
         _string(data, "target_zone"),
@@ -528,7 +585,7 @@ def _decode_count_conflict(value: object) -> CountConflictState:
         _datetime(data.get("started_at"), "count-conflict start"),
         _datetime(data.get("last_evaluated_at"), "count-conflict evaluation"),
         _datetime(data.get("deadline"), "count-conflict deadline"),
-        tuple(_strings(data.get("strong_front_ids"), "count-conflict front IDs")),
+        tuple(_strings(data.get(support_field), "count-conflict support IDs")),
         _optional_datetime(data.get("degraded_at"), "count-conflict degradation"),
     )
 
@@ -616,7 +673,11 @@ def _decode_refresh(value: object) -> RefreshDedupEntry:
     )
 
 
-def _decode_policy_decision(value: object) -> PolicyDecision:
+def _decode_policy_decision(
+    value: object,
+    *,
+    legacy_v3: bool = False,
+) -> PolicyDecision:
     data = _mapping(value, "Target policy audit row")
     return PolicyDecision(
         _datetime(data.get("event_at"), "audit event time"),
@@ -644,8 +705,13 @@ def _decode_policy_decision(value: object) -> PolicyDecision:
         _string(data, "reason"),
         tuple(
             _strings(
-                data.get("count_conflict_front_ids", []),
-                "audit count-conflict front IDs",
+                data.get(
+                    "count_conflict_front_ids"
+                    if legacy_v3
+                    else "count_conflict_support_ids",
+                    [],
+                ),
+                "audit count-conflict support IDs",
             )
         ),
         _optional_string(

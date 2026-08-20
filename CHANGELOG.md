@@ -2,6 +2,15 @@
 
 ## 0.2.6
 
+### Fixed
+
+- Retain bounded anonymous count support after graph-confirmed occupants settle,
+	allowing authoritative household count to health-degrade stale asserted stay
+	sensors without extending traversal authority or fabricating policy edges.
+- Persist support lineage in strict `zone-belief-v4` state, conservatively import
+	v3 state without inventing supports, and preserve one immutable accepted-v3
+	rollback payload before the first v4 write.
+
 ### Performance
 
 - Remove retained policy-audit materialization from occupancy entity updates,

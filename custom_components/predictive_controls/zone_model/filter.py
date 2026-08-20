@@ -275,6 +275,25 @@ class ZoneBeliefFilter:
         )
         return self._state
 
+    def supersede_outward(
+        self,
+        episode_id: str,
+        at: datetime,
+    ) -> ZoneBeliefState:
+        self._require_episode_id(episode_id)
+        self._advance_to(at)
+        if self._state.generation_episode_id != episode_id:
+            raise ValueError("Superseded outward context must match current episode")
+        if self._state.outward_context is None:
+            return self._state
+        before = self._state
+        context = before.context
+        if context == "cleared_with_outward":
+            context = "cleared_without_outward"
+        self._state = replace(before, context=context, outward_context=None)
+        self._record("outward_superseded", before, episode_id)
+        return self._state
+
     def advance(self, now: datetime) -> ZoneBeliefState:
         self._advance_to(now)
         return self._state

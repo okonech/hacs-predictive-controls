@@ -93,7 +93,7 @@ def test_tracker_validation_bootstrap_advancement_and_transient_expiry() -> None
 
 def test_tracker_empty_store_schema6_migration_and_prediction_restore_failure() -> None:
     empty = OccupancyTracker(target_map(), TrackerConfig(1))
-    assert empty.occupancy_store_data(NOW)["schema"] == "zone-belief-v3"
+    assert empty.occupancy_store_data(NOW)["schema"] == "zone-belief-v4"
     tracker = OccupancyTracker(target_map(), TrackerConfig(1))
     schema6 = {
         "schema": "exact-augmented-v6",

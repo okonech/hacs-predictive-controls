@@ -82,6 +82,8 @@ def test_target_benchmark_reports_required_bounded_metrics() -> None:
     assert core["event_count"] == 100
     assert core["max_ms"] <= 100.0
     assert core["token_max"] <= core["token_limit"]
+    assert core["support_max"] <= core["support_limit"]
+    assert core["support_binding_max"] <= core["support_binding_limit"]
     assert core["audit_bytes"] <= 2 * 1024 * 1024
     assert core["persistence_bytes"] > 0
     assert core["persistence_byte_stable"] is True

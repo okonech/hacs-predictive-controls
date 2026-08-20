@@ -19,12 +19,24 @@ from custom_components.predictive_controls.zone_model.filter import ZoneBeliefFi
 from custom_components.predictive_controls.zone_model.profiles import BELIEF_PROFILES
 from custom_components.predictive_controls.zone_model.traversal import TraversalFrontier
 from custom_components.predictive_controls.zone_model.types import (
+    CountSupport,
     SensorInput,
-    StrongTrackedFront,
 )
 
 NOW = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
 pytestmark = pytest.mark.target_model
+
+
+def test_count_conflict_support_projection_is_canonical() -> None:
+    tracker = CountConflictTracker()
+    support = CountSupport("support:one", "one", "one", ("one",))
+    with pytest.raises(ValueError, match="unique and sorted"):
+        tracker.evaluate(NOW, 1, (), (), (support, support), {})
+
+    tracker.evaluate(NOW, 1, (), (), (support,), {})
+    assert tracker.support_ids_outside("other", "other") == ("support:one",)
+    assert tracker.support_ids_outside("one", "other") == ()
+    assert tracker.support_ids_outside("other", "one") == ()
 
 
 def test_count_validation_preserves_last_valid_value() -> None:
@@ -274,10 +286,12 @@ def engine_with_two_front_conflict(*, extend_a: bool = False) -> ZoneModelEngine
     return engine
 
 
-def test_two_confirmed_fronts_degrade_stuck_assertion_only_after_full_dwell() -> None:
+def test_two_settled_supports_degrade_stuck_assertion_only_after_full_dwell() -> None:
     engine = engine_with_two_front_conflict()
+    assert engine.diagnostic_counters["count_conflict_started"] == 1
+    assert engine.diagnostic_counters["count_conflict_degraded"] == 0
     snapshot = engine.snapshot
-    assert len(snapshot.strong_fronts) == 2
+    assert len(snapshot.anonymous_supports) == 2
     assert len(snapshot.count_conflicts) == 1
     conflict = snapshot.count_conflicts[0]
     assert conflict.target_node_id == "target"
@@ -305,8 +319,9 @@ def test_two_confirmed_fronts_degrade_stuck_assertion_only_after_full_dwell() ->
     conflict_row = next(
         row for row in engine.audit_rows if row.reason == "stuck_count_conflict"
     )
-    assert conflict_row.count_conflict_front_ids == conflict.strong_front_ids
+    assert conflict_row.count_conflict_support_ids == conflict.support_ids
     assert conflict_row.reliability_result == "degraded"
+    assert engine.diagnostic_counters["count_conflict_degraded"] == 1
 
     released = engine.advance(NOW + timedelta(minutes=10))
     target_policy = next(
@@ -329,7 +344,7 @@ def test_external_clear_at_conflict_deadline_cannot_prevent_health_diagnosis() -
     assert target.degradation_reason == "count_conflict"
 
 
-def test_provisional_or_insufficient_fronts_cannot_start_count_conflict() -> None:
+def test_provisional_or_insufficient_supports_cannot_start_count_conflict() -> None:
     engine = ZoneModelEngine(conflict_map(), 2, NOW)
     observe_on(engine, "target_source", 0)
     observe_on(engine, "target", 1)
@@ -338,7 +353,7 @@ def test_provisional_or_insufficient_fronts_cannot_start_count_conflict() -> Non
     observe_on(engine, "d", 4)
     observe_on(engine, "dm", 5)
 
-    assert engine.snapshot.strong_fronts == ()
+    assert engine.snapshot.anonymous_supports == ()
     assert engine.snapshot.count_conflicts == ()
     engine.advance(NOW + timedelta(minutes=5))
     target = next(
@@ -347,106 +362,85 @@ def test_provisional_or_insufficient_fronts_cannot_start_count_conflict() -> Non
     assert target.degradation_reason is None
 
 
-def test_ordinary_missed_edge_lineage_is_not_a_strong_front() -> None:
+def test_provisional_high_belief_stay_episode_cannot_create_support() -> None:
+    engine = ZoneModelEngine(conflict_map(), 2, NOW)
+    observe_on(engine, "target_source", 0)
+    observe_on(engine, "target", 1)
+
+    target_belief = next(
+        state for state in engine.snapshot.belief_states if state.zone == "target"
+    )
+    assert target_belief.probability >= 0.7
+    assert engine.snapshot.anonymous_supports == ()
+
+
+def test_settled_supports_survive_traversal_token_expiry() -> None:
     engine = engine_with_two_front_conflict()
-    snapshot = engine.snapshot
-    tokens = tuple(
-        replace(
-            token,
-            provenance_kind="missed_edge",
-            equivalent_confirmed_strength=False,
-        )
-        for token in snapshot.traversal_tokens
+    initial = engine.snapshot.anonymous_supports
+    assert {support.current_zone for support in initial} == {"as", "ds"}
+
+    expired = engine.advance(NOW + timedelta(seconds=100)).snapshot
+
+    assert expired.traversal_tokens == ()
+    assert expired.anonymous_supports == initial
+
+
+def test_outward_movement_moves_support_and_return_settles_it() -> None:
+    predictive_map = PredictiveMap.from_mapping(
+        {
+            "nodes": {
+                "source": {
+                    "role": "transition_gate",
+                    "occupancy_behavior": "transient",
+                    "entities": {"motion": "binary_sensor.source"},
+                    "adjacent": ["hall"],
+                },
+                "hall": {
+                    "role": "transition_gate",
+                    "occupancy_behavior": "transient",
+                    "entities": {"motion": "binary_sensor.hall"},
+                    "adjacent": ["source", "room"],
+                },
+                "room": {
+                    "role": "room_occupancy",
+                    "occupancy_behavior": "sustained",
+                    "entities": {"mmwave": "binary_sensor.room"},
+                    "adjacent": ["hall"],
+                },
+            }
+        }
     )
+    engine = ZoneModelEngine(predictive_map, 1, NOW)
+    observe_on(engine, "source", 0)
+    observe_on(engine, "hall", 1)
+    observe_on(engine, "room", 2)
+    original = engine.snapshot.anonymous_supports[0]
 
-    fronts = CountConflictTracker()._build_fronts(  # noqa: SLF001
-        snapshot.updated_at,
-        {state.node_id: state for state in snapshot.episode_states},
-        {state.zone: state for state in snapshot.belief_states},
-        tokens,
+    engine.observe(SensorInput("binary_sensor.hall", "off", NOW + timedelta(seconds=3)))
+    observe_on(engine, "hall", 20)
+    moving = engine.snapshot.anonymous_supports[0]
+    assert moving.support_id == original.support_id
+    assert moving.state == "moving"
+    assert moving.current_zone == "hall"
+
+    engine.observe(
+        SensorInput("binary_sensor.room", "off", NOW + timedelta(seconds=21))
     )
-
-    assert fronts == ()
-
-
-def test_overlapping_confirmed_lineages_coalesce_to_one_strong_front() -> None:
-    engine = engine_with_two_front_conflict()
-    snapshot = engine.snapshot
-    states = {state.node_id: state for state in snapshot.episode_states}
-    a_token = next(
-        token
-        for token in snapshot.traversal_tokens
-        if token.node_id == "as" and token.track_confidence == "confirmed"
-    )
-    d_token = next(
-        token
-        for token in snapshot.traversal_tokens
-        if token.node_id == "ds" and token.track_confidence == "confirmed"
-    )
-    target = states["target"]
-    assert target.episode_id is not None
-    bridge = replace(
-        a_token,
-        token_id="zz-bridging-target-front",
-        node_id="target",
-        zone="target",
-        episode_id=target.episode_id,
-        path_node_ids=("a", "d", "target"),
-    )
-
-    fronts = CountConflictTracker()._build_fronts(  # noqa: SLF001
-        snapshot.updated_at,
-        states,
-        {state.zone: state for state in snapshot.belief_states},
-        (a_token, d_token, bridge),
-    )
-
-    assert len(fronts) == 1
-    assert fronts[0].token_ids == tuple(
-        sorted((a_token.token_id, d_token.token_id, bridge.token_id))
-    )
+    engine.advance(NOW + timedelta(seconds=31))
+    observe_on(engine, "room", 32)
+    restored = engine.snapshot.anonymous_supports[0]
+    assert restored.support_id == original.support_id
+    assert restored.state == "settled"
+    assert restored.current_zone == "room"
 
 
-def test_graph_connected_confirmed_lineages_coalesce_to_one_strong_front() -> None:
-    engine = engine_with_two_front_conflict()
-    snapshot = engine.snapshot
-    a_token = next(
-        token
-        for token in snapshot.traversal_tokens
-        if token.node_id == "as" and token.track_confidence == "confirmed"
-    )
-    d_token = next(
-        token
-        for token in snapshot.traversal_tokens
-        if token.node_id == "ds" and token.track_confidence == "confirmed"
-    )
-    connected_left = a_token.path_node_ids[-1]
-    connected_right = d_token.path_node_ids[0]
-    tracker = CountConflictTracker({connected_left: (connected_right,)})
-
-    fronts = tracker._build_fronts(  # noqa: SLF001
-        snapshot.updated_at,
-        {state.node_id: state for state in snapshot.episode_states},
-        {state.zone: state for state in snapshot.belief_states},
-        (a_token, d_token),
-    )
-
-    assert len(fronts) == 1
-    assert fronts[0].token_ids == tuple(
-        sorted((a_token.token_id, d_token.token_id))
-    )
-
-
-def test_count_conflict_restore_rejects_duplicate_fronts_and_targets() -> None:
+def test_count_conflict_restore_rejects_duplicate_targets() -> None:
     snapshot = engine_with_two_front_conflict().snapshot
-    front = snapshot.strong_fronts[0]
     conflict = snapshot.count_conflicts[0]
     tracker = CountConflictTracker()
 
-    with pytest.raises(ValueError, match="front.*unique"):
-        tracker.restore((front, front), (), 2)
     with pytest.raises(ValueError, match="targets must be unique"):
-        tracker.restore((), (conflict, conflict), 2)
+        tracker.restore((conflict, conflict), 2)
 
 
 def test_restored_degraded_conflict_handles_matching_and_replaced_episode() -> None:
@@ -468,9 +462,18 @@ def test_restored_degraded_conflict_handles_matching_and_replaced_episode() -> N
     release_dwells = {
         belief.zone: timedelta(seconds=60) for belief in snapshot.belief_states
     }
+    supports = tuple(
+        CountSupport(
+            support.support_id,
+            support.current_node_id,
+            support.current_zone,
+            support.path_node_ids,
+        )
+        for support in snapshot.anonymous_supports
+    )
 
     matching = CountConflictTracker()
-    matching.restore(snapshot.strong_fronts, (conflict,), 2)
+    matching.restore((conflict,), 2)
     matching.evaluate(
         deadline + timedelta(microseconds=1),
         2,
@@ -479,15 +482,14 @@ def test_restored_degraded_conflict_handles_matching_and_replaced_episode() -> N
             asserted if state.node_id == "target" else state
             for state in snapshot.episode_states
         ),
-        snapshot.belief_states,
-        snapshot.traversal_tokens,
+        supports,
         release_dwells,
     )
     assert matching.conflicts[0].target_episode_id == asserted.episode_id
 
     replaced_episode = replace(asserted, episode_id="replacement")
     replaced_tracker = CountConflictTracker()
-    replaced_tracker.restore(snapshot.strong_fronts, (conflict,), 2)
+    replaced_tracker.restore((conflict,), 2)
     replaced_tracker.evaluate(
         deadline + timedelta(microseconds=1),
         2,
@@ -496,20 +498,19 @@ def test_restored_degraded_conflict_handles_matching_and_replaced_episode() -> N
             replaced_episode if state.node_id == "target" else state
             for state in snapshot.episode_states
         ),
-        snapshot.belief_states,
-        snapshot.traversal_tokens,
+        supports,
         release_dwells,
     )
     assert not replaced_tracker.conflicts
 
 
-def test_front_loss_resets_continuous_conflict_dwell() -> None:
+def test_support_loss_resets_continuous_conflict_dwell() -> None:
     engine = engine_with_two_front_conflict()
     original_deadline = engine.snapshot.count_conflicts[0].deadline
     engine.observe(
         SensorInput("binary_sensor.ds", "unavailable", NOW + timedelta(seconds=20))
     )
-    assert len(engine.snapshot.strong_fronts) == 1
+    assert len(engine.snapshot.anonymous_supports) == 1
     assert engine.snapshot.count_conflicts == ()
 
     engine.advance(original_deadline)
@@ -519,51 +520,35 @@ def test_front_loss_resets_continuous_conflict_dwell() -> None:
     assert not target.health_warning
 
 
-def test_connected_front_growth_preserves_continuous_conflict_dwell() -> None:
+def test_support_movement_preserves_continuous_conflict_dwell() -> None:
     engine = engine_with_two_front_conflict(extend_a=True)
-    before = engine.snapshot.count_conflicts[0]
-    before_front = next(
-        front for front in engine.snapshot.strong_fronts if "as" in front.node_ids
+    before = next(
+        conflict
+        for conflict in engine.snapshot.count_conflicts
+        if conflict.target_node_id == "target"
+    )
+    before_support = next(
+        support
+        for support in engine.snapshot.anonymous_supports
+        if support.current_node_id == "as"
     )
 
     observe_on(engine, "ax", 8)
 
-    after = engine.snapshot.count_conflicts[0]
-    after_front = next(
-        front for front in engine.snapshot.strong_fronts if "ax" in front.node_ids
+    after = next(
+        conflict
+        for conflict in engine.snapshot.count_conflicts
+        if conflict.target_node_id == "target"
     )
-    assert after_front.front_id == before_front.front_id
+    after_support = next(
+        support
+        for support in engine.snapshot.anonymous_supports
+        if support.current_node_id == "ax"
+    )
+    assert after_support.support_id == before_support.support_id
     assert after.started_at == before.started_at
     assert after.deadline == before.deadline
-    assert after.strong_front_ids == before.strong_front_ids
-
-
-def test_front_identity_stabilization_resolves_competing_and_colliding_ids() -> None:
-    def front(front_id: str, node_id: str) -> StrongTrackedFront:
-        return StrongTrackedFront(
-            front_id,
-            (f"token-{node_id}",),
-            (node_id,),
-            (node_id,),
-            (f"episode-{node_id}",),
-            NOW + timedelta(minutes=1),
-        )
-
-    tracker = CountConflictTracker({"a": ("d",)})
-    previous = (front("shared", "a"), front("shared#2", "d"))
-    current = (
-        front("new-a", "a"),
-        front("new-d", "d"),
-        front("shared", "x"),
-    )
-
-    stabilized = tracker._stabilize_front_ids(previous, current)  # noqa: SLF001
-
-    assert {item.front_id for item in stabilized} == {
-        "shared",
-        "shared#2",
-        "shared#3",
-    }
+    assert after.support_ids == before.support_ids
 
 
 def test_stuck_conflict_recovers_after_stable_clear_and_fresh_episode() -> None:
@@ -589,7 +574,7 @@ def test_stuck_conflict_recovers_after_stable_clear_and_fresh_episode() -> None:
     recovery_row = next(
         row for row in engine.audit_rows if row.reason == "stuck_conflict_cleared"
     )
-    assert recovery_row.count_conflict_front_ids
+    assert recovery_row.count_conflict_support_ids
     assert recovery_row.reliability_result == "recovered"
 
 
@@ -597,6 +582,8 @@ def test_count_change_cancels_unmatured_conflict_without_releasing_target() -> N
     engine = engine_with_two_front_conflict()
     engine.observe_count(CountInput("count-one", 1, True, NOW + timedelta(seconds=8)))
     assert engine.snapshot.count_conflicts == ()
+    assert engine.diagnostic_counters["count_conflict_started"] == 1
+    assert engine.diagnostic_counters["count_conflict_canceled"] == 1
     engine.advance(NOW + timedelta(seconds=67))
     target = next(
         state for state in engine.snapshot.episode_states if state.node_id == "target"

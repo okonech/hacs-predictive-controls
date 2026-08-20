@@ -280,7 +280,7 @@ class ZonePolicy:
             pending_release_since=self._state.pending_release_since,
             event_kind=None,
             reason=reason,
-            count_conflict_front_ids=conflict.strong_front_ids,
+            count_conflict_support_ids=conflict.support_ids,
             reliability_result=result,
         )
         self._audit.append(decision)

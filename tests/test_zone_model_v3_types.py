@@ -9,12 +9,16 @@ import pytest
 from custom_components.predictive_controls.zone_model.engine import ZoneModelEngine
 from custom_components.predictive_controls.zone_model.profiles import SHARED_PROFILES
 from custom_components.predictive_controls.zone_model.types import (
+    AnonymousOccupancySupport,
     CountConflictState,
+    CountSupport,
     EpisodeEffect,
     PendingAcquisitionCandidate,
     PhysicalNode,
     SensorInput,
-    StrongTrackedFront,
+    SupportTokenBinding,
+    SupportTransition,
+    SupportTransitionEvent,
     TraversalAuthorization,
     TraversalToken,
 )
@@ -108,20 +112,7 @@ def test_v3_traversal_authorization_provenance_is_all_or_nothing() -> None:
             changed(rejected, changes)
 
 
-def test_v3_strong_front_and_count_conflict_validation_boundaries() -> None:
-    front = StrongTrackedFront(
-        "front",
-        ("token",),
-        ("node",),
-        ("zone",),
-        ("episode",),
-        NOW + timedelta(seconds=30),
-    )
-    with pytest.raises(ValueError, match="ID"):
-        replace(front, front_id="")
-    with pytest.raises(ValueError, match="unique and sorted"):
-        replace(front, token_ids=("token", "token"))
-
+def test_v4_count_conflict_validation_boundaries() -> None:
     conflict = CountConflictState(
         "node",
         "zone",
@@ -129,14 +120,14 @@ def test_v3_strong_front_and_count_conflict_validation_boundaries() -> None:
         NOW,
         NOW + timedelta(seconds=1),
         NOW + timedelta(seconds=30),
-        ("front",),
+        ("support:one",),
     )
     invalid_conflict_changes: tuple[dict[str, object], ...] = (
         {"target_node_id": ""},
         {"last_evaluated_at": NOW - timedelta(seconds=1)},
         {"deadline": NOW, "last_evaluated_at": NOW},
-        {"strong_front_ids": ("front", "front")},
-        {"strong_front_ids": ()},
+        {"support_ids": ("support:one", "support:one")},
+        {"support_ids": ()},
         {"degraded_at": NOW + timedelta(seconds=29)},
     )
     for changes in invalid_conflict_changes:
@@ -144,7 +135,87 @@ def test_v3_strong_front_and_count_conflict_validation_boundaries() -> None:
             changed(conflict, changes)
 
 
-def test_v3_policy_phase_and_conflict_diagnostic_validation_boundaries() -> None:
+def test_anonymous_support_record_validation_boundaries() -> None:
+    support = AnonymousOccupancySupport(
+        "support:room:episode",
+        "settled",
+        NOW,
+        NOW + timedelta(seconds=2),
+        "episode",
+        "room",
+        "zone",
+        ("source", "hall", "room"),
+        "adjacent",
+        None,
+        "settled",
+    )
+    invalid_support_changes: tuple[dict[str, object], ...] = (
+        {"support_id": ""},
+        {"support_id": "room:episode"},
+        {"state": "invalid"},
+        {"created_at": NOW.replace(tzinfo=None)},
+        {"updated_at": NOW - timedelta(microseconds=1)},
+        {"current_node_id": "other"},
+        {"path_node_ids": ()},
+        {"path_node_ids": ("one", "two", "three", "room")},
+        {"valid_until": NOW + timedelta(seconds=30)},
+        {"provenance_kind": "same_zone"},
+        {"last_transition": "invalid"},
+    )
+    for changes in invalid_support_changes:
+        with pytest.raises(ValueError):
+            changed(support, changes)
+
+    moving = changed(
+        support,
+        {
+            "state": "moving",
+            "valid_until": NOW + timedelta(seconds=30),
+            "last_transition": "advanced",
+        },
+    )
+    with pytest.raises(ValueError, match="requires an expiry"):
+        replace(moving, valid_until=None)
+    with pytest.raises(ValueError, match="must follow"):
+        replace(moving, valid_until=moving.updated_at)
+
+    binding = SupportTokenBinding("room:episode", support.support_id)
+    projection = CountSupport(
+        support.support_id,
+        support.current_node_id,
+        support.current_zone,
+        support.path_node_ids,
+    )
+    event = SupportTransitionEvent(
+        support.support_id,
+        support.updated_at,
+        "settled",
+        "confirmed_stay",
+    )
+    assert SupportTransition((support,), (binding,), event).supports == (support,)
+    assert projection.endpoint_zone == "zone"
+
+    invalid_factories = (
+        lambda: SupportTokenBinding("", support.support_id),
+        lambda: SupportTokenBinding("token", "invalid"),
+        lambda: replace(projection, support_id=""),
+        lambda: replace(projection, support_id="invalid"),
+        lambda: replace(projection, path_node_ids=("other",)),
+        lambda: replace(event, support_id=""),
+        lambda: replace(event, transition="invalid"),
+        lambda: replace(event, coalesced_support_ids=("same", "same")),
+        lambda: SupportTransition((support, support), (binding,)),
+        lambda: SupportTransition((support,), (binding, binding)),
+        lambda: SupportTransition(
+            (support,), (SupportTokenBinding("other", "support:missing"),)
+        ),
+    )
+    for factory in invalid_factories:
+        with pytest.raises(ValueError):
+            factory()
+
+
+def test_v4_policy_phase_and_conflict_diagnostic_validation_boundaries() -> None:
     state = next(
         item
         for item in ZoneModelEngine(target_map(), 1, NOW).snapshot.policy_states
@@ -166,18 +237,18 @@ def test_v3_policy_phase_and_conflict_diagnostic_validation_boundaries() -> None
     row = decision(NOW)
     invalid_row_changes: tuple[dict[str, object], ...] = (
         {
-            "count_conflict_front_ids": ("same", "same"),
+            "count_conflict_support_ids": ("same", "same"),
             "reliability_result": "degraded",
         },
         {"reliability_result": "invalid"},
-        {"count_conflict_front_ids": ("front",)},
+        {"count_conflict_support_ids": ("support:one",)},
     )
     for changes in invalid_row_changes:
         with pytest.raises(ValueError):
             changed(row, changes)
 
 
-def test_v3_snapshot_auxiliary_state_must_be_unique_and_sorted() -> None:
+def test_v4_snapshot_auxiliary_state_must_be_unique_and_sorted() -> None:
     snapshot = ZoneModelEngine(target_map(), 1, NOW).snapshot
     pending = PendingAcquisitionCandidate(
         "node",
@@ -189,14 +260,6 @@ def test_v3_snapshot_auxiliary_state_must_be_unique_and_sorted() -> None:
         NOW + timedelta(seconds=20),
         1.0,
     )
-    front = StrongTrackedFront(
-        "front",
-        ("token",),
-        ("node",),
-        ("room",),
-        ("episode",),
-        NOW + timedelta(seconds=30),
-    )
     conflict = CountConflictState(
         "node",
         "room",
@@ -204,7 +267,7 @@ def test_v3_snapshot_auxiliary_state_must_be_unique_and_sorted() -> None:
         NOW,
         NOW + timedelta(seconds=1),
         NOW + timedelta(seconds=30),
-        ("front",),
+        ("support:one",),
     )
     retained = TraversalToken(
         "node:episode",
@@ -219,7 +282,6 @@ def test_v3_snapshot_auxiliary_state_must_be_unique_and_sorted() -> None:
     )
     invalid_snapshots: tuple[dict[str, object], ...] = (
         {"pending_candidates": (pending, pending)},
-        {"strong_fronts": (front, front)},
         {"count_conflicts": (conflict, conflict)},
         {"retained_traversal_tokens": (retained, retained)},
     )

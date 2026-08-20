@@ -96,6 +96,25 @@ def test_current_map_metadata_resolves_deterministically(
     assert assignment.error is None
 
 
+def test_transition_role_takes_precedence_over_mmwave_capability() -> None:
+    predictive_map = PredictiveMap.from_mapping(
+        {
+            "nodes": {
+                "hall": {
+                    "role": "transition_gate",
+                    "occupancy_behavior": "transient",
+                    "entities": {"mmwave": "binary_sensor.hall"},
+                }
+            }
+        }
+    )
+
+    assignment = profile_assignment_for_node(predictive_map, "hall")
+
+    assert assignment.profile_name == "transition_fast"
+    assert assignment.error is None
+
+
 def test_ambiguous_mapping_reports_blocking_error() -> None:
     assignment = profile_assignment_for_node(profile_map(), "review")
 

@@ -192,16 +192,42 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
             }
             for candidate in diagnostics.pending_candidates
         ],
-        "strong_fronts": [
+        "anonymous_supports": [
             {
-                "front_id": front.front_id,
-                "node_ids": list(front.node_ids),
-                "zones": list(front.zones),
-                "episode_ids": list(front.episode_ids),
-                "valid_until": front.valid_until.isoformat(),
+                "support_id": support.support_id,
+                "state": support.state,
+                "created_at": support.created_at.isoformat(),
+                "updated_at": support.updated_at.isoformat(),
+                "current_episode_id": support.current_episode_id,
+                "current_node_id": support.current_node_id,
+                "current_zone": support.current_zone,
+                "path_node_ids": list(support.path_node_ids),
+                "provenance_kind": support.provenance_kind,
+                "valid_until": _iso(support.valid_until),
+                "last_transition": support.last_transition,
             }
-            for front in diagnostics.strong_fronts
+            for support in diagnostics.anonymous_supports
         ],
+        "support_token_bindings": [
+            {
+                "token_id": binding.token_id,
+                "support_id": binding.support_id,
+            }
+            for binding in diagnostics.support_token_bindings
+        ],
+        "latest_support_transition": (
+            None
+            if diagnostics.latest_support_transition is None
+            else {
+                "support_id": diagnostics.latest_support_transition.support_id,
+                "at": diagnostics.latest_support_transition.at.isoformat(),
+                "transition": diagnostics.latest_support_transition.transition,
+                "reason": diagnostics.latest_support_transition.reason,
+                "coalesced_support_ids": list(
+                    diagnostics.latest_support_transition.coalesced_support_ids
+                ),
+            }
+        ),
         "count_conflicts": [
             {
                 "target_node_id": conflict.target_node_id,
@@ -209,7 +235,8 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
                 "target_episode_id": conflict.target_episode_id,
                 "started_at": conflict.started_at.isoformat(),
                 "deadline": conflict.deadline.isoformat(),
-                "strong_front_ids": list(conflict.strong_front_ids),
+                "support_ids": list(conflict.support_ids),
+                "strong_front_ids": list(conflict.support_ids),
                 "degraded_at": _iso(conflict.degraded_at),
                 "reason": (
                     "stuck_count_conflict"
@@ -224,6 +251,7 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
             "status": diagnostics.restore_status,
             "reason": diagnostics.restore_reason,
         },
+        "lifecycle_counters": dict(diagnostics.lifecycle_counters),
         "processing": dict(diagnostics.processing),
         "health_warnings": [
             state.node_id
@@ -271,7 +299,8 @@ def policy_decision_payload(row: Any) -> dict[str, Any]:
         "pending_release_since": _iso(row.pending_release_since),
         "event_kind": row.event_kind,
         "reason": row.reason,
-        "count_conflict_front_ids": list(row.count_conflict_front_ids),
+        "count_conflict_support_ids": list(row.count_conflict_support_ids),
+        "count_conflict_front_ids": list(row.count_conflict_support_ids),
         "reliability_result": row.reliability_result,
     }
 

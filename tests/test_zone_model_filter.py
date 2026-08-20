@@ -364,6 +364,44 @@ def test_outward_expiry_while_asserted_preserves_asserted_context() -> None:
     assert contribution_count(filter_, "context_expired") == 1
 
 
+def test_confirmed_return_supersedes_outward_without_changing_belief() -> None:
+    filter_ = belief_filter()
+    filter_.apply_positive("episode-1", NOW)
+    filter_.register_outward(
+        "episode-1",
+        NOW + timedelta(minutes=1),
+        NOW + timedelta(seconds=1),
+    )
+    filter_.advance(NOW + timedelta(seconds=2))
+    before = filter_.state.probability
+
+    returned = filter_.supersede_outward("episode-1", NOW + timedelta(seconds=2))
+
+    assert returned.outward_context is None
+    assert returned.probability == pytest.approx(before)
+    assert contribution_count(filter_, "outward_superseded") == 1
+    assert (
+        filter_.supersede_outward("episode-1", NOW + timedelta(seconds=2))
+        == returned
+    )
+    with pytest.raises(ValueError, match="match current episode"):
+        filter_.supersede_outward("other", NOW + timedelta(seconds=2))
+
+    cleared_filter = belief_filter()
+    cleared_filter.apply_positive("episode-1", NOW)
+    cleared_filter.register_outward(
+        "episode-1",
+        NOW + timedelta(minutes=1),
+        NOW + timedelta(seconds=1),
+    )
+    cleared_filter.apply_stable_clear("episode-1", NOW + timedelta(seconds=2))
+    cleared = cleared_filter.supersede_outward(
+        "episode-1",
+        NOW + timedelta(seconds=3),
+    )
+    assert cleared.context == "cleared_without_outward"
+
+
 def test_beliefs_remain_finite_and_contributions_are_bounded_fifo() -> None:
     filter_ = belief_filter(contribution_limit=4)
     for generation in range(40):

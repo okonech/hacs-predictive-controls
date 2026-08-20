@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime
 
+from ..const import PRODUCT_MAX_OCCUPANTS
 from ..model import PredictiveMap
 from .count import (
     SEEN_EVENT_LIMIT,
@@ -28,15 +29,19 @@ from .profiles import (
     SHARED_PROFILES,
     build_physical_nodes,
 )
+from .supports import AnonymousSupportTracker
 from .traversal import TraversalFrontier
 from .types import (
     CountInput,
+    CountSupport,
     EpisodeEffect,
     EpisodeState,
     PolicyDecision,
     PolicyEvent,
     SensorInput,
+    SupportTransitionEvent,
     TraversalAuthorization,
+    TraversalToken,
     ZoneBeliefState,
     ZoneModelResult,
     ZoneModelSnapshot,
@@ -85,15 +90,11 @@ class ZoneModelEngine:
             for zone, profiles in sorted(profiles_by_zone.items())
         }
         self._frontier = TraversalFrontier(predictive_map, self._nodes)
+        self._supports = AnonymousSupportTracker(predictive_map, self._nodes)
         self._predictions = TargetPredictionManager(predictive_map)
         self._pending_prediction_learning: list[TraversalAuthorization] = []
         self._count = CountContext(initial_count)
-        self._count_conflicts = CountConflictTracker(
-            {
-                node_id: tuple(node.adjacent)
-                for node_id, node in predictive_map.nodes.items()
-            }
-        )
+        self._count_conflicts = CountConflictTracker()
         active_seed = {} if active_seed is None else dict(active_seed)
         if not set(active_seed) <= set(self._filters) or any(
             not isinstance(active, bool) for active in active_seed.values()
@@ -157,9 +158,13 @@ class ZoneModelEngine:
             snapshot.pending_candidates,
             snapshot.retained_traversal_tokens,
         )
+        candidate._supports.restore(
+            snapshot.anonymous_supports,
+            snapshot.support_token_bindings,
+            snapshot.updated_at,
+        )
         candidate._count = CountContext.restore(snapshot.count_state)
         candidate._count_conflicts.restore(
-            snapshot.strong_fronts,
             snapshot.count_conflicts,
             snapshot.count_state.expected_count,
         )
@@ -198,9 +203,10 @@ class ZoneModelEngine:
             self._count.state,
             tuple(self._policies[zone].state for zone in sorted(self._policies)),
             self._frontier.pending_candidates,
-            self._count_conflicts.fronts,
             self._count_conflicts.conflicts,
             self._frontier.retained_tokens,
+            self._supports.supports,
+            self._supports.bindings,
         )
 
     @property
@@ -210,6 +216,17 @@ class ZoneModelEngine:
             for zone in sorted(self._policies)
             for row in self._policies[zone].audit.rows
         )
+
+    @property
+    def latest_support_transition(self) -> SupportTransitionEvent | None:
+        return self._supports.latest_transition
+
+    @property
+    def diagnostic_counters(self) -> dict[str, int]:
+        return {
+            **self._supports.counters,
+            **self._count_conflicts.counters,
+        }
 
     @property
     def prediction_manager(self) -> TargetPredictionManager:
@@ -253,6 +270,7 @@ class ZoneModelEngine:
                     self._filters[update.state.zone].apply_unavailable(at)
         self._advance_components(at)
         self._frontier.clear(at)
+        self._supports.clear(at, "bootstrap")
         self._predictions.clear()
         if self._count.state.expected_count == 0:
             for filter_ in self._filters.values():
@@ -342,6 +360,7 @@ class ZoneModelEngine:
                 item for item in self._episodes.states if item.node_id == effect.node_id
             )
             self._apply_effect(state, effect)
+            self._advance_supports(effect.at)
         self._advance_components(event.event_at)
         deadline_decisions, deadline_events = self._release_due_policies(
             event.event_at,
@@ -378,16 +397,20 @@ class ZoneModelEngine:
         effects = tuple(sorted(update.effects, key=self._effect_order))
         final_effect: EpisodeEffect | None = None
         final_authorization: TraversalAuthorization | None = None
+        final_token: TraversalToken | None = None
         belief_before: ZoneBeliefState | None = None
         authorizations: list[TraversalAuthorization] = []
         for effect in effects:
             self._advance_components(effect.at)
             current_before = self._filters[effect.zone].state
-            authorization, applied_effect = self._apply_effect(update.state, effect)
+            authorization, applied_effect, issued_token = self._apply_effect(
+                update.state, effect
+            )
             if authorization is not None:
                 authorizations.append(authorization)
             final_effect = applied_effect
             final_authorization = authorization
+            final_token = issued_token
             belief_before = current_before
 
         self._advance_components(event.event_at)
@@ -413,6 +436,16 @@ class ZoneModelEngine:
             belief_before,
             prediction_leases=prediction_leases,
             decision_callback=decision_callback,
+        )
+        self._supports.apply(
+            event.event_at,
+            final_effect,
+            final_authorization,
+            final_token,
+            self._episodes.states,
+            tuple(self._filters[zone].state for zone in sorted(self._filters)),
+            self._frontier.tokens,
+            self._frontier.retained_tokens,
         )
         pending_expiry_decisions = self._record_pending_expiries(
             event.event_at, processing_at
@@ -455,6 +488,7 @@ class ZoneModelEngine:
         self._predictions.clear()
         self._pending_prediction_learning.clear()
         self._count_conflicts.clear()
+        self._supports.clear(event.event_at)
         policy_updates = tuple(
             self._policies[zone].apply_count_zero(
                 event.event_at,
@@ -495,6 +529,7 @@ class ZoneModelEngine:
                 item for item in self._episodes.states if item.node_id == effect.node_id
             )
             self._apply_effect(state, effect)
+            self._advance_supports(effect.at)
         self._advance_components(event.event_at)
         pending_expiry_decisions = self._record_pending_expiries(
             event.event_at, processing_at
@@ -517,6 +552,7 @@ class ZoneModelEngine:
         if update.categorical_zero:
             apply_count_update(update, self._filters, self._frontier)
             self._count_conflicts.clear()
+            self._supports.clear(event.event_at)
             self._pending_prediction_learning.clear()
             self._prepare_predictions(event.event_at, ())
             policy_updates = tuple(
@@ -572,6 +608,7 @@ class ZoneModelEngine:
         for effect in effects:
             self._advance_components(effect.at)
             self._apply_effect(state_by_node[effect.node_id], effect)
+            self._advance_supports(effect.at)
         belief_before_advance = {
             zone: filter_.state for zone, filter_ in self._filters.items()
         }
@@ -605,7 +642,11 @@ class ZoneModelEngine:
         self,
         state: EpisodeState,
         effect: EpisodeEffect,
-    ) -> tuple[TraversalAuthorization | None, EpisodeEffect]:
+    ) -> tuple[
+        TraversalAuthorization | None,
+        EpisodeEffect,
+        TraversalToken | None,
+    ]:
         filter_ = self._filters[effect.zone]
         if effect.kind == "positive":
             filter_.apply_positive(effect.episode_id, effect.at, effect.reliability)
@@ -617,23 +658,26 @@ class ZoneModelEngine:
             )
             if authorization.authorized:
                 filter_.apply_arrival_transition(effect.episode_id, effect.at)
-                self._frontier.issue(state, effect, authorization)
+                token = self._frontier.issue(state, effect, authorization)
+            else:
+                token = None
             TraversalFrontier.apply_outward_context(
                 authorization,
                 self._filters,
                 effect.at,
                 state.traversal_valid_until,
             )
-            return authorization, effect
+            return authorization, effect, token
         if effect.kind == "correlated_flap_ignored":
             if self._frontier.reopen_authorized_continuity(state, effect):
                 effect = replace(effect, kind="correlated_continuity_authorized")
+                filter_.supersede_outward(effect.episode_id, effect.at)
             else:
                 self._frontier.sync(state, effect.at)
-            return None, effect
+            return None, effect, None
         if effect.kind == "impossible_cadence":
             self._frontier.sync(state, effect.at)
-            return None, effect
+            return None, effect, None
         if effect.kind == "stable_clear":
             filter_.apply_stable_clear(
                 effect.episode_id, effect.at, effect.reliability
@@ -644,12 +688,22 @@ class ZoneModelEngine:
             assert effect.kind == "health_recovered"
             filter_.apply_health_recovered(effect.episode_id, effect.at)
         self._frontier.sync(state, effect.at)
-        return None, effect
+        return None, effect, None
 
     def _advance_components(self, at: datetime) -> None:
         for filter_ in self._filters.values():
             filter_.advance(at)
         self._frontier.advance(at)
+        self._advance_supports(at)
+
+    def _advance_supports(self, at: datetime) -> None:
+        self._supports.advance(
+            at,
+            self._episodes.states,
+            tuple(self._filters[zone].state for zone in sorted(self._filters)),
+            self._frontier.tokens,
+            self._frontier.retained_tokens,
+        )
 
     def _prepare_predictions(
         self,
@@ -702,8 +756,7 @@ class ZoneModelEngine:
             self._count.state.expected_count,
             self._nodes,
             self._episodes.states,
-            tuple(self._filters[zone].state for zone in sorted(self._filters)),
-            self._frontier.tokens,
+            self._supports.count_supports(),
             release_dwells,
             local_effect=local_effect,
             authorization=authorization,
@@ -1218,40 +1271,88 @@ class ZoneModelEngine:
             if target_created_at > use.authorized_at:
                 raise ValueError("Traversal use predates its target episode")
 
+        self._validate_support_snapshot(snapshot, tokens, retained_tokens)
         self._validate_count_snapshot(snapshot)
 
-    def _validate_count_snapshot(self, snapshot: ZoneModelSnapshot) -> None:
-        """Require stored strong fronts and conflicts to match current evidence."""
+    def _validate_support_snapshot(
+        self,
+        snapshot: ZoneModelSnapshot,
+        active_tokens: Mapping[str, TraversalToken],
+        retained_tokens: Mapping[str, TraversalToken],
+    ) -> None:
+        """Bind persisted supports to current physical and traversal state."""
 
-        at = snapshot.updated_at
-        validator = CountConflictTracker(
-            {
-                node_id: tuple(node.adjacent)
-                for node_id, node in self._map.nodes.items()
-            }
-        )
-        validator.restore(
-            snapshot.strong_fronts,
-            (),
-            snapshot.count_state.expected_count,
-        )
-        validator.evaluate(
-            at,
-            snapshot.count_state.expected_count,
-            self._nodes,
-            snapshot.episode_states,
-            snapshot.belief_states,
-            snapshot.traversal_tokens,
-            {
-                belief.zone: POLICY_CALIBRATIONS[
-                    belief.profile_name
-                ].release_dwell
-                for belief in snapshot.belief_states
-            },
-        )
-        if validator.fronts != snapshot.strong_fronts:
-            raise ValueError("Strong-front snapshot is not evidence-derived")
+        if len(snapshot.anonymous_supports) > PRODUCT_MAX_OCCUPANTS:
+            raise ValueError("Anonymous-support snapshot exceeds its bound")
         episodes = {state.node_id: state for state in snapshot.episode_states}
+        beliefs = {state.zone: state for state in snapshot.belief_states}
+        tokens = {**active_tokens, **retained_tokens}
+        bindings = {
+            binding.token_id: binding.support_id
+            for binding in snapshot.support_token_bindings
+        }
+        if any(token_id not in tokens for token_id in bindings):
+            raise ValueError("Support-token binding is incompatible")
+        for support in snapshot.anonymous_supports:
+            node = next(
+                (
+                    physical
+                    for physical in self._nodes
+                    if physical.node_id == support.current_node_id
+                ),
+                None,
+            )
+            state = episodes.get(support.current_node_id)
+            belief = beliefs[support.current_zone]
+            if (
+                node is None
+                or node.zone != support.current_zone
+                or state is None
+                or state.episode_id != support.current_episode_id
+                or support.updated_at > snapshot.updated_at
+            ):
+                raise ValueError("Anonymous-support endpoint is incompatible")
+            if support.state == "settled":
+                calibration = POLICY_CALIBRATIONS[node.profile_name]
+                if (
+                    SHARED_PROFILES[node.profile_name].role != "stay"
+                    or state.status not in {"asserted", "clearing", "clear"}
+                    or (
+                        state.status == "clear"
+                        and belief.outward_context is not None
+                    )
+                    or state.health_warning
+                    or state.cadence_warning
+                    or belief.health_warning
+                    or belief.probability < calibration.on_threshold
+                ):
+                    raise ValueError("Settled anonymous support is incompatible")
+                continue
+            target_tokens = tuple(
+                tokens[token_id]
+                for token_id, support_id in bindings.items()
+                if support_id == support.support_id
+                and tokens[token_id].node_id == support.current_node_id
+                and tokens[token_id].episode_id == support.current_episode_id
+            )
+            if not target_tokens or all(
+                token.valid_until != support.valid_until for token in target_tokens
+            ):
+                raise ValueError("Moving support lacks its target binding")
+
+    def _validate_count_snapshot(self, snapshot: ZoneModelSnapshot) -> None:
+        """Require stored count conflicts to match current support evidence."""
+
+        episodes = {state.node_id: state for state in snapshot.episode_states}
+        supports = tuple(
+            CountSupport(
+                support.support_id,
+                support.current_node_id,
+                support.current_zone,
+                support.path_node_ids,
+            )
+            for support in snapshot.anonymous_supports
+        )
         for conflict in snapshot.count_conflicts:
             state = episodes.get(conflict.target_node_id)
             historical = (
@@ -1275,12 +1376,12 @@ class ZoneModelEngine:
                 )
                 or (
                     conflict.degraded_at is None
-                    and conflict.strong_front_ids
+                    and conflict.support_ids
                     != tuple(
-                        front.front_id
-                        for front in snapshot.strong_fronts
-                        if conflict.target_zone not in front.zones
-                        and conflict.target_node_id not in front.node_ids
+                        support.support_id
+                        for support in supports
+                        if support.endpoint_zone != conflict.target_zone
+                        and conflict.target_node_id not in support.path_node_ids
                     )[: snapshot.count_state.expected_count]
                 )
             ):
@@ -1428,8 +1529,9 @@ class ZoneModelEngine:
             snapshot.current_token_ids,
             snapshot.authorization_uses,
             snapshot.pending_candidates,
-            snapshot.strong_fronts,
             snapshot.count_conflicts,
+            snapshot.anonymous_supports,
+            snapshot.support_token_bindings,
         )
         if any(forbidden):
             raise ValueError("Zero-count snapshot contains acquisition state")

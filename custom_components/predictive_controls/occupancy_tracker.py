@@ -24,6 +24,7 @@ from .zone_model.persistence import (
 )
 from .zone_model.prediction import PredictionLease, TargetPredictionManager
 from .zone_model.types import (
+    AnonymousOccupancySupport,
     CountConflictState,
     CountInput,
     EpisodeState,
@@ -31,7 +32,8 @@ from .zone_model.types import (
     PolicyDecision,
     PolicyEvent,
     SensorInput,
-    StrongTrackedFront,
+    SupportTokenBinding,
+    SupportTransitionEvent,
     TraversalAuthorization,
     TraversalToken,
     ZoneBeliefState,
@@ -93,7 +95,9 @@ class TrackerDiagnostics:
     traversal_tokens: tuple[TraversalToken, ...]
     retained_traversal_tokens: tuple[TraversalToken, ...]
     pending_candidates: tuple[PendingAcquisitionCandidate, ...]
-    strong_fronts: tuple[StrongTrackedFront, ...]
+    anonymous_supports: tuple[AnonymousOccupancySupport, ...]
+    support_token_bindings: tuple[SupportTokenBinding, ...]
+    latest_support_transition: SupportTransitionEvent | None
     count_conflicts: tuple[CountConflictState, ...]
     sensor_reliability: dict[str, float]
     prediction_leases: tuple[PredictionLease, ...]
@@ -104,6 +108,7 @@ class TrackerDiagnostics:
     restore_reason: str | None
     requested_occupants: int
     unsupported_count: int | None
+    lifecycle_counters: dict[str, int]
     processing: dict[str, float | int] = field(default_factory=dict)
 
 
@@ -134,6 +139,7 @@ class OccupancyTracker:
         self._last_result: ZoneModelResult | None = None
         self._restore_status = "not_attempted"
         self._restore_reason: str | None = None
+        self._restore_rejection_count = 0
         self._active_since_by_zone: dict[str, datetime] = {}
         self._policy_reason_by_zone: dict[str, str] = {}
 
@@ -252,7 +258,17 @@ class OccupancyTracker:
             pending_candidates=(
                 () if snapshot is None else snapshot.pending_candidates
             ),
-            strong_fronts=() if snapshot is None else snapshot.strong_fronts,
+            anonymous_supports=(
+                () if snapshot is None else snapshot.anonymous_supports
+            ),
+            support_token_bindings=(
+                () if snapshot is None else snapshot.support_token_bindings
+            ),
+            latest_support_transition=(
+                None
+                if self._engine is None
+                else self._engine.latest_support_transition
+            ),
             count_conflicts=() if snapshot is None else snapshot.count_conflicts,
             sensor_reliability={
                 node_id: node.reliability
@@ -266,6 +282,14 @@ class OccupancyTracker:
             restore_reason=self._restore_reason,
             requested_occupants=self._requested_expected_occupants,
             unsupported_count=self._unsupported_count,
+            lifecycle_counters={
+                **(
+                    {}
+                    if self._engine is None
+                    else self._engine.diagnostic_counters
+                ),
+                "restore_rejected": self._restore_rejection_count,
+            },
             processing={
                 "zone_count": len(beliefs),
                 "episode_count": 0
@@ -280,9 +304,12 @@ class OccupancyTracker:
                 "pending_candidate_count": 0
                 if snapshot is None
                 else len(snapshot.pending_candidates),
-                "strong_front_count": 0
+                "support_count": 0
                 if snapshot is None
-                else len(snapshot.strong_fronts),
+                else len(snapshot.anonymous_supports),
+                "support_binding_count": 0
+                if snapshot is None
+                else len(snapshot.support_token_bindings),
                 "count_conflict_count": 0
                 if snapshot is None
                 else len(snapshot.count_conflicts),
@@ -496,6 +523,10 @@ class OccupancyTracker:
     def reject_restore(self, reason: str) -> None:
         self._restore_status = "rejected"
         self._restore_reason = reason
+        self._restore_rejection_count = min(
+            2**31 - 1,
+            self._restore_rejection_count + 1,
+        )
 
     def _advance(self, at: datetime) -> tuple[ZoneUpdate, ...]:
         before = self.states

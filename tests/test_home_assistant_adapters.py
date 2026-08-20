@@ -764,3 +764,157 @@ def test_integration_preserves_one_v2_rollback_backup(
             v2_payload,
         )
     ]
+
+
+def test_integration_backs_up_only_accepted_v3_before_runtime_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_homeassistant(monkeypatch)
+    events: list[tuple[str, object]] = []
+    v3_payload: dict[str, object] = {
+        "schema": "zone-belief-v3",
+        "transition_counts": {},
+    }
+
+    class Store:
+        def __init__(self, _hass: object, _version: int, key: str) -> None:
+            self.key = key
+
+        async def async_load(self) -> dict[str, object] | None:
+            if self.key.endswith("_transitions"):
+                return v3_payload
+            if "preexisting" in self.key:
+                return {"schema": "existing-backup"}
+            return None
+
+        async def async_save(self, payload: object) -> None:
+            events.append(("save", (self.key, payload)))
+
+    restore_results = iter((True, False, True))
+
+    class Runtime:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def restore_stored_state(self, _stored: object, _now: object) -> bool:
+            return next(restore_results)
+
+        def start(self) -> None:
+            events.append(("start", None))
+
+    async def register_panel(_hass: object, **_kwargs: object) -> None:
+        pass
+
+    panel_module = ModuleType("custom_components.predictive_controls.panel")
+    panel_module.__dict__["async_register_panel"] = register_panel
+    runtime_module = ModuleType("custom_components.predictive_controls.runtime")
+    runtime_module.__dict__["PredictiveControlsRuntime"] = Runtime
+    websocket_module = ModuleType("custom_components.predictive_controls.websocket")
+    websocket_module.__dict__["async_register_websocket_commands"] = lambda _hass: None
+    monkeypatch.setitem(sys.modules, panel_module.__name__, panel_module)
+    monkeypatch.setitem(sys.modules, runtime_module.__name__, runtime_module)
+    monkeypatch.setitem(sys.modules, websocket_module.__name__, websocket_module)
+    sys.modules["homeassistant.helpers.storage"].__dict__["Store"] = Store
+    import_fresh("custom_components.predictive_controls.storage")
+    integration = import_fresh("custom_components.predictive_controls")
+
+    class ConfigEntries:
+        async def async_forward_entry_setups(
+            self, _entry: object, _platforms: object
+        ) -> None:
+            pass
+
+    hass = SimpleNamespace(data={}, config_entries=ConfigEntries())
+
+    class Entry:
+        options = valid_options()
+
+        def __init__(self, entry_id: str) -> None:
+            self.entry_id = entry_id
+
+        def add_update_listener(self, listener: object) -> object:
+            return listener
+
+        def async_on_unload(self, _listener: object) -> None:
+            pass
+
+    asyncio.run(integration.async_setup_entry(hass, Entry("accepted")))
+    asyncio.run(integration.async_setup_entry(hass, Entry("rejected")))
+    asyncio.run(integration.async_setup_entry(hass, Entry("preexisting")))
+
+    assert events == [
+        (
+            "save",
+            (
+                "predictive_controls_accepted_zone_belief_v3_rollback",
+                v3_payload,
+            ),
+        ),
+        ("start", None),
+        ("start", None),
+        ("start", None),
+    ]
+
+
+def test_integration_aborts_before_start_when_v3_backup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_homeassistant(monkeypatch)
+    started = False
+
+    class Store:
+        def __init__(self, _hass: object, _version: int, key: str) -> None:
+            self.key = key
+
+        async def async_load(self) -> dict[str, object] | None:
+            if self.key.endswith("_transitions"):
+                return {"schema": "zone-belief-v3"}
+            return None
+
+        async def async_save(self, _payload: object) -> None:
+            raise OSError("rollback storage unavailable")
+
+    class Runtime:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def restore_stored_state(self, _stored: object, _now: object) -> bool:
+            return True
+
+        def start(self) -> None:
+            nonlocal started
+            started = True
+
+    async def register_panel(_hass: object, **_kwargs: object) -> None:
+        pass
+
+    panel_module = ModuleType("custom_components.predictive_controls.panel")
+    panel_module.__dict__["async_register_panel"] = register_panel
+    runtime_module = ModuleType("custom_components.predictive_controls.runtime")
+    runtime_module.__dict__["PredictiveControlsRuntime"] = Runtime
+    websocket_module = ModuleType("custom_components.predictive_controls.websocket")
+    websocket_module.__dict__["async_register_websocket_commands"] = lambda _hass: None
+    monkeypatch.setitem(sys.modules, panel_module.__name__, panel_module)
+    monkeypatch.setitem(sys.modules, runtime_module.__name__, runtime_module)
+    monkeypatch.setitem(sys.modules, websocket_module.__name__, websocket_module)
+    sys.modules["homeassistant.helpers.storage"].__dict__["Store"] = Store
+    import_fresh("custom_components.predictive_controls.storage")
+    integration = import_fresh("custom_components.predictive_controls")
+
+    class ConfigEntries:
+        async def async_forward_entry_setups(
+            self, _entry: object, _platforms: object
+        ) -> None:
+            pass
+
+    hass = SimpleNamespace(data={}, config_entries=ConfigEntries())
+    entry = SimpleNamespace(
+        entry_id="failed",
+        options=valid_options(),
+        add_update_listener=lambda _listener: None,
+        async_on_unload=lambda _listener: None,
+    )
+
+    with pytest.raises(OSError, match="rollback storage unavailable"):
+        asyncio.run(integration.async_setup_entry(hass, entry))
+    assert not started

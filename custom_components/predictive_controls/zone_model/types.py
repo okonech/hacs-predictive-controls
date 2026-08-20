@@ -32,11 +32,14 @@ BELIEF_CONTRIBUTION_KINDS = frozenset(
         "health_degraded",
         "health_recovered",
         "local_positive",
+        "outward_superseded",
         "stable_clear",
         "unavailable",
     }
 )
 TRACK_CONFIDENCES = frozenset({"provisional", "confirmed"})
+SUPPORT_STATES = frozenset({"moving", "settled"})
+SUPPORT_TRANSITIONS = frozenset({"advanced", "coalesced", "created", "settled"})
 POLICY_PHASES = frozenset({"inactive", "pending", "predicted", "active"})
 ACTIVE_PROVENANCES = frozenset({"evidence", "restored_seed"})
 ACTIVE_EVIDENCE_REASONS = frozenset(
@@ -592,28 +595,133 @@ class CountDiagnostics:
 
 
 @dataclass(frozen=True)
-class StrongTrackedFront:
-    """One coalesced anonymous confirmed traversal front."""
+class AnonymousOccupancySupport:
+    """One bounded anonymous count-support lineage and current endpoint."""
 
-    front_id: str
-    token_ids: tuple[str, ...]
-    node_ids: tuple[str, ...]
-    zones: tuple[str, ...]
-    episode_ids: tuple[str, ...]
-    valid_until: datetime
+    support_id: str
+    state: str
+    created_at: datetime
+    updated_at: datetime
+    current_episode_id: str
+    current_node_id: str
+    current_zone: str
+    path_node_ids: tuple[str, ...]
+    provenance_kind: str
+    valid_until: datetime | None
+    last_transition: str
 
     def __post_init__(self) -> None:
-        if not self.front_id:
-            raise ValueError("Strong-front ID must be non-empty")
-        for values, label in (
-            (self.token_ids, "tokens"),
-            (self.node_ids, "nodes"),
-            (self.zones, "zones"),
-            (self.episode_ids, "episodes"),
+        if not all(
+            (
+                self.support_id,
+                self.current_episode_id,
+                self.current_node_id,
+                self.current_zone,
+                self.provenance_kind,
+            )
         ):
-            if not values or values != tuple(sorted(set(values))):
-                raise ValueError(f"Strong-front {label} must be unique and sorted")
-        require_utc(self.valid_until, "Strong-front expiry")
+            raise ValueError("Anonymous-support identifiers must be non-empty")
+        if not self.support_id.startswith("support:"):
+            raise ValueError("Anonymous-support ID must derive from a token")
+        if self.state not in SUPPORT_STATES:
+            raise ValueError("Anonymous-support state is invalid")
+        if self.provenance_kind not in {"adjacent", "boundary", "missed_edge"}:
+            raise ValueError("Anonymous-support provenance is invalid")
+        if self.last_transition not in SUPPORT_TRANSITIONS:
+            raise ValueError("Anonymous-support transition is invalid")
+        require_utc(self.created_at, "Anonymous-support creation")
+        require_utc(self.updated_at, "Anonymous-support update")
+        if self.updated_at < self.created_at:
+            raise ValueError("Anonymous-support update predates creation")
+        if (
+            not 1 <= len(self.path_node_ids) <= 3
+            or any(not node_id for node_id in self.path_node_ids)
+            or self.path_node_ids[-1] != self.current_node_id
+        ):
+            raise ValueError("Anonymous-support path is inconsistent")
+        if self.state == "moving":
+            if self.valid_until is None:
+                raise ValueError("Moving support requires an expiry")
+            require_utc(self.valid_until, "Anonymous-support expiry")
+            if self.valid_until <= self.updated_at:
+                raise ValueError("Moving-support expiry must follow its update")
+        elif self.valid_until is not None:
+            raise ValueError("Settled support cannot retain an expiry")
+
+
+@dataclass(frozen=True)
+class SupportTokenBinding:
+    """Map one active or retained traversal token to one support."""
+
+    token_id: str
+    support_id: str
+
+    def __post_init__(self) -> None:
+        if not self.token_id or not self.support_id.startswith("support:"):
+            raise ValueError("Support-token binding identifiers are invalid")
+
+
+@dataclass(frozen=True)
+class CountSupport:
+    """Immutable support projection consumed by count-conflict evaluation."""
+
+    support_id: str
+    endpoint_node_id: str
+    endpoint_zone: str
+    path_node_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not all((self.support_id, self.endpoint_node_id, self.endpoint_zone)):
+            raise ValueError("Count-support identifiers must be non-empty")
+        if not self.support_id.startswith("support:"):
+            raise ValueError("Count-support ID is invalid")
+        if (
+            not 1 <= len(self.path_node_ids) <= 3
+            or self.path_node_ids[-1] != self.endpoint_node_id
+        ):
+            raise ValueError("Count-support path is inconsistent")
+
+
+@dataclass(frozen=True)
+class SupportTransitionEvent:
+    """Latest bounded support transition diagnostic."""
+
+    support_id: str
+    at: datetime
+    transition: str
+    reason: str
+    coalesced_support_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.support_id or not self.reason:
+            raise ValueError("Support-transition identifiers must be non-empty")
+        require_utc(self.at, "Support-transition time")
+        if self.transition not in {*SUPPORT_TRANSITIONS, "removed"}:
+            raise ValueError("Support-transition kind is invalid")
+        if self.coalesced_support_ids != tuple(
+            sorted(set(self.coalesced_support_ids))
+        ) or any(not value for value in self.coalesced_support_ids):
+            raise ValueError("Coalesced support IDs must be unique and sorted")
+
+
+@dataclass(frozen=True)
+class SupportTransition:
+    """Complete atomic next support state returned by the tracker."""
+
+    supports: tuple[AnonymousOccupancySupport, ...]
+    bindings: tuple[SupportTokenBinding, ...]
+    latest_transition: SupportTransitionEvent | None = None
+
+    def __post_init__(self) -> None:
+        support_ids = tuple(item.support_id for item in self.supports)
+        if support_ids != tuple(sorted(set(support_ids))):
+            raise ValueError("Anonymous supports must be unique and sorted")
+        token_ids = tuple(item.token_id for item in self.bindings)
+        if token_ids != tuple(sorted(set(token_ids))):
+            raise ValueError("Support-token bindings must be unique and sorted")
+        known_support_ids = set(support_ids)
+        if any(item.support_id not in known_support_ids for item in self.bindings):
+            raise ValueError("Support-token binding references an absent support")
 
 
 @dataclass(frozen=True)
@@ -626,7 +734,7 @@ class CountConflictState:
     started_at: datetime
     last_evaluated_at: datetime
     deadline: datetime
-    strong_front_ids: tuple[str, ...]
+    support_ids: tuple[str, ...]
     degraded_at: datetime | None = None
 
     def __post_init__(self) -> None:
@@ -643,10 +751,10 @@ class CountConflictState:
                 raise ValueError("Count-conflict frontiers are inconsistent")
         if self.deadline <= self.started_at:
             raise ValueError("Count-conflict deadline must follow its start")
-        if self.strong_front_ids != tuple(sorted(set(self.strong_front_ids))):
-            raise ValueError("Count-conflict front IDs must be unique and sorted")
-        if not self.strong_front_ids:
-            raise ValueError("Count conflict requires strong fronts")
+        if self.support_ids != tuple(sorted(set(self.support_ids))):
+            raise ValueError("Count-conflict support IDs must be unique and sorted")
+        if not self.support_ids:
+            raise ValueError("Count conflict requires anonymous supports")
         if self.degraded_at is not None:
             require_utc(self.degraded_at, "Count-conflict degradation")
             if self.degraded_at < self.deadline:
@@ -902,7 +1010,7 @@ class PolicyDecision:
     pending_release_since: datetime | None
     event_kind: str | None
     reason: str
-    count_conflict_front_ids: tuple[str, ...] = ()
+    count_conflict_support_ids: tuple[str, ...] = ()
     reliability_result: str | None = None
 
     def __post_init__(self) -> None:
@@ -976,15 +1084,15 @@ class PolicyDecision:
             raise ValueError("Policy decision event contradicts its active edge")
         if not self.reason:
             raise ValueError("Policy decision reason must be non-empty")
-        if self.count_conflict_front_ids != tuple(
-            sorted(set(self.count_conflict_front_ids))
-        ) or any(not front_id for front_id in self.count_conflict_front_ids):
+        if self.count_conflict_support_ids != tuple(
+            sorted(set(self.count_conflict_support_ids))
+        ) or any(not support_id for support_id in self.count_conflict_support_ids):
             raise ValueError(
-                "Policy decision count-conflict front IDs must be unique and sorted"
+                "Policy decision count-conflict support IDs must be unique and sorted"
             )
         if self.reliability_result not in {None, "degraded", "recovered"}:
             raise ValueError("Policy decision reliability result is invalid")
-        if bool(self.count_conflict_front_ids) != bool(self.reliability_result):
+        if bool(self.count_conflict_support_ids) != bool(self.reliability_result):
             raise ValueError(
                 "Policy decision count-conflict diagnostics must be complete"
             )
@@ -1010,9 +1118,10 @@ class ZoneModelSnapshot:
     count_state: CountState
     policy_states: tuple[ZonePolicyState, ...]
     pending_candidates: tuple[PendingAcquisitionCandidate, ...] = ()
-    strong_fronts: tuple[StrongTrackedFront, ...] = ()
     count_conflicts: tuple[CountConflictState, ...] = ()
     retained_traversal_tokens: tuple[TraversalToken, ...] = ()
+    anonymous_supports: tuple[AnonymousOccupancySupport, ...] = ()
+    support_token_bindings: tuple[SupportTokenBinding, ...] = ()
 
     def __post_init__(self) -> None:
         require_utc(self.updated_at, "Zone-model snapshot time")
@@ -1039,9 +1148,7 @@ class ZoneModelSnapshot:
         pending_zones = tuple(item.zone for item in self.pending_candidates)
         if pending_zones != tuple(sorted(set(pending_zones))):
             raise ValueError("Pending candidates must be unique and sorted by zone")
-        front_ids = tuple(item.front_id for item in self.strong_fronts)
-        if front_ids != tuple(sorted(set(front_ids))):
-            raise ValueError("Strong fronts must be unique and sorted")
+        SupportTransition(self.anonymous_supports, self.support_token_bindings)
         conflict_nodes = tuple(item.target_node_id for item in self.count_conflicts)
         if conflict_nodes != tuple(sorted(set(conflict_nodes))):
             raise ValueError("Count conflicts must be unique and sorted")

@@ -15,14 +15,12 @@ from .types import (
     CountDiagnostics,
     CountInput,
     CountState,
+    CountSupport,
     CountUpdate,
     EpisodeEffect,
     EpisodeState,
     PhysicalNode,
-    StrongTrackedFront,
     TraversalAuthorization,
-    TraversalToken,
-    ZoneBeliefState,
     require_utc,
 )
 
@@ -31,54 +29,45 @@ SEEN_EVENT_LIMIT = 32
 
 
 class CountConflictTracker:
-    """Build strong fronts and time bounded stuck-assertion contradictions."""
+    """Time bounded stuck-assertion contradictions from anonymous supports."""
 
-    def __init__(
-        self,
-        adjacency: Mapping[str, Sequence[str]] | None = None,
-    ) -> None:
-        connected: dict[str, set[str]] = {}
-        for node_id, neighbors in (
-            {} if adjacency is None else adjacency
-        ).items():
-            for neighbor in neighbors:
-                connected.setdefault(node_id, set()).add(neighbor)
-                connected.setdefault(neighbor, set()).add(node_id)
-        self._adjacency = {
-            node_id: frozenset(neighbors)
-            for node_id, neighbors in connected.items()
-        }
-        self._fronts: tuple[StrongTrackedFront, ...] = ()
+    def __init__(self) -> None:
+        self._supports: tuple[CountSupport, ...] = ()
         self._conflicts: dict[str, CountConflictState] = {}
         self._last_count: int | None = None
-
-    @property
-    def fronts(self) -> tuple[StrongTrackedFront, ...]:
-        return self._fronts
+        self._counters = {
+            "count_conflict_started": 0,
+            "count_conflict_canceled": 0,
+            "count_conflict_degraded": 0,
+        }
 
     @property
     def conflicts(self) -> tuple[CountConflictState, ...]:
         return tuple(self._conflicts[node_id] for node_id in sorted(self._conflicts))
 
+    @property
+    def counters(self) -> dict[str, int]:
+        return dict(self._counters)
+
     def restore(
         self,
-        fronts: tuple[StrongTrackedFront, ...],
         conflicts: tuple[CountConflictState, ...],
         expected_count: int,
     ) -> None:
-        if len({front.front_id for front in fronts}) != len(fronts):
-            raise ValueError("Strong-front restore IDs must be unique")
         restored = {conflict.target_node_id: conflict for conflict in conflicts}
         if len(restored) != len(conflicts):
             raise ValueError("Count-conflict restore targets must be unique")
-        self._fronts = tuple(sorted(fronts, key=lambda front: front.front_id))
+        self._supports = ()
         self._conflicts = restored
         self._last_count = expected_count
+        self._counters = dict.fromkeys(self._counters, 0)
 
     def clear(self) -> None:
-        self._fronts = ()
+        previous = dict(self._conflicts)
+        self._supports = ()
         self._conflicts.clear()
         self._last_count = 0
+        self._record_counter_changes(previous)
 
     def evaluate(
         self,
@@ -86,8 +75,7 @@ class CountConflictTracker:
         count: int,
         nodes: tuple[PhysicalNode, ...],
         episode_states: tuple[EpisodeState, ...],
-        belief_states: tuple[ZoneBeliefState, ...],
-        tokens: tuple[TraversalToken, ...],
+        supports: Sequence[CountSupport],
         release_dwells: Mapping[str, timedelta],
         *,
         local_effect: EpisodeEffect | None = None,
@@ -96,23 +84,23 @@ class CountConflictTracker:
         """Return conflicts that newly crossed their health-degrade deadline."""
 
         require_utc(at, "Count-conflict evaluation time")
+        previous = dict(self._conflicts)
         if count <= 0:
             self.clear()
             return ()
+        support_ids = tuple(support.support_id for support in supports)
+        if support_ids != tuple(sorted(set(support_ids))):
+            raise ValueError("Count supports must be unique and sorted")
+        self._supports = tuple(supports)
         count_changed = self._last_count is not None and self._last_count != count
         self._last_count = count
-        state_by_node = {state.node_id: state for state in episode_states}
-        belief_by_zone = {belief.zone: belief for belief in belief_states}
-        self._fronts = self._stabilize_front_ids(
-            self._fronts,
-            self._build_fronts(at, state_by_node, belief_by_zone, tokens),
-        )
         if count_changed:
             self._conflicts = {
                 node_id: conflict
                 for node_id, conflict in self._conflicts.items()
                 if conflict.degraded_at is not None
             }
+            self._record_counter_changes(previous)
             return ()
 
         physical_by_node = {node.node_id: node for node in nodes}
@@ -130,7 +118,8 @@ class CountConflictTracker:
             ):
                 eligible_nodes.add(target.node_id)
                 self._conflicts[target.node_id] = replace(
-                    existing, last_evaluated_at=at
+                    existing,
+                    last_evaluated_at=at,
                 )
                 continue
             if (
@@ -160,31 +149,28 @@ class CountConflictTracker:
                 if existing.target_episode_id == target.episode_id:
                     eligible_nodes.add(target.node_id)
                     self._conflicts[target.node_id] = replace(
-                        existing, last_evaluated_at=at
+                        existing,
+                        last_evaluated_at=at,
                     )
                 continue
-            if any(
-                target.node_id in front.node_ids or target.zone in front.zones
-                for front in self._fronts
-            ):
+            if any(self._contains_target(support, target) for support in supports):
                 self._conflicts.pop(target.node_id, None)
                 continue
             outside = tuple(
-                front
-                for front in self._fronts
-                if target.zone not in front.zones
-                and target.node_id not in front.node_ids
+                support
+                for support in supports
+                if not self._contains_target(support, target)
             )
             if len(outside) < count:
                 self._conflicts.pop(target.node_id, None)
                 continue
             eligible_nodes.add(target.node_id)
-            front_ids = tuple(front.front_id for front in outside[:count])
+            selected_ids = tuple(support.support_id for support in outside[:count])
             dwell = release_dwells[target.zone]
             if (
                 existing is None
                 or existing.target_episode_id != target.episode_id
-                or existing.strong_front_ids != front_ids
+                or existing.support_ids != selected_ids
             ):
                 self._conflicts[target.node_id] = CountConflictState(
                     target.node_id,
@@ -193,13 +179,18 @@ class CountConflictTracker:
                     at,
                     at,
                     at + dwell,
-                    front_ids,
+                    selected_ids,
                 )
                 continue
-            updated = replace(existing, last_evaluated_at=at)
             if at >= existing.deadline:
-                updated = replace(updated, degraded_at=at)
+                updated = replace(
+                    existing,
+                    last_evaluated_at=at,
+                    degraded_at=at,
+                )
                 newly_degraded.append(updated)
+            else:
+                updated = replace(existing, last_evaluated_at=at)
             self._conflicts[target.node_id] = updated
 
         self._conflicts = {
@@ -207,144 +198,63 @@ class CountConflictTracker:
             for node_id, conflict in self._conflicts.items()
             if node_id in eligible_nodes
         }
+        self._record_counter_changes(previous)
         return tuple(newly_degraded)
 
-    def _build_fronts(
+    def _record_counter_changes(
         self,
-        at: datetime,
-        state_by_node: Mapping[str, EpisodeState],
-        belief_by_zone: Mapping[str, ZoneBeliefState],
-        tokens: Sequence[TraversalToken],
-    ) -> tuple[StrongTrackedFront, ...]:
-        candidates: list[TraversalToken] = []
-        for token in tokens:
-            state = state_by_node.get(token.node_id)
-            belief = belief_by_zone.get(token.zone)
-            confirmed = bool(
-                (
-                    token.track_confidence == "confirmed"
-                    and token.provenance_kind == "adjacent"
-                    and len(set(token.path_node_ids)) >= 3
-                )
-                or token.equivalent_confirmed_strength
+        previous: Mapping[str, CountConflictState],
+    ) -> None:
+        def identity(conflict: CountConflictState) -> tuple[object, ...]:
+            return (
+                conflict.target_episode_id,
+                conflict.started_at,
+                conflict.support_ids,
             )
-            if (
-                not confirmed
-                or token.valid_until <= at
-                or state is None
-                or state.episode_id != token.episode_id
-                or SHARED_PROFILES[state.profile_name].role != "stay"
-                or state.status not in {"asserted", "clearing", "clear"}
-                or state.health_warning
-                or state.cadence_warning
-                or belief is None
-                or belief.probability < 0.7
-            ):
-                continue
-            candidates.append(token)
-        groups: list[list[TraversalToken]] = []
-        for token in sorted(candidates, key=lambda item: item.token_id):
-            token_nodes = set(token.path_node_ids)
-            overlaps = [
-                index
-                for index, group in enumerate(groups)
-                if self._connected_node_sets(
-                    token_nodes,
-                    {
-                        node_id
-                        for item in group
-                        for node_id in item.path_node_ids
-                    },
-                )
-            ]
-            if not overlaps:
-                groups.append([token])
-                continue
-            first = overlaps[0]
-            groups[first].append(token)
-            for index in reversed(overlaps[1:]):
-                groups[first].extend(groups.pop(index))
-        fronts: list[StrongTrackedFront] = []
-        for group in groups:
-            token_ids = tuple(sorted(token.token_id for token in group))
-            node_ids = tuple(
-                sorted({node_id for token in group for node_id in token.path_node_ids})
-            )
-            zones = tuple(
-                sorted(
-                    {
-                        state_by_node[node_id].zone
-                        for node_id in node_ids
-                        if node_id in state_by_node
-                    }
-                )
-            )
-            episode_ids = tuple(sorted(token.episode_id for token in group))
-            fronts.append(
-                StrongTrackedFront(
-                    "|".join(token_ids),
-                    token_ids,
-                    node_ids,
-                    zones,
-                    episode_ids,
-                    max(token.valid_until for token in group),
-                )
-            )
-        return tuple(sorted(fronts, key=lambda front: front.front_id))
 
-    def _connected_node_sets(self, left: set[str], right: set[str]) -> bool:
-        if left & right:
-            return True
-        return any(
-            self._adjacency.get(node_id, frozenset()) & right for node_id in left
+        started = sum(
+            target not in previous
+            or identity(previous[target]) != identity(conflict)
+            for target, conflict in self._conflicts.items()
+        )
+        canceled = sum(
+            conflict.degraded_at is None
+            and (
+                target not in self._conflicts
+                or identity(self._conflicts[target]) != identity(conflict)
+            )
+            for target, conflict in previous.items()
+        )
+        degraded = sum(
+            conflict.degraded_at is not None
+            and target in previous
+            and previous[target].degraded_at is None
+            and identity(previous[target]) == identity(conflict)
+            for target, conflict in self._conflicts.items()
+        )
+        for name, amount in (
+            ("count_conflict_started", started),
+            ("count_conflict_canceled", canceled),
+            ("count_conflict_degraded", degraded),
+        ):
+            self._counters[name] = min(
+                DIAGNOSTIC_LIMIT,
+                self._counters[name] + amount,
+            )
+
+    def support_ids_outside(self, zone: str, node_id: str) -> tuple[str, ...]:
+        return tuple(
+            support.support_id
+            for support in self._supports
+            if support.endpoint_zone != zone and node_id not in support.path_node_ids
         )
 
-    def _stabilize_front_ids(
-        self,
-        previous: tuple[StrongTrackedFront, ...],
-        current: tuple[StrongTrackedFront, ...],
-    ) -> tuple[StrongTrackedFront, ...]:
-        """Carry a front identity across connected token membership changes."""
-
-        if not previous or not current:
-            return current
-        candidates: list[tuple[tuple[int, int, int, int], int, int]] = []
-        for current_index, new in enumerate(current):
-            new_nodes = set(new.node_ids)
-            for previous_index, old in enumerate(previous):
-                if not self._connected_node_sets(new_nodes, set(old.node_ids)):
-                    continue
-                score = (
-                    len(set(new.token_ids) & set(old.token_ids)),
-                    len(set(new.episode_ids) & set(old.episode_ids)),
-                    len(new_nodes & set(old.node_ids)),
-                    -previous_index,
-                )
-                candidates.append((score, current_index, previous_index))
-        assigned_current: dict[int, str] = {}
-        used_previous: set[int] = set()
-        for _score, current_index, previous_index in sorted(
-            candidates,
-            key=lambda item: (item[0], -item[1]),
-            reverse=True,
-        ):
-            if current_index in assigned_current or previous_index in used_previous:
-                continue
-            assigned_current[current_index] = previous[previous_index].front_id
-            used_previous.add(previous_index)
-
-        used_ids = set(assigned_current.values())
-        stabilized: list[StrongTrackedFront] = []
-        for index, front in enumerate(current):
-            front_id = assigned_current.get(index, front.front_id)
-            if front_id in used_ids and index not in assigned_current:
-                suffix = 2
-                while f"{front_id}#{suffix}" in used_ids:
-                    suffix += 1
-                front_id = f"{front_id}#{suffix}"
-            used_ids.add(front_id)
-            stabilized.append(replace(front, front_id=front_id))
-        return tuple(sorted(stabilized, key=lambda front: front.front_id))
+    @staticmethod
+    def _contains_target(support: CountSupport, target: EpisodeState) -> bool:
+        return bool(
+            support.endpoint_zone == target.zone
+            or target.node_id in support.path_node_ids
+        )
 
 
 class CountContext:

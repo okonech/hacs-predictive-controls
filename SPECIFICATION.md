@@ -313,7 +313,9 @@ shared parameter family and is not itself a competing state:
 6. expiry of every compatible outward context reverts a still-cleared source to
   `cleared_without_outward`;
 7. a new positive episode discards outward contexts associated with the prior
-  source episode and selects `asserted`; and
+  source episode and selects `asserted`; an accepted correlated-continuity
+  reassertion discards outward context for that same episode as a zero-likelihood
+  context correction and adds no positive evidence; and
 8. unavailable selects `unavailable` until a later accepted state establishes a
   new episode or clear state. An accepted clear ends the unavailable context as
   a zero-delta transition to `cleared_without_outward`; only a stable clear
@@ -433,7 +435,10 @@ candidate used as the first half of an adjacent pair is removed atomically.
   lineage retained solely for `REQ-TRAV-013` is not a usable token.
 - **REQ-TRAV-002:** Tokens are anonymous and independently consumable by distinct
   target episodes. Each token carries `provisional` or `confirmed` track
-  provenance and never becomes persistent occupant identity.
+  provenance and never becomes persistent occupant identity. Every accepted
+  authorization exposes its complete accepted source-token set and issued target
+  token to the count-only support layer without granting that layer authority to
+  change traversal acceptance.
 - **REQ-TRAV-003:** The sequence hallway to room A to still-open hallway to room B
   must permit both fresh room episodes. Room A begins faster decay only after its
   local evidence clears and the room B episode supplies plausible outward
@@ -447,7 +452,9 @@ candidate used as the first half of an adjacent pair is removed atomically.
   prediction path.
 - **REQ-TRAV-006:** Adjacent, same-zone independent, boundary, and bounded
   missed-edge authorizations are zero-wait paths. Their decision is made before
-  any whole-house diagnostic materialization or pending-candidate work.
+  any whole-house diagnostic materialization or pending-candidate work. The
+  supported local policy edge is scheduled before unrelated support/count work;
+  publication callback failure still commits the accepted model transition.
 - **REQ-TRAV-007:** Pending track-bootstrap candidates are bounded by event time,
   profile, reliability, episode identity, and fixed retention. They neither
   consume nor manufacture traversal tokens until a compatible pair or another
@@ -457,7 +464,8 @@ candidate used as the first half of an adjacent pair is removed atomically.
   later pair can consume it.
 - **REQ-TRAV-008:** A mature prediction authorization is derived only from fresh
   accepted graph traversal and cannot make an untracked episode appear
-  graph-authorized or teach the route model from its own outcome.
+  graph-authorized or teach the route model from its own outcome. Prediction
+  authorization never creates or advances anonymous count support.
 - **REQ-TRAV-009:** Two compatible pending episodes on distinct adjacent physical
   nodes establish a provisional track atomically; neither must first create a
   token for the other. Only the new leading target receives acquisition authority
@@ -501,18 +509,26 @@ threshold. `active`, a lone pending episode, and a two-node provisional track ar
 not strong tracked fronts. Connected or overlapping fronts are coalesced so one
 movement corridor is not counted as several occupants.
 
+An anonymous occupancy support is bounded count-only provenance for one
+graph-confirmed movement lineage. It has exactly one current moving or settled
+endpoint and never becomes a person assignment. It is distinct from a traversal
+token: support cannot authorize movement, acquisition, prediction, or route
+learning, and a credible settled endpoint may remain after ordinary token expiry.
+
 - **REQ-COUNT-001:** $N=0$ sets every $q_z$ to the empty baseline, clears every
   `active` output, invalidates traversal tokens and prediction leases, and emits
   one explained edge per changed public entity.
 - **REQ-COUNT-002:** A change to positive $N$ must not invent a room, movement,
   activation, or person identity. Boundary evidence may shape reacquisition.
 - **REQ-COUNT-003:** For $N>0$, count is a bounded soft regularizer over independent
-  tracked fronts. It may reduce mutually incompatible weak beliefs and flag a
-  disconnected pending candidate as count-conflicted when at least $N$ strong
-  tracked fronts already exist. The candidate remains publicly off but retained
-  until normal expiry so later graph support can still promote it. Count may not
-  force exactly $N$ active zones and may contribute to release only through the
-  persistent stuck-sensor conflict in `REQ-COUNT-009`.
+  anonymous occupancy supports derived from confirmed traversal provenance. It
+  may reduce mutually
+  incompatible weak beliefs and flag a disconnected pending candidate as
+  count-conflicted when at least $N$ independent count supports already exist.
+  The candidate remains publicly off but retained until normal expiry so later
+  graph support can still promote it. Count may not force exactly $N$ active zones
+  and may contribute to release only through the persistent stuck-sensor conflict
+  in `REQ-COUNT-009`.
 - **REQ-COUNT-004:** Evidence for up to $N$ independent outside clusters may
   accelerate decay of a cleared origin. It is not injective proof of absence and
   is unnecessary when local filtered belief already satisfies release policy.
@@ -525,27 +541,47 @@ movement corridor is not counted as several occupants.
   adjacent-pair bootstrap, same-zone independent, boundary, bounded missed-edge,
   or mature prediction authorization. Those paths explain movement or establish a
   graph-supported front rather than inventing an isolated additional front.
-- **REQ-COUNT-008:** Strong-front construction is anonymous, deterministic,
-  reliability-aware, and bounded by configured zones. It must not enumerate
-  occupant assignments, infer identities, or use lingering `active` state as a
-  substitute for current/recent evidence. A continuously connected front keeps a
-  stable internal identity as confirmed token membership grows or is replaced;
-  that topology-preserving evolution does not restart an existing conflict
-  dwell. Loss, split, or merge that removes the required disjoint outside fronts
-  still cancels the dwell.
-- **REQ-COUNT-009:** When at least $N>0$ disjoint strong tracked fronts outside an
+- **REQ-COUNT-008:** Support construction is anonymous, deterministic,
+  reliability-aware, and bounded by `PRODUCT_MAX_OCCUPANTS`. A support begins
+  only from confirmed three-node adjacent provenance or a reviewed
+  boundary/missed-edge equivalent already accepted by traversal. Its ID is
+  derived from the first confirmed target token. Accepted source-token mappings
+  transfer the same support to one new endpoint; a mapped source set containing
+  several supports coalesces them under the least ID before transfer. Connected
+  current confirmed token components and distinct supports settled in one zone
+  also coalesce. A split never clones support. Current front evidence is never
+  counted alongside its derived support, and lingering `active` or high belief
+  alone cannot create support. Topology-preserving transfer retains identity and
+  conflict dwell; selected-support loss, split, or merge cancels dwell.
+- **REQ-COUNT-009:** When at least $N>0$ independent count supports outside an
   asserted target persist continuously for that target profile's release dwell,
   and the target receives no new independent episode or compatible traversal
-  context, the count contradiction health-degrades that target episode. Its
-  assertion no longer floors belief, its traversal authority remains closed, and
-  normal probability-driven decay and release proceed. Count does not switch the
-  zone off directly. Stable clear followed by a fresh trustworthy positive, or a
-  compatible new traversal episode, clears the conflict and restores normal
-  evaluation immediately.
+  context, the count contradiction health-degrades that target episode. A count
+  support has one endpoint and a one-to-three-node latest path used only to
+  exclude that target from the outside set. The target assertion no longer floors
+  belief, its traversal authority remains closed, and normal
+  probability-driven decay and release proceed. Count does not switch the zone off
+  directly. Stable clear followed by a fresh trustworthy positive, or a compatible
+  new traversal episode, clears the conflict and restores normal evaluation
+  immediately.
 - **REQ-COUNT-010:** A stuck-off or missed intermediate sensor cannot permanently
   break acquisition elsewhere. An existing frontier may cross only the reviewed
   bounded missed-edge path, while any later pair of adjacent distinct episodes
   may bootstrap a new track without identity or continuity with the old frontier.
+- **REQ-COUNT-011:** A support is `moving` until its current target token expires
+  or `settled` at one trustworthy stay endpoint whose graph-local belief is at or
+  above the on threshold. A settled support survives finite clear debounce and a
+  completed weak clear only while no compatible outward context exists; a later
+  trustworthy positive at that same endpoint may rebind its episode without
+  creating or cloning support. Compatible outward clear, unavailability,
+  health/cadence warning, belief below threshold, moving expiry, or $N=0$ removes
+  it and cancels dependent conflict dwell. Ordinary
+  traversal-token expiry does not remove a settled support. A compatible accepted
+  authorization advances it only when the complete source-token set contains a
+  current mapping to that support. Remote graph activity without a mapped source
+  cannot move, duplicate, or erase it. Creation, transfer, coalescence, removal,
+  and mapping rewrite are validated and committed atomically in event-time order.
+  Cardinality or ambiguity may decline/coalesce support but never invent another.
 
 ## 9. Automation Policy
 
@@ -781,10 +817,13 @@ Persist only state needed to reproduce the next decision:
   deadline, and pending release dwell;
 - unexpired traversal tokens with provisional/confirmed provenance and prediction
   leases;
+- anonymous occupancy supports and bounded token-to-support mappings needed to
+  preserve moving/settled state, endpoint, lineage, and deadlines;
 - bounded route statistics, update sequence, and audit metadata.
 
 - **REQ-STATE-001:** Restore validates schema, map fingerprint, count, timestamps,
-  finite probabilities, episode identity, token expiry, and policy state atomically.
+  finite probabilities, episode identity, token expiry, supports, bindings, and
+  policy state atomically.
   Evidence-acquired active state remains bound to its acquisition episode, time,
   reason, bounded path, and source episodes. A prediction lease remains bound to
   the exact confirmed source token; its support must equal the retained target
@@ -793,15 +832,19 @@ Persist only state needed to reproduce the next decision:
   behavior-affecting map input plus sensor, belief, and policy calibrations.
 - **REQ-STATE-002:** Invalid or incompatible state fails as a unit and bootstraps
   from current sensor/count snapshots without movement or public edges.
-- **REQ-STATE-003:** Restore advances decay and expiry exactly once to the restore
-  frontier. It must not reapply historical observation likelihoods.
+- **REQ-STATE-003:** Restore advances decay, traversal, moving-support expiry, and
+  count-conflict dwell exactly once to the restore frontier. It must not reapply
+  historical observation likelihoods or reconstruct support from belief.
 - **REQ-STATE-004:** The one-time exact-assignment schema-6 importer may preserve
   public `active` state only as a compatibility seed. It must not invent zone
   belief, traversal tokens, or support provenance. Migration is deferred until
   current sensor state is available, and a current valid authoritative count
   overrides the stored legacy count.
 - **REQ-STATE-005:** The current persisted inference schema is
-  `zone-belief-v3`. A `zone-belief-v2` importer may retain compatible filter,
+  `zone-belief-v4`. A `zone-belief-v3` importer restores otherwise-compatible
+  target state but creates no support from historical `active`, belief, or expired
+  traversal. It drops unmatured legacy front conflicts because continuity cannot
+  be proven in the support-ID domain. A `zone-belief-v2` importer may retain compatible filter,
   episode, traversal, and active state only when retained provenance verifies
   that the active edge was not authorized by the legacy source-free path;
   otherwise it must discard the active state. It reconstructs neither pending nor
@@ -821,7 +864,9 @@ Persist only state needed to reproduce the next decision:
   without increasing confidence or converting restored same-node callbacks into
   new episodes. Unexpired historical tokens from an older valid generation may
   coexist with the node's exact current-generation token; only the latter may be
-  marked physically current.
+  marked physically current. Support bindings reference only tokens present in
+  the same active/retained traversal snapshot; settled support may retain no
+  binding after traversal retention expires.
 - **REQ-STATE-009:** Every validity window is half-open: evidence is usable for
   `created_at <= event_at < expires_at`. At one timestamp, stored timer
   frontiers with deadline less than or equal to that timestamp are advanced
@@ -829,6 +874,14 @@ Persist only state needed to reproduce the next decision:
   prediction, stable-clear, conflict, or release deadline cannot extend the old
   frontier. Uninterrupted execution and restore at that timestamp emit the same
   ordered result.
+- **REQ-STATE-010:** Supports restore only when IDs, bounded paths, endpoint
+  node/zone/episode, provenance, state/deadline, bindings, current episode health,
+  and belief threshold are mutually compatible. A moving support requires its
+  mapped current target token; a settled support has no deadline and may outlive
+  all bindings. Invalid v4 state rejects atomically. Before the first v4 primary
+  write, an accepted v3 payload is copied once to a distinct immutable rollback
+  store; downgrade restores that payload or cold-bootstraps inference without
+  modifying map, entity, learned, or user configuration.
 
 ## 14. Explainability and Diagnostics
 
@@ -847,7 +900,8 @@ Every accepted or rejected policy evaluation records a compact bounded row with:
 
 Diagnostics expose current episodes, beliefs, active states, traversal frontier,
 count input, sensor-health warnings, prediction leases, latency, ignored events,
-strong tracked fronts, pending candidates, reliability calibration, and
+anonymous supports, token bindings, selected conflict support IDs, latest bounded
+support transition, pending candidates, reliability calibration, and
 bounded audit retention. They do not need to serialize a whole-house exact
 assignment graph.
 
@@ -865,8 +919,10 @@ assignment graph.
   `impossible_cadence`, `stuck_count_conflict`, `stuck_conflict_cleared`, and
   `prediction_unconfirmed`. A single local episode with only positive count is
   never labeled `source_free_corroborated`.
-- **REQ-DIAG-005:** A count-conflict audit row identifies the conflicting strong
-  tracked fronts and reliability result without claiming occupant identities.
+- **REQ-DIAG-005:** A count-conflict audit row identifies the selected anonymous
+  support IDs, endpoint zones, and reliability result without claiming occupant
+  identities. Runtime status retains legacy ID arrays only as exact one-release
+  aliases; v4 persistence contains no legacy front field names.
 
 ## 15. Performance and Determinism
 
