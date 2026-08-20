@@ -229,6 +229,49 @@ class PhysicalEpisodes:
             ),
         )
 
+    def recover_count_conflict(
+        self, node_id: str, episode_id: str, at: datetime
+    ) -> EpisodeUpdate:
+        """Restore one asserted stay episode after its count conflict clears."""
+
+        require_utc(at, "Count-conflict recovery time")
+        state = self._states[node_id]
+        if state.episode_id != episode_id:
+            raise ValueError("Count-conflict recovery does not match current episode")
+        if (
+            state.status != "degraded"
+            or not state.known_on
+            or not state.health_warning
+            or state.degradation_reason != "count_conflict"
+            or self._profile(state).role != "stay"
+        ):
+            raise ValueError("Count-conflict recovery target is not degraded")
+        if self._is_stale(state, at):
+            raise ValueError("Count-conflict recovery cannot move backward")
+        state = replace(
+            state,
+            status="asserted",
+            advanced_at=at,
+            degraded_at=None,
+            degradation_reason=None,
+            health_warning=False,
+        )
+        self._states[node_id] = state
+        return EpisodeUpdate(
+            "count_conflict_recovered",
+            state,
+            (
+                EpisodeEffect(
+                    state.node_id,
+                    state.zone,
+                    episode_id,
+                    "health_recovered",
+                    at,
+                    self._nodes[node_id].reliability,
+                ),
+            ),
+        )
+
     @staticmethod
     def _is_stale(state: EpisodeState, at: datetime) -> bool:
         frontiers = tuple(

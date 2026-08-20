@@ -3,6 +3,8 @@
 **Status:** Normative
 **Authority:** This file is the sole source of product and model requirements.
 **Supported occupants:** 0 through 2, with 2 as the primary operating profile.
+**Implementation status:** Implemented by repository version `0.2.6`; current
+conformance snapshot is in Section 19.
 
 Code, tests, changelogs, issues, and user documentation describe or
 implement this specification but do not override it. If another repository file
@@ -557,13 +559,21 @@ learning, and a credible settled endpoint may remain after ordinary token expiry
   asserted target persist continuously for that target profile's release dwell,
   and the target receives no new independent episode or compatible traversal
   context, the count contradiction health-degrades that target episode. A count
-  support has one endpoint and a one-to-three-node latest path used only to
-  exclude that target from the outside set. The target assertion no longer floors
+  support has one current endpoint. Its `path_node_ids` contains at most three
+  configured nodes from its latest confirmed traversal and is used only to
+  exclude a target on that lineage from the outside set; the path does not claim
+  current occupancy at every listed node. The target assertion no longer floors
   belief, its traversal authority remains closed, and normal
   probability-driven decay and release proceed. Count does not switch the zone off
   directly. Stable clear followed by a fresh trustworthy positive, or a compatible
   new traversal episode, clears the conflict and restores normal evaluation
-  immediately.
+  immediately. If any selected outside support is removed, coalesced, transferred
+  through the target, or otherwise ceases to qualify after degradation, the
+  conflict also clears in the same evaluation that observes the invalidation. A
+  still-asserted matching stay episode returns atomically to its normal asserted
+  belief context without a synthetic positive observation, renewed traversal
+  authority, or retroactive public edge. Ordinary policy then evaluates that
+  restored belief in the same model update.
 - **REQ-COUNT-010:** A stuck-off or missed intermediate sensor cannot permanently
   break acquisition elsewhere. An existing frontier may cross only the reviewed
   bounded missed-edge path, while any later pair of adjacent distinct episodes
@@ -871,9 +881,9 @@ Persist only state needed to reproduce the next decision:
   `created_at <= event_at < expires_at`. At one timestamp, stored timer
   frontiers with deadline less than or equal to that timestamp are advanced
   before the external input. Thus evidence exactly at a pending, token, trust,
-  prediction, stable-clear, conflict, or release deadline cannot extend the old
-  frontier. Uninterrupted execution and restore at that timestamp emit the same
-  ordered result.
+  prediction, stable-clear, conflict, or release deadline cannot renew or extend
+  the expired deadline. Uninterrupted execution and restore at that timestamp
+  emit the same ordered result.
 - **REQ-STATE-010:** Supports restore only when IDs, bounded paths, endpoint
   node/zone/episode, provenance, state/deadline, bindings, current episode health,
   and belief threshold are mutually compatible. A moving support requires its
@@ -982,8 +992,11 @@ scenarios and adversarial tests demonstrate:
    and continued bounded local evidence from asserted stay sensors when no
    persistent count-backed tracked-front conflict exists;
 7. an asserted stuck stay sensor is health-degraded only after $N$ disjoint strong
-   tracked fronts persist elsewhere for the declared dwell, then releases through
-   normal belief decay; clearing/resetting it restores normal evaluation;
+  tracked fronts persist elsewhere for the declared dwell, then releases through
+  normal belief decay; clearing/resetting it restores normal evaluation, while
+  loss of a selected outside support after degradation clears the conflict in
+  the same update and restores a matching still-asserted stay episode without a
+  synthetic observation, traversal authority, or public edge;
 8. a third distinct sequential adjacent physical node confirms a provisional
    track, while repeated traversal between only two nodes leaves it provisional;
 9. isolated same-node or aliased flapping never creates a track or turns on an
@@ -1022,6 +1035,12 @@ scenarios and adversarial tests demonstrate:
   when independent evidence proves a factual input error. Tests may not be
   weakened, retimed, skipped, or moved to automation YAML to fit an
   implementation.
+- **REQ-GOV-006:** A merged change to model behavior, public entities/events,
+  persistence compatibility, shared calibration, or acceptance gates updates the
+  implementation-conformance snapshot in Section 19 and any directly conflicting
+  current-state documentation in the same change. Historical plans and changelog
+  entries remain historical and must be labeled as such rather than rewritten as
+  current authority.
 
 ## 18. Superseded Architecture
 
@@ -1033,3 +1052,37 @@ restored. It also replaces separate prediction/prelight control entities and
 automation-side authorization splits: prediction is internal provenance behind
 the one `active` output. The schema-6 decoder permitted by `REQ-STATE-004` is a
 bounded data importer only and cannot execute retired inference.
+
+## 19. Implementation Conformance Snapshot
+
+This section is the maintained current-state index for the implementation. It is
+descriptive evidence of conformance, not a second source of requirements. The
+numbered requirements above remain authoritative if a summary here is incomplete.
+
+**Last conformance review:** 2026-08-20, after incident verification
+**Repository version:** `0.2.6`
+**Home Assistant Store version:** `7`
+**Current inference schema:** `zone-belief-v4`
+**Known specification divergences:** none
+
+| Layer                     | Implemented contract                                                                                                                                                         | Owning implementation                                                    |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| Map and profiles          | Physical aliases, reciprocal adjacency, directed timing overrides, reliability, and capability-based shared profile assignment                                               | `model.py`, `yaml_config.py`, `zone_model/profiles.py`                   |
+| Physical evidence         | Bounded physical episodes, alias/flap deduplication, stable clear, unavailable handling, hardware hold, trust horizons, and cadence health                                   | `zone_model/episodes.py`                                                 |
+| Zone belief               | Per-zone binary log-odds filtering, reliability-tempered likelihoods, role/context decay, supported-arrival transition, and finite asserted baselines                        | `zone_model/filter.py`, `zone_model/calibration.py`                      |
+| Traversal and acquisition | Pending bootstrap, provisional and confirmed anonymous paths, adjacency, same-zone, boundary, missed-edge, and bounded continuity reopening                                  | `zone_model/traversal.py`, `zone_model/engine.py`                        |
+| Anonymous supports        | Bounded moving/settled support state, creation from confirmed traversal, source-token transfer, coalescence, same-zone settlement, token bindings, and deterministic removal | `zone_model/supports.py`                                                 |
+| Count context             | Categorical count zero, positive-count validation, and count-conflict dwell, health degradation, and recovery from immutable support projections                             | `zone_model/count.py`, `zone_model/engine.py`                            |
+| Policy and public control | Shared 0.70/0.30 hysteresis, profile release dwell, one `active` entity per zone, `home_active`, and optional deduplicated arrival events                                    | `zone_model/policy.py`, `binary_sensor.py`, `event.py`                   |
+| Prediction and learning   | Confirmed-route learning, fixed 0.85 maturity threshold, minimum five accepted transitions, and nonrenewing 10-second internal activation leases                             | `zone_model/prediction.py`, `markov.py`                                  |
+| Persistence and migration | Atomic v4 persistence; strict restore; conservative v3 and v2 import; deferred schema-6 active seed; immutable accepted-v3 rollback backup                                   | `zone_model/persistence.py`, `storage.py`, `occupancy_tracker.py`        |
+| Diagnostics and UI        | Bounded policy audit, beliefs, episodes, health, traversal, supports, conflicts, predictions, lifecycle counters, WebSocket status, and Activity/map panel                   | `zone_model/policy.py`, `status.py`, `websocket.py`, `frontend/panel.js` |
+| Runtime integration       | Event-time normalization, authoritative count, deterministic timer advancement, edge-gated entity publication, delayed persistence, and final shutdown save                  | `runtime.py`, `occupancy_tracker.py`, `__init__.py`                      |
+| Validation                | Retained public incidents and target fixtures, 100% Python branch coverage, Ruff, strict mypy, frontend tests/build, and bounded 100-event benchmark                         | `tests/`, `benchmarks/occupancy_performance.py`                          |
+
+The current implementation includes the retained 2026-08-20 office false-release
+repair: loss of a selected outside support clears an already-degraded count
+conflict, restores the same continuously asserted stay episode to normal local
+evaluation, and prevents release caused solely by an obsolete count
+contradiction. The exact production timestamps and public expectation are
+retained in `test_inc_2026_08_20_support_loss_recovers_asserted_stay_zone`.

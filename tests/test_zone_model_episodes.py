@@ -440,6 +440,12 @@ def test_count_conflict_application_validates_target_health_and_frontier() -> No
 
     with pytest.raises(ValueError, match="does not match"):
         stay.apply_count_conflict("node", "other", NOW + timedelta(seconds=1))
+    with pytest.raises(ValueError, match="does not match"):
+        stay.recover_count_conflict("node", "other", NOW + timedelta(seconds=1))
+    with pytest.raises(ValueError, match="not degraded"):
+        stay.recover_count_conflict(
+            "node", asserted.episode_id, NOW + timedelta(seconds=1)
+        )
     with pytest.raises(ValueError, match="cannot move backward"):
         stay.apply_count_conflict(
             "node", asserted.episode_id, NOW - timedelta(microseconds=1)
@@ -455,6 +461,8 @@ def test_count_conflict_application_validates_target_health_and_frontier() -> No
         ).disposition
         == "unchanged"
     )
+    with pytest.raises(ValueError, match="cannot move backward"):
+        stay.recover_count_conflict("node", asserted.episode_id, NOW)
 
     transition = episodes(profile="transition_fast")
     transition_state = transition.observe(sensor("binary_sensor.a", "on", 0)).state

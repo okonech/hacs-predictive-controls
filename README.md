@@ -13,10 +13,11 @@ remain consistent with it.
 The integration now runs graph-local per-zone probability filters, bounded
 anonymous traversal context, and hysteretic probability-driven `active`
 decisions. Home Assistant Store schema 7 can import schema-6 state once and can
-conservatively migrate `zone-belief-v2`; current state persists as
-`zone-belief-v3`. Unsafe v2 traversal, prediction, and source-free authority are
-discarded. Older `zone-belief-v1` inference is rejected and rebuilt from current
-sensor states.
+conservatively migrate `zone-belief-v2` and `zone-belief-v3`; current state
+persists as `zone-belief-v4` with bounded anonymous occupancy-support lineage.
+Unsafe legacy traversal, prediction, and source-free authority are discarded.
+Older `zone-belief-v1` inference is rejected and rebuilt from current sensor
+states.
 Historical changelog entries may still describe the retired architecture.
 
 ## Installation
@@ -178,8 +179,9 @@ quality gates.
 ## Repository Documents
 
 - [`SPECIFICATION.md`](SPECIFICATION.md): sole normative design authority.
-- [`MIGRATION_PLAN.md`](MIGRATION_PLAN.md): phased implementation, compatibility,
-  validation, rollout, and backout plan for the v3 acquisition model.
+- [`MIGRATION_PLAN.md`](MIGRATION_PLAN.md): historical phased implementation,
+  compatibility, validation, rollout, and backout plan for the v3 acquisition
+  cutover that preceded the current v4 support schema.
 - [`CHANGELOG.md`](CHANGELOG.md): historical release record.
 - [`PERFORMANCE_RESULTS.json`](PERFORMANCE_RESULTS.json): latest checked-in
   performance artifact where applicable.

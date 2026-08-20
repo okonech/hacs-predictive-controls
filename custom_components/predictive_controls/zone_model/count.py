@@ -115,12 +115,20 @@ class CountConflictTracker:
                 and existing.degraded_at is not None
                 and existing.target_episode_id == target.episode_id
                 and target.degradation_reason == "count_conflict"
+                and target.status != "degraded"
             ):
                 eligible_nodes.add(target.node_id)
                 self._conflicts[target.node_id] = replace(
                     existing,
                     last_evaluated_at=at,
                 )
+                continue
+            if (
+                existing is not None
+                and existing.degraded_at is not None
+                and existing.target_episode_id != target.episode_id
+            ):
+                self._conflicts.pop(target.node_id, None)
                 continue
             if (
                 profile.role != "stay"
@@ -145,14 +153,6 @@ class CountConflictTracker:
             if compatible_update:
                 self._conflicts.pop(target.node_id, None)
                 continue
-            if existing is not None and existing.degraded_at is not None:
-                if existing.target_episode_id == target.episode_id:
-                    eligible_nodes.add(target.node_id)
-                    self._conflicts[target.node_id] = replace(
-                        existing,
-                        last_evaluated_at=at,
-                    )
-                continue
             if any(self._contains_target(support, target) for support in supports):
                 self._conflicts.pop(target.node_id, None)
                 continue
@@ -168,9 +168,22 @@ class CountConflictTracker:
             selected_ids = tuple(support.support_id for support in outside[:count])
             dwell = release_dwells[target.zone]
             if (
+                existing is not None
+                and existing.degraded_at is not None
+                and existing.target_episode_id == target.episode_id
+                and existing.support_ids == selected_ids
+                and target.degradation_reason == "count_conflict"
+            ):
+                self._conflicts[target.node_id] = replace(
+                    existing,
+                    last_evaluated_at=at,
+                )
+                continue
+            if (
                 existing is None
                 or existing.target_episode_id != target.episode_id
                 or existing.support_ids != selected_ids
+                or existing.degraded_at is not None
             ):
                 self._conflicts[target.node_id] = CountConflictState(
                     target.node_id,

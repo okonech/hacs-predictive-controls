@@ -192,7 +192,12 @@ class ZoneBeliefFilter:
         if not self._state.health_warning:
             return self._state
         before = self._state
-        self._state = replace(before, health_warning=False)
+        context = (
+            "asserted"
+            if before.asserted_episode_id == episode_id
+            else before.context
+        )
+        self._state = replace(before, context=context, health_warning=False)
         self._record("health_recovered", before, episode_id)
         return self._state
 

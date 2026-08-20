@@ -747,6 +747,11 @@ class ZoneModelEngine:
         local_effect: EpisodeEffect | None = None,
         authorization: TraversalAuthorization | None = None,
     ) -> None:
+        previous = {
+            conflict.target_node_id: conflict
+            for conflict in self._count_conflicts.conflicts
+            if conflict.degraded_at is not None
+        }
         release_dwells = {
             zone: POLICY_CALIBRATIONS[filter_.state.profile_name].release_dwell
             for zone, filter_ in self._filters.items()
@@ -761,6 +766,47 @@ class ZoneModelEngine:
             local_effect=local_effect,
             authorization=authorization,
         )
+        current = {
+            conflict.target_node_id: conflict
+            for conflict in self._count_conflicts.conflicts
+        }
+        episode_by_node = {
+            state.node_id: state for state in self._episodes.states
+        }
+        for node_id, conflict in previous.items():
+            retained = current.get(node_id)
+            if (
+                retained is not None
+                and retained.target_episode_id == conflict.target_episode_id
+                and retained.support_ids == conflict.support_ids
+                and retained.degraded_at is not None
+            ):
+                continue
+            state = episode_by_node[node_id]
+            if (
+                state.episode_id != conflict.target_episode_id
+                or state.status != "degraded"
+                or state.degradation_reason != "count_conflict"
+            ):
+                continue
+            update = self._episodes.recover_count_conflict(
+                conflict.target_node_id,
+                conflict.target_episode_id,
+                at,
+            )
+            effect = update.effects[0]
+            self._filters[effect.zone].apply_health_recovered(
+                effect.episode_id, effect.at
+            )
+            self._frontier.sync(update.state, at)
+            self._policies[update.state.zone].record_count_conflict(
+                conflict,
+                update.state,
+                self._filters[update.state.zone].state,
+                result="recovered",
+                at=at,
+                processing_at=at,
+            )
         for conflict in crossed:
             update = self._episodes.apply_count_conflict(
                 conflict.target_node_id,

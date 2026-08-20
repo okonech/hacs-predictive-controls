@@ -1,8 +1,8 @@
 # Anonymous Occupancy Supports
 
-**Status:** Implemented and independently reviewed  
+**Status:** Implemented design record; independently reviewed
 **Affected layers:** traversal provenance, anonymous support, count conflict, persistence, diagnostics  
-**Authority:** [SPECIFICATION.md](../../SPECIFICATION.md), especially `REQ-GOAL-009`, `REQ-TRAV-001` through `REQ-TRAV-013`, `REQ-COUNT-001` through `REQ-COUNT-011`, `REQ-POLICY-003`, `REQ-STATE-001` through `REQ-STATE-009`, and `REQ-GOV-001` through `REQ-GOV-005`  
+**Authority:** [SPECIFICATION.md](../../SPECIFICATION.md), especially `REQ-GOAL-009`, `REQ-TRAV-001` through `REQ-TRAV-013`, `REQ-COUNT-001` through `REQ-COUNT-011`, `REQ-POLICY-003`, `REQ-STATE-001` through `REQ-STATE-010`, and `REQ-GOV-001` through `REQ-GOV-006`
 **Incident:** `INC-2026-08-20-stale-gym-assertion`
 
 ## Objective
@@ -46,7 +46,7 @@ Extending traversal windows would conflate occupancy duration with movement cont
 
 ## Scope
 
-This proposal adds an internal anonymous occupancy-support state machine used only by count-conflict evaluation and diagnostics.
+This implemented design adds an internal anonymous occupancy-support state machine used only by count-conflict evaluation and diagnostics.
 
 It includes:
 
@@ -68,9 +68,9 @@ It includes:
 - Extending profile traversal/bootstrap windows for this incident.
 - Tuning room-specific thresholds or special-casing Gym, Shaila Office, Alex Office, or any entity ID.
 
-## Required Authority Change
+## Applied Authority Changes
 
-Implementation requires explicit amendment of `SPECIFICATION.md` before production behavior changes:
+The implementation was preceded by these amendments to `SPECIFICATION.md`:
 
 - Extend `REQ-COUNT-003` from strong tracked fronts to independent anonymous occupancy supports.
 - Refine `REQ-COUNT-008` to define support lineage, coalescing, one settled endpoint, and topology-preserving identity.
@@ -80,7 +80,7 @@ Implementation requires explicit amendment of `SPECIFICATION.md` before producti
 - Amend `REQ-STATE-001`, `REQ-STATE-003`, `REQ-STATE-005`, `REQ-STATE-008`, and `REQ-STATE-009` for the new schema, source-token mappings, and restore behavior.
 - Amend diagnostics requirements for support transitions and conflict provenance.
 
-The proposal document is not itself authority.
+This design record is not itself authority.
 
 ## Invariants
 
@@ -235,6 +235,13 @@ At each frontier, derive a sorted tuple of independent supports:
 - exclusion from a target's outside set when the target node/zone is the endpoint or lies in that latest bounded path.
 
 For target `x` and count `N > 0`, start or continue conflict only when at least `N` sorted independent supports outside `x` exist continuously. A new conflict stores the first `N` sorted support IDs. While all selected IDs remain valid and outside, additional unselected supports or changes to them do not restart dwell. Topology-preserving transfer also preserves dwell. Loss, coalescence, split, or invalidation of a selected ID, target-compatible evidence, or count change resets an unmatured dwell; replacement supports start a new full dwell. A degraded conflict retains its selected IDs as historical recovery provenance.
+
+If a selected support ceases to qualify after degradation, the conflict is
+removed at that event-time frontier. A matching continuously asserted stay
+episode returns from `degraded` to `asserted`, its belief context returns from
+`degraded_asserted` to `asserted`, and a bounded `stuck_conflict_cleared` audit
+row retains the original selected support IDs. Recovery adds no positive
+likelihood, traversal token, acquisition authority, prediction, or public edge.
 
 ## Incident Timeline Under This Design
 
@@ -487,5 +494,5 @@ Expected surfaces, subject to Phase 1 design review:
 | 2. Support state machine                  | Complete | Bounded supports, bindings, transfer, coalescence, expiry, weak-clear retention, and same-endpoint rebind have focused tests.                                                                                                                             | None.                                                    |
 | 3. Count conflict integration             | Complete | Count consumes immutable support projections; the exact Gym incident degrades health without a fabricated policy edge.                                                                                                                                    | None.                                                    |
 | 4. Persistence and diagnostics            | Complete | Strict v4 restore, conservative v3 import, immutable pre-write rollback backup, aliases, and bounded lifecycle counters pass focused tests.                                                                                                               | None.                                                    |
-| 5. Adversarial and performance validation | Complete | 552 Python tests pass at 100% branch coverage; Ruff, strict mypy, 29 frontend tests, frontend build, diff check, and all benchmark gates pass. Support/binding maxima are 2/2 and 10/64; core p95 is 1.548 ms.                                            | None.                                                    |
+| 5. Adversarial and performance validation | Complete | 553 Python tests pass at 100% branch coverage; Ruff, strict mypy, 29 frontend tests, frontend build, diff check, and all benchmark gates pass. Support/binding maxima are 2/2 and 10/64; core p95 is 1.548 ms.                                            | None.                                                    |
 | 6. Rollout and review                     | Complete | Accepted v3 state is backed up immutably before runtime start or any v4 write; backup failure aborts setup. Independent conformance review found no authority violations or behavioral defects.                                                           | Observe support/conflict diagnostics during rollout.     |
