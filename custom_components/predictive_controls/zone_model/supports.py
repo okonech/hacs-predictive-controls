@@ -56,6 +56,7 @@ class AnonymousSupportTracker:
             "support_transferred": 0,
             "support_coalesced": 0,
             "support_expired": 0,
+            "support_stale_binding_ignored": 0,
         }
 
     @property
@@ -132,20 +133,26 @@ class AnonymousSupportTracker:
 
         supports = {item.support_id: item for item in next_state.supports}
         bindings = {item.token_id: item.support_id for item in next_state.bindings}
-        source_ids = tuple(
-            sorted(
-                {
-                    bindings[token.token_id]
-                    for token in authorization.source_tokens
-                    if token.token_id in bindings
-                }
-            )
-        )
+        source_ids: set[str] = set()
+        ineligible_source_token_ids: set[str] = set()
+        stale_source_token_ids: set[str] = set()
+        path_source_nodes = frozenset(authorization.path_node_ids[:-1])
+        for token in authorization.source_tokens:
+            if token.node_id not in path_source_nodes:
+                ineligible_source_token_ids.add(token.token_id)
+                continue
+            source_id, stale = self._binding_authority(token, supports, bindings)
+            if source_id is not None:
+                source_ids.add(source_id)
+            elif stale:
+                ineligible_source_token_ids.add(token.token_id)
+                stale_source_token_ids.add(token.token_id)
+        selected_source_ids = tuple(sorted(source_ids))
         latest = next_state.latest_transition
         support_id: str | None = None
-        if source_ids:
+        if selected_source_ids:
             support_id, supports, bindings, latest = self._coalesce(
-                source_ids,
+                selected_source_ids,
                 supports,
                 bindings,
                 at,
@@ -176,7 +183,7 @@ class AnonymousSupportTracker:
                 at,
                 transition,
                 "authorized_target",
-                source_ids if len(source_ids) > 1 else (),
+                selected_source_ids if len(selected_source_ids) > 1 else (),
             )
         elif (
             len(supports) < self._support_limit
@@ -206,6 +213,8 @@ class AnonymousSupportTracker:
 
         if support_id is not None:
             for token in (*authorization.source_tokens, issued_target_token):
+                if token.token_id in ineligible_source_token_ids:
+                    continue
                 bindings[token.token_id] = support_id
         supports, bindings, latest = self._coalesce_current_components(
             supports,
@@ -223,6 +232,7 @@ class AnonymousSupportTracker:
         return self._commit(
             self._transition(supports, bindings, latest),
             at,
+            stale_binding_ignored=len(stale_source_token_ids),
         )
 
     def clear(
@@ -501,9 +511,16 @@ class AnonymousSupportTracker:
             support_ids = tuple(
                 sorted(
                     {
-                        bindings[token.token_id]
+                        support_id
                         for token in group
-                        if token.token_id in bindings
+                        if (
+                            support_id := self._binding_authority(
+                                token,
+                                supports,
+                                bindings,
+                            )[0]
+                        )
+                        is not None
                     }
                 )
             )
@@ -516,6 +533,20 @@ class AnonymousSupportTracker:
                     "connected_component",
                 )
         return supports, bindings, latest
+
+    @staticmethod
+    def _binding_authority(
+        token: TraversalToken,
+        supports: Mapping[str, AnonymousOccupancySupport],
+        bindings: Mapping[str, str],
+    ) -> tuple[str | None, bool]:
+        support_id = bindings.get(token.token_id)
+        support = None if support_id is None else supports.get(support_id)
+        if support is None:
+            return None, False
+        if token.accepted_at < support.updated_at:
+            return None, True
+        return support_id, False
 
     def _coalesce_settled_zones(
         self,
@@ -605,7 +636,13 @@ class AnonymousSupportTracker:
             latest,
         )
 
-    def _commit(self, transition: SupportTransition, at: datetime) -> SupportTransition:
+    def _commit(
+        self,
+        transition: SupportTransition,
+        at: datetime,
+        *,
+        stale_binding_ignored: int = 0,
+    ) -> SupportTransition:
         previous = {support.support_id: support for support in self._supports}
         current = {support.support_id: support for support in transition.supports}
         self._increment_counter(
@@ -636,6 +673,10 @@ class AnonymousSupportTracker:
                 "support_coalesced",
                 max(0, len(latest.coalesced_support_ids) - 1),
             )
+        self._increment_counter(
+            "support_stale_binding_ignored",
+            stale_binding_ignored,
+        )
         self._supports = transition.supports
         self._bindings = transition.bindings
         self._latest_transition = latest

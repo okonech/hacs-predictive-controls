@@ -19,6 +19,7 @@ from custom_components.predictive_controls.zone_model.types import (
     EpisodeEffect,
     EpisodeState,
     OutwardContext,
+    SupportTokenBinding,
     TraversalAuthorization,
     TraversalToken,
     ZoneBeliefState,
@@ -204,6 +205,48 @@ def apply_token(
         (*sources, target) if active_tokens is None else active_tokens,
         retained_tokens,
     )
+
+
+def seeded_support(
+    *,
+    support_limit: int = 2,
+) -> tuple[
+    AnonymousSupportTracker,
+    EpisodeState,
+    TraversalToken,
+    EpisodeState,
+    TraversalToken,
+]:
+    support_tracker = tracker(support_limit=support_limit)
+    hall = episode(
+        "hall",
+        profile_name="transition_fast",
+        at=NOW + timedelta(seconds=1),
+    )
+    hall_token = token(
+        hall,
+        NOW + timedelta(seconds=1),
+        ("source", "hall"),
+        confidence="provisional",
+    )
+    room = episode(
+        "room",
+        profile_name="stay_presence",
+        at=NOW + timedelta(seconds=2),
+    )
+    room_token = token(
+        room,
+        NOW + timedelta(seconds=2),
+        ("source", "hall", "room"),
+    )
+    apply_token(
+        support_tracker,
+        room_token,
+        (hall, room),
+        (belief(hall), belief(room)),
+        sources=(hall_token,),
+    )
+    return support_tracker, hall, hall_token, room, room_token
 
 
 def test_confirmed_stay_creates_one_settled_support_and_survives_token_expiry() -> None:
@@ -432,6 +475,17 @@ def test_support_tracker_covers_atomic_validation_and_coalescence_boundaries() -
     support_tracker._counters["support_created"] = DIAGNOSTIC_COUNTER_LIMIT  # noqa: SLF001
     support_tracker._increment_counter("support_created", 1)  # noqa: SLF001
     assert support_tracker.counters["support_created"] == DIAGNOSTIC_COUNTER_LIMIT
+    support_tracker._counters[  # noqa: SLF001
+        "support_stale_binding_ignored"
+    ] = DIAGNOSTIC_COUNTER_LIMIT
+    support_tracker._increment_counter(  # noqa: SLF001
+        "support_stale_binding_ignored",
+        1,
+    )
+    assert (
+        support_tracker.counters["support_stale_binding_ignored"]
+        == DIAGNOSTIC_COUNTER_LIMIT
+    )
 
 
 @pytest.mark.parametrize(
@@ -584,7 +638,395 @@ def test_support_transfers_to_one_moving_then_settled_endpoint() -> None:
         "support_transferred": 2,
         "support_coalesced": 0,
         "support_expired": 0,
+        "support_stale_binding_ignored": 0,
     }
+
+
+@pytest.mark.parametrize(
+    ("offset", "expected_support", "expected_stale"),
+    ((-1, None, True), (0, "current", False), (1, "current", False)),
+)
+def test_binding_authority_uses_support_mutation_frontier(
+    offset: int,
+    expected_support: str | None,
+    expected_stale: bool,
+) -> None:
+    support_tracker, _hall, _hall_token, _room, room_token = seeded_support()
+    support = support_tracker.supports[0]
+    candidate = replace(
+        room_token,
+        accepted_at=support.updated_at + timedelta(microseconds=offset),
+    )
+
+    support_id, stale = support_tracker._binding_authority(  # noqa: SLF001
+        candidate,
+        {support.support_id: support},
+        {candidate.token_id: support.support_id},
+    )
+
+    assert support_id == (
+        support.support_id if expected_support == "current" else None
+    )
+    assert stale is expected_stale
+
+
+def test_stale_on_path_binding_cannot_transfer_or_rebind_at_capacity() -> None:
+    support_tracker, _hall, hall_token, room, _room_token = seeded_support(
+        support_limit=1
+    )
+    original = support_tracker.supports[0]
+    room2 = episode(
+        "room2",
+        profile_name="stay_presence",
+        at=NOW + timedelta(seconds=3),
+    )
+    room2_token = token(
+        room2,
+        NOW + timedelta(seconds=3),
+        ("hall", "hall2", "room2"),
+    )
+
+    apply_token(
+        support_tracker,
+        room2_token,
+        (room, room2),
+        (belief(room), belief(room2)),
+        sources=(hall_token,),
+    )
+
+    assert support_tracker.supports == (original,)
+    assert {item.token_id for item in support_tracker.bindings} >= {
+        hall_token.token_id
+    }
+    assert room2_token.token_id not in {
+        item.token_id for item in support_tracker.bindings
+    }
+    assert support_tracker.counters["support_stale_binding_ignored"] == 1
+
+
+def test_fresh_on_path_binding_transfers_without_stale_linked_source() -> None:
+    support_tracker, _hall, hall_token, room, room_token = seeded_support()
+    hall2 = episode(
+        "hall2",
+        profile_name="transition_fast",
+        at=NOW + timedelta(seconds=3),
+    )
+    hall2_token = token(
+        hall2,
+        NOW + timedelta(seconds=3),
+        ("hall", "room", "hall2"),
+    )
+
+    apply_token(
+        support_tracker,
+        hall2_token,
+        (room, hall2),
+        (belief(room), belief(hall2)),
+        sources=(hall_token, room_token),
+    )
+
+    assert support_tracker.supports[0].current_node_id == "hall2"
+    assert support_tracker.counters["support_transferred"] == 1
+    assert support_tracker.counters["support_stale_binding_ignored"] == 1
+
+
+def test_mixed_stale_and_fresh_supports_transfer_only_the_fresh_support() -> None:
+    support_tracker, _hall, hall_token, room, room_token = seeded_support()
+    retained = support_tracker.supports[0]
+    other_room = episode(
+        "other_room",
+        profile_name="stay_presence",
+        at=NOW + timedelta(seconds=3),
+    )
+    other_token = token(
+        other_room,
+        NOW + timedelta(seconds=3),
+        ("other_source", "other_hall", "other_room"),
+    )
+    apply_token(
+        support_tracker,
+        other_token,
+        (room, other_room),
+        (belief(room), belief(other_room)),
+        active_tokens=(other_token,),
+        retained_tokens=(hall_token, room_token),
+    )
+    moving_id = next(
+        support.support_id
+        for support in support_tracker.supports
+        if support.current_node_id == "other_room"
+    )
+    hall2 = episode(
+        "hall2",
+        profile_name="transition_fast",
+        at=NOW + timedelta(seconds=4),
+    )
+    target = token(
+        hall2,
+        NOW + timedelta(seconds=4),
+        ("hall", "other_room", "hall2"),
+    )
+
+    apply_token(
+        support_tracker,
+        target,
+        (room, other_room, hall2),
+        (belief(room), belief(other_room), belief(hall2)),
+        sources=(hall_token, other_token),
+        retained_tokens=(room_token,),
+    )
+
+    assert next(
+        support
+        for support in support_tracker.supports
+        if support.support_id == retained.support_id
+    ) == retained
+    moved = next(
+        support
+        for support in support_tracker.supports
+        if support.support_id == moving_id
+    )
+    assert moved.current_node_id == "hall2"
+    assert support_tracker.counters["support_coalesced"] == 0
+    assert support_tracker.counters["support_stale_binding_ignored"] == 1
+    binding_by_token = {
+        binding.token_id: binding.support_id
+        for binding in support_tracker.bindings
+    }
+    assert binding_by_token[hall_token.token_id] == retained.support_id
+    assert binding_by_token[target.token_id] == moving_id
+
+
+def test_stale_loser_binding_remaps_only_after_independent_coalescence() -> None:
+    support_tracker, _hall, hall_token, room, _room_token = seeded_support()
+    winner = support_tracker.supports[0]
+    loser = replace(
+        winner,
+        support_id="support:zz-duplicate",
+        updated_at=NOW + timedelta(seconds=3),
+    )
+    support_tracker.restore(
+        (winner, loser),
+        (SupportTokenBinding(hall_token.token_id, loser.support_id),),
+        loser.updated_at,
+    )
+
+    support_tracker.advance(
+        loser.updated_at,
+        (room,),
+        (belief(room),),
+        (hall_token,),
+        (),
+    )
+
+    assert tuple(item.support_id for item in support_tracker.supports) == (
+        winner.support_id,
+    )
+    assert support_tracker.bindings == (
+        SupportTokenBinding(hall_token.token_id, winner.support_id),
+    )
+    assert support_tracker.latest_transition is not None
+    assert support_tracker.latest_transition.reason == "same_zone"
+
+    hall2 = episode(
+        "hall2",
+        profile_name="transition_fast",
+        at=NOW + timedelta(seconds=4),
+    )
+    target = token(
+        hall2,
+        NOW + timedelta(seconds=4),
+        ("hall", "room", "hall2"),
+    )
+    apply_token(
+        support_tracker,
+        target,
+        (room, hall2),
+        (belief(room), belief(hall2)),
+        sources=(hall_token,),
+    )
+
+    assert support_tracker.supports[0].current_node_id == "room"
+    assert target.token_id not in {
+        binding.token_id for binding in support_tracker.bindings
+    }
+    assert support_tracker.counters["support_stale_binding_ignored"] == 1
+
+
+def test_fresh_off_path_linked_binding_cannot_transfer_or_rebind() -> None:
+    support_tracker, _hall, _hall_token, room, room_token = seeded_support(
+        support_limit=1
+    )
+    original = support_tracker.supports[0]
+    hall2 = episode(
+        "hall2",
+        profile_name="transition_fast",
+        at=NOW + timedelta(seconds=3),
+    )
+    hall2_token = token(
+        hall2,
+        NOW + timedelta(seconds=3),
+        ("source", "hall", "hall2"),
+    )
+
+    apply_token(
+        support_tracker,
+        hall2_token,
+        (room, hall2),
+        (belief(room), belief(hall2)),
+        sources=(room_token,),
+    )
+
+    assert support_tracker.supports == (original,)
+    assert hall2_token.token_id not in {
+        item.token_id for item in support_tracker.bindings
+    }
+    assert support_tracker.counters["support_stale_binding_ignored"] == 0
+
+
+def test_stale_active_binding_cannot_drive_component_coalescence() -> None:
+    support_tracker, _hall, hall_token, room, room_token = seeded_support()
+    other_room = episode(
+        "other_room",
+        profile_name="stay_presence",
+        at=NOW + timedelta(seconds=3),
+    )
+    other_token = token(
+        other_room,
+        NOW + timedelta(seconds=3),
+        ("other_source", "other_hall", "other_room"),
+    )
+    apply_token(
+        support_tracker,
+        other_token,
+        (room, other_room),
+        (belief(room), belief(other_room)),
+        active_tokens=(other_token,),
+        retained_tokens=(hall_token, room_token),
+    )
+    connected_stale = replace(
+        hall_token,
+        path_node_ids=("other_hall", "hall"),
+    )
+
+    support_tracker.advance(
+        NOW + timedelta(seconds=4),
+        (room, other_room),
+        (belief(room), belief(other_room)),
+        (connected_stale, other_token),
+        (room_token,),
+    )
+
+    assert len(support_tracker.supports) == 2
+    assert support_tracker.counters["support_coalesced"] == 0
+    assert support_tracker.counters["support_stale_binding_ignored"] == 0
+
+
+def test_moving_expiry_at_target_time_removes_support_before_application() -> None:
+    support_tracker, _hall, _hall_token, room, room_token = seeded_support()
+    original_id = support_tracker.supports[0].support_id
+    hall2 = episode(
+        "hall2",
+        profile_name="transition_fast",
+        at=NOW + timedelta(seconds=3),
+    )
+    hall2_token = token(
+        hall2,
+        NOW + timedelta(seconds=3),
+        ("hall", "room", "hall2"),
+    )
+    apply_token(
+        support_tracker,
+        hall2_token,
+        (room, hall2),
+        (belief(room), belief(hall2)),
+        sources=(room_token,),
+    )
+    expiry = hall2_token.valid_until
+    room2 = episode(
+        "room2",
+        profile_name="stay_presence",
+        at=expiry,
+    )
+    room2_token = token(
+        room2,
+        expiry,
+        ("hall", "hall2", "room2"),
+    )
+
+    apply_token(
+        support_tracker,
+        room2_token,
+        (room, hall2, room2),
+        (belief(room), belief(hall2), belief(room2)),
+        sources=(hall2_token,),
+    )
+
+    assert len(support_tracker.supports) == 1
+    replacement = support_tracker.supports[0]
+    assert replacement.support_id != original_id
+    assert replacement.current_node_id == "room2"
+    assert support_tracker.counters["support_created"] == 2
+    assert support_tracker.counters["support_expired"] == 1
+    assert support_tracker.counters["support_stale_binding_ignored"] == 0
+    assert {
+        binding.token_id: binding.support_id
+        for binding in support_tracker.bindings
+    }[hall2_token.token_id] == replacement.support_id
+
+
+def test_failed_application_commits_neither_supports_nor_counters() -> None:
+    support_tracker, _hall, _hall_token, room, room_token = seeded_support()
+    before_supports = support_tracker.supports
+    before_bindings = support_tracker.bindings
+    before_counters = support_tracker.counters
+    before_transition = support_tracker.latest_transition
+    hall2 = episode(
+        "hall2",
+        profile_name="transition_fast",
+        at=NOW + timedelta(seconds=3),
+    )
+    target = token(
+        hall2,
+        NOW + timedelta(seconds=3),
+        ("hall", "room", "hall2"),
+    )
+    invalid = replace(
+        authorization(target, (room_token,)),
+        authorized_at=target.accepted_at + timedelta(microseconds=1),
+    )
+
+    with pytest.raises(ValueError, match="inputs are inconsistent"):
+        support_tracker.apply(
+            target.accepted_at,
+            EpisodeEffect(
+                target.node_id,
+                target.zone,
+                target.episode_id,
+                "positive",
+                target.accepted_at,
+            ),
+            invalid,
+            target,
+            (room, hall2),
+            (belief(room), belief(hall2)),
+            (room_token, target),
+            (),
+        )
+
+    assert support_tracker.supports == before_supports
+    assert support_tracker.bindings == before_bindings
+    assert support_tracker.counters == before_counters
+    assert support_tracker.latest_transition == before_transition
+
+    apply_token(
+        support_tracker,
+        target,
+        (room, hall2),
+        (belief(room), belief(hall2)),
+        sources=(room_token,),
+    )
+    assert support_tracker.supports[0].current_node_id == "hall2"
 
 
 def test_source_set_merge_coalesces_before_transfer_and_split_cannot_clone() -> None:
@@ -629,7 +1071,7 @@ def test_source_set_merge_coalesces_before_transfer_and_split_cannot_clone() -> 
     target = token(
         hall2,
         NOW + timedelta(seconds=4),
-        ("hall", "room", "hall2"),
+        ("room", "other_room", "hall2"),
     )
     apply_token(
         support_tracker,
@@ -766,6 +1208,22 @@ def test_stable_clear_moving_expiry_cap_and_count_zero_are_conservative() -> Non
         binding.token_id == rebound_token.token_id
         for binding in support_tracker.bindings
     )
+    current = support_tracker.supports[0]
+    support_by_id = {current.support_id: current}
+    binding_by_token = {
+        binding.token_id: binding.support_id
+        for binding in support_tracker.bindings
+    }
+    assert support_tracker._binding_authority(  # noqa: SLF001
+        room_token,
+        support_by_id,
+        binding_by_token,
+    ) == (None, True)
+    assert support_tracker._binding_authority(  # noqa: SLF001
+        rebound_token,
+        support_by_id,
+        binding_by_token,
+    ) == (current.support_id, False)
 
     outward_belief = replace(
         belief(rebound),
@@ -828,8 +1286,10 @@ def test_stable_clear_moving_expiry_cap_and_count_zero_are_conservative() -> Non
         (other_room,),
         (belief(other_room),),
     )
+    before_clear = support_tracker.counters
     support_tracker.clear(NOW + timedelta(seconds=12))
     assert support_tracker.supports == ()
     assert support_tracker.bindings == ()
+    assert support_tracker.counters == before_clear
     assert support_tracker.latest_transition is not None
     assert support_tracker.latest_transition.reason == "count_zero"

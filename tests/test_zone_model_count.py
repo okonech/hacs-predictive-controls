@@ -22,6 +22,7 @@ from custom_components.predictive_controls.zone_model.types import (
     CountSupport,
     SensorInput,
 )
+from tests.test_zone_model_engine import engine_before_stale_transfer
 
 NOW = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
 pytestmark = pytest.mark.target_model
@@ -333,6 +334,28 @@ def test_two_settled_supports_degrade_stuck_assertion_only_after_full_dwell() ->
         state for state in released.snapshot.policy_states if state.zone == "target"
     )
     assert not target_policy.active
+
+
+def test_retained_support_prevents_count_conflict_on_its_asserted_endpoint() -> None:
+    engine = engine_before_stale_transfer(NOW)
+
+    engine.observe(
+        SensorInput("binary_sensor.second", "on", NOW + timedelta(seconds=4))
+    )
+    engine.advance(NOW + timedelta(seconds=5))
+
+    assert {support.current_zone for support in engine.snapshot.anonymous_supports} == {
+        "independent_stay",
+        "retained",
+    }
+    assert not any(
+        conflict.target_node_id == "retained"
+        for conflict in engine.snapshot.count_conflicts
+    )
+    assert any(
+        conflict.target_node_id == "second"
+        for conflict in engine.snapshot.count_conflicts
+    )
 
 
 def test_external_clear_at_conflict_deadline_cannot_prevent_health_diagnosis() -> None:

@@ -592,10 +592,18 @@ learning, and a credible settled endpoint may remain after ordinary token expiry
   confirmed-equivalent only for creating one count-only support; the support
   gains no belief, traversal, prediction, learning, or policy authority. Its ID
   is derived from the first confirmed-equivalent target token. Accepted
-  source-token mappings transfer the same support to one new endpoint; a mapped
-  source set containing several supports coalesces them under the least ID before
-  transfer. Connected current confirmed-equivalent token components and distinct
-  supports settled in one zone also coalesce. A split never clones support.
+  source-token mappings may select the same support for transfer only when each
+  selecting token's `accepted_at` is at or after that support's `updated_at`
+  causal mutation frontier and the token's node occurs before the target on the
+  accepted authorization path; exact timestamp equality remains eligible.
+  Linked authorization lineage outside that selected path cannot transfer or
+  merge support. A mapped source set coalesces only supports selected by eligible
+  tokens under the least ID before transfer. Connected current
+  confirmed-equivalent token components likewise exclude temporally stale
+  bindings; distinct supports settled in one zone still coalesce by endpoint. A
+  stale or off-path binding remains bounded lineage and cannot cause target
+  rebinding, but may remap to an independently selected coalescence winner to
+  preserve referential integrity. A split never clones support.
   Current front evidence is never counted alongside its derived support, and
   lingering `active` or high belief alone cannot create support.
   Topology-preserving transfer retains identity and conflict dwell;
@@ -633,10 +641,15 @@ learning, and a credible settled endpoint may remain after ordinary token expiry
   it and cancels dependent conflict dwell. Ordinary
   traversal-token expiry does not remove a settled support. A compatible accepted
   authorization advances it only when the complete source-token set contains a
-  current mapping to that support. Remote graph activity without a mapped source
-  cannot move, duplicate, or erase it. Creation, transfer, coalescence, removal,
-  and mapping rewrite are validated and committed atomically in event-time order.
-  Cardinality or ambiguity may decline/coalesce support but never invent another.
+  current mapping to that support whose token is temporally eligible and occurs
+  before the target on the accepted authorization path. A token accepted before
+  the support's current `updated_at` frontier cannot prove departure from that
+  endpoint or select it for binding-derived coalescence; linked lineage outside
+  the selected target path cannot prove departure either. Remote graph activity
+  without an eligible mapped source cannot move, duplicate, or erase it.
+  Creation, transfer, coalescence, removal, and mapping rewrite are validated and
+  committed atomically in event-time order. Cardinality or ambiguity may
+  decline/coalesce support but never invent another.
 
 ## 9. Automation Policy
 
@@ -947,10 +960,14 @@ Persist only state needed to reproduce the next decision:
   and belief threshold are mutually compatible, including unit reliability for
   local-interaction provenance. A moving support requires its mapped current
   target token; a settled support has no deadline and may outlive all bindings.
-  Invalid or unknown v4 interaction provenance rejects atomically. Before the
-  first v4 primary write, an accepted v3 payload is copied once to a distinct
-  immutable rollback store; downgrade restores that payload or cold-bootstraps
-  inference without modifying map, entity, learned, or user configuration.
+  Restored active and retained bindings use the same temporal authority rule as
+  uninterrupted execution: a token older than the mapped support's `updated_at`
+  remains lineage but cannot select, coalesce, transfer, or target-rebind that
+  support. Restore does not rewrite that binding or invent movement. Invalid or
+  unknown v4 interaction provenance rejects atomically. Before the first v4
+  primary write, an accepted v3 payload is copied once to a distinct immutable
+  rollback store; downgrade restores that payload or cold-bootstraps inference
+  without modifying map, entity, learned, or user configuration.
 
 ## 14. Explainability and Diagnostics
 
@@ -1125,27 +1142,27 @@ This section is the maintained current-state index for the implementation. It is
 descriptive evidence of conformance, not a second source of requirements. The
 numbered requirements above remain authoritative if a summary here is incomplete.
 
-**Last conformance review:** 2026-08-22, after independent physical-interaction
-implementation review
+**Last conformance review:** 2026-08-22, after independent temporal
+support-transfer authority review
 **Repository version:** `0.2.6`
 **Home Assistant Store version:** `7`
 **Current inference schema:** `zone-belief-v4`
 **Known specification divergences:** none
 
-| Layer                     | Implemented contract                                                                                                                                                                   | Owning implementation                                                    |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| Map and profiles          | Physical aliases, reciprocal adjacency, directed timing overrides, reliability, capability-based shared profile assignment, and unit reliability for conclusive interaction nodes      | `model.py`, `yaml_config.py`, `zone_model/profiles.py`                   |
-| Physical evidence         | Bounded sensor and interaction-pulse episodes, alias/flap deduplication, stable clear, per-alias interaction health invalidation, hardware hold, trust horizons, and cadence health    | `zone_model/episodes.py`                                                 |
-| Zone belief               | Per-zone binary log-odds filtering, reliability-tempered likelihoods, generation-idempotent finite-ceiling interaction evidence, role/context decay, and supported-arrival transitions | `zone_model/filter.py`, `zone_model/calibration.py`                      |
-| Traversal and acquisition | Pending bootstrap, immediate local-interaction acquisition, provisional and confirmed anonymous paths, adjacency, same-zone, boundary, missed-edge, and continuity reopening           | `zone_model/traversal.py`, `zone_model/engine.py`                        |
-| Anonymous supports        | Bounded moving/settled support state, creation from confirmed traversal, source-token transfer, coalescence, same-zone settlement, token bindings, and deterministic removal           | `zone_model/supports.py`                                                 |
-| Count context             | Categorical count zero, positive-count validation, and count-conflict dwell, health degradation, and recovery from immutable support projections                                       | `zone_model/count.py`, `zone_model/engine.py`                            |
-| Policy and public control | Shared 0.70/0.30 hysteresis, profile release dwell, one `active` entity per zone, `home_active`, and optional deduplicated arrival events                                              | `zone_model/policy.py`, `binary_sensor.py`, `event.py`                   |
-| Prediction and learning   | Confirmed-route learning, fixed 0.85 maturity threshold, minimum five accepted transitions, and nonrenewing 10-second internal activation leases                                       | `zone_model/prediction.py`, `markov.py`                                  |
-| Persistence and migration | Atomic v4 persistence; strict restore; conservative v3 and v2 import; deferred schema-6 active seed; immutable accepted-v3 rollback backup                                             | `zone_model/persistence.py`, `storage.py`, `occupancy_tracker.py`        |
-| Diagnostics and UI        | Bounded policy audit, beliefs, episodes, health, traversal, supports, conflicts, predictions, lifecycle counters, WebSocket status, and Activity/map panel                             | `zone_model/policy.py`, `status.py`, `websocket.py`, `frontend/panel.js` |
-| Runtime integration       | State and physical-interaction event normalization, authoritative count, deterministic timer advancement, edge-gated publication, delayed persistence, and final save                  | `runtime.py`, `occupancy_tracker.py`, `__init__.py`                      |
-| Validation                | Retained public incidents and target fixtures, 100% Python branch coverage, Ruff, strict mypy, frontend tests/build, and bounded 100-event benchmark including local interaction       | `tests/`, `benchmarks/occupancy_performance.py`                          |
+| Layer                     | Implemented contract                                                                                                                                                                          | Owning implementation                                                    |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| Map and profiles          | Physical aliases, reciprocal adjacency, directed timing overrides, reliability, capability-based shared profile assignment, and unit reliability for conclusive interaction nodes             | `model.py`, `yaml_config.py`, `zone_model/profiles.py`                   |
+| Physical evidence         | Bounded sensor and interaction-pulse episodes, alias/flap deduplication, stable clear, per-alias interaction health invalidation, hardware hold, trust horizons, and cadence health           | `zone_model/episodes.py`                                                 |
+| Zone belief               | Per-zone binary log-odds filtering, reliability-tempered likelihoods, generation-idempotent finite-ceiling interaction evidence, role/context decay, and supported-arrival transitions        | `zone_model/filter.py`, `zone_model/calibration.py`                      |
+| Traversal and acquisition | Pending bootstrap, immediate local-interaction acquisition, provisional and confirmed anonymous paths, adjacency, same-zone, boundary, missed-edge, and continuity reopening                  | `zone_model/traversal.py`, `zone_model/engine.py`                        |
+| Anonymous supports        | Bounded moving/settled support state, confirmed creation, causal-frontier and selected-path transfer authority, guarded binding, coalescence, same-zone settlement, and deterministic removal | `zone_model/supports.py`                                                 |
+| Count context             | Categorical count zero, positive-count validation, and count-conflict dwell, health degradation, and recovery from immutable support projections                                              | `zone_model/count.py`, `zone_model/engine.py`                            |
+| Policy and public control | Shared 0.70/0.30 hysteresis, profile release dwell, one `active` entity per zone, `home_active`, and optional deduplicated arrival events                                                     | `zone_model/policy.py`, `binary_sensor.py`, `event.py`                   |
+| Prediction and learning   | Confirmed-route learning, fixed 0.85 maturity threshold, minimum five accepted transitions, and nonrenewing 10-second internal activation leases                                              | `zone_model/prediction.py`, `markov.py`                                  |
+| Persistence and migration | Atomic v4 persistence; strict restore; conservative v3 and v2 import; deferred schema-6 active seed; immutable accepted-v3 rollback backup                                                    | `zone_model/persistence.py`, `storage.py`, `occupancy_tracker.py`        |
+| Diagnostics and UI        | Bounded policy audit, beliefs, episodes, health, traversal, supports, conflicts, predictions, stale-binding and other lifecycle counters, WebSocket status, and Activity/map panel            | `zone_model/policy.py`, `status.py`, `websocket.py`, `frontend/panel.js` |
+| Runtime integration       | State and physical-interaction event normalization, authoritative count, deterministic timer advancement, edge-gated publication, delayed persistence, and final save                         | `runtime.py`, `occupancy_tracker.py`, `__init__.py`                      |
+| Validation                | Retained public incidents and target fixtures, 595 Python tests at 100% branch coverage, Ruff, strict mypy, 29 frontend tests/build, and passing bounded 100-event benchmark                  | `tests/`, `benchmarks/occupancy_performance.py`                          |
 
 The current implementation includes the retained 2026-08-20 office false-release
 repair: loss of a selected outside support clears an already-degraded count
@@ -1153,3 +1170,11 @@ conflict, restores the same continuously asserted stay episode to normal local
 evaluation, and prevents release caused solely by an obsolete count
 contradiction. The exact production timestamps and public expectation are
 retained in `test_inc_2026_08_20_support_loss_recovers_asserted_stay_zone`.
+
+The implementation also includes the retained 2026-08-22 pre-arrival support
+transfer repair. A source-token binding selects support only when the token is
+at least as new as the support mutation frontier and its node precedes the target
+on the accepted path. Linked off-path lineage remains bounded but cannot move or
+target-rebind support. Restart, callback failure, coalescence remapping, exact
+expiry, count-conflict inverse, and lifecycle-counter boundaries are retained in
+the target-model regression suites.

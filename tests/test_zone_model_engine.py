@@ -37,6 +37,76 @@ def target_map() -> PredictiveMap:
     )
 
 
+def stale_transfer_map() -> PredictiveMap:
+    return PredictiveMap.from_mapping(
+        {
+            "nodes": {
+                "independent_entry": {
+                    "role": "transition_gate",
+                    "occupancy_behavior": "transient",
+                    "entities": {"motion": "binary_sensor.independent_entry"},
+                    "adjacent": ["independent_transition"],
+                },
+                "independent_transition": {
+                    "role": "transition_gate",
+                    "occupancy_behavior": "transient",
+                    "entities": {
+                        "motion": "binary_sensor.independent_transition"
+                    },
+                    "adjacent": ["independent_entry", "independent_stay"],
+                },
+                "independent_stay": {
+                    "role": "room_occupancy",
+                    "occupancy_behavior": "sustained",
+                    "entities": {"mmwave": "binary_sensor.independent_stay"},
+                    "adjacent": ["independent_transition"],
+                },
+                "source": {
+                    "role": "transition_gate",
+                    "occupancy_behavior": "transient",
+                    "entities": {"motion": "binary_sensor.source"},
+                    "adjacent": ["bridge"],
+                },
+                "bridge": {
+                    "role": "transition_gate",
+                    "occupancy_behavior": "transient",
+                    "entities": {"motion": "binary_sensor.bridge"},
+                    "adjacent": ["source", "retained", "second"],
+                },
+                "retained": {
+                    "role": "room_occupancy",
+                    "occupancy_behavior": "sustained",
+                    "entities": {"mmwave": "binary_sensor.retained"},
+                    "adjacent": ["bridge"],
+                },
+                "second": {
+                    "role": "room_occupancy",
+                    "occupancy_behavior": "sustained",
+                    "entities": {"mmwave": "binary_sensor.second"},
+                    "adjacent": ["bridge"],
+                },
+            }
+        }
+    )
+
+
+def engine_before_stale_transfer(at: datetime) -> ZoneModelEngine:
+    engine = ZoneModelEngine(stale_transfer_map(), 2, at)
+    for entity_id, event_at in (
+        ("binary_sensor.independent_entry", at + timedelta(microseconds=100000)),
+        (
+            "binary_sensor.independent_transition",
+            at + timedelta(microseconds=200000),
+        ),
+        ("binary_sensor.independent_stay", at + timedelta(microseconds=300000)),
+        ("binary_sensor.source", at + timedelta(seconds=1)),
+        ("binary_sensor.bridge", at + timedelta(seconds=2)),
+        ("binary_sensor.retained", at + timedelta(seconds=3)),
+    ):
+        engine.observe(SensorInput(entity_id, "on", event_at))
+    return engine
+
+
 def correlated_continuity_map() -> PredictiveMap:
     return PredictiveMap.from_mapping(
         {
@@ -196,6 +266,36 @@ def test_interaction_publication_failure_commits_atomic_snapshot() -> None:
     assert len(engine.snapshot.anonymous_supports) == 1
     assert engine.audit_rows[-1].local_evidence_kind == "interaction"
     assert engine.audit_rows[-1].traversal_reason == "local_interaction"
+
+
+def test_stale_transfer_publication_failure_preserves_accepted_commit() -> None:
+    engine = engine_before_stale_transfer(NOW)
+    before = engine.diagnostic_counters["support_stale_binding_ignored"]
+
+    def fail(_event: object, _decision: object, _authorization: object) -> None:
+        raise RuntimeError("publication failed")
+
+    with pytest.raises(RuntimeError, match="publication failed"):
+        engine.observe(
+            SensorInput("binary_sensor.second", "on", NOW + timedelta(seconds=4)),
+            decision_callback=fail,
+        )
+
+    assert engine.snapshot.updated_at == NOW + timedelta(seconds=4)
+    assert engine.diagnostic_counters["support_stale_binding_ignored"] == before + 1
+    assert {support.current_zone for support in engine.snapshot.anonymous_supports} == {
+        "independent_stay",
+        "retained",
+    }
+    assert next(
+        policy for policy in engine.snapshot.policy_states if policy.zone == "second"
+    ).active
+    assert any(
+        row.zone == "second"
+        and row.reason == "acquired"
+        and row.event_at == NOW + timedelta(seconds=4)
+        for row in engine.audit_rows
+    )
 
 
 def test_interaction_health_invalidates_token_and_support_without_release() -> None:

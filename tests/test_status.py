@@ -121,6 +121,7 @@ def test_support_diagnostics_keep_only_exact_legacy_id_aliases() -> None:
         "support_transferred",
         "support_coalesced",
         "support_expired",
+        "support_stale_binding_ignored",
         "count_conflict_started",
         "count_conflict_canceled",
         "count_conflict_degraded",

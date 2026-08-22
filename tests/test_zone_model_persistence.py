@@ -33,7 +33,9 @@ from tests.test_zone_model_count import (
 )
 from tests.test_zone_model_engine import (
     correlated_continuity_map,
+    engine_before_stale_transfer,
     interaction_map,
+    stale_transfer_map,
     target_map,
 )
 
@@ -529,6 +531,53 @@ def test_settled_supports_survive_restart_after_source_tokens_expire() -> None:
     )
 
     assert restored.snapshot.anonymous_supports == supports
+
+
+def test_stale_transfer_authority_is_restart_equivalent() -> None:
+    predictive_map = stale_transfer_map()
+    engine = engine_before_stale_transfer(NOW)
+    payload = serialize_target_state(predictive_map, engine)
+    restored = restore_target_state(
+        predictive_map,
+        payload,
+        engine.snapshot.updated_at,
+    )
+    uninterrupted_before = engine.diagnostic_counters[
+        "support_stale_binding_ignored"
+    ]
+    restored_before = restored.diagnostic_counters[
+        "support_stale_binding_ignored"
+    ]
+    second = SensorInput(
+        "binary_sensor.second",
+        "on",
+        NOW + timedelta(seconds=4),
+    )
+
+    uninterrupted_result = engine.observe(second)
+    restored_result = restored.observe(second)
+
+    assert restored_result.snapshot == uninterrupted_result.snapshot
+    assert restored_result.policy_events == uninterrupted_result.policy_events
+    assert (
+        restored_result.policy_decisions
+        == uninterrupted_result.policy_decisions
+    )
+    assert restored_result.authorizations == uninterrupted_result.authorizations
+    assert restored.audit_rows == engine.audit_rows
+    assert (
+        engine.diagnostic_counters["support_stale_binding_ignored"]
+        - uninterrupted_before
+        == restored.diagnostic_counters["support_stale_binding_ignored"]
+        - restored_before
+        == 1
+    )
+    retained = next(
+        support
+        for support in restored_result.snapshot.anonymous_supports
+        if support.current_zone == "retained"
+    )
+    assert retained.updated_at == NOW + timedelta(seconds=3)
 
 
 def test_weak_clear_retained_support_survives_restart() -> None:
