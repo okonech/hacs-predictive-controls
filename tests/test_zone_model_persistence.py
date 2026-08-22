@@ -19,6 +19,7 @@ from custom_components.predictive_controls.zone_model.persistence import (
     serialize_target_state,
     target_map_fingerprint,
 )
+from custom_components.predictive_controls.zone_model.policy import POLICY_CALIBRATIONS
 from custom_components.predictive_controls.zone_model.types import (
     CountInput,
     SensorInput,
@@ -30,7 +31,11 @@ from tests.test_zone_model_count import (
     conflict_map,
     engine_with_two_front_conflict,
 )
-from tests.test_zone_model_engine import correlated_continuity_map, target_map
+from tests.test_zone_model_engine import (
+    correlated_continuity_map,
+    interaction_map,
+    target_map,
+)
 
 NOW = datetime(2026, 7, 18, 23, 0, tzinfo=UTC)
 pytestmark = pytest.mark.target_model
@@ -133,6 +138,162 @@ def test_target_state_round_trips_deterministically() -> None:
     assert restored.snapshot == engine.snapshot
     assert restored.audit_rows == engine.audit_rows
     assert serialize_target_state(target_map(), restored) == payload
+
+
+def test_interaction_episode_round_trips_and_releases_on_the_same_frontier() -> None:
+    predictive_map = PredictiveMap.from_mapping(
+        {
+            "nodes": {
+                "room_interaction": {
+                    "zone": "room",
+                    "role": "room_occupancy",
+                    "occupancy_behavior": "sticky",
+                    "entities": {
+                        "interaction_scene_001": "event.room_scene_001"
+                    },
+                }
+            }
+        }
+    )
+    engine = ZoneModelEngine(predictive_map, 1, NOW)
+    press_at = NOW + timedelta(seconds=1)
+    engine.observe(SensorInput("event.room_scene_001", "pressed", press_at))
+    assert len(engine.snapshot.anonymous_supports) == 1
+    payload = serialize_target_state(predictive_map, engine)
+    clear_at = engine.snapshot.episode_states[0].clear_deadline
+    assert clear_at is not None
+
+    for restore_at in (
+        clear_at - timedelta(microseconds=1),
+        clear_at,
+        clear_at + timedelta(microseconds=1),
+    ):
+        uninterrupted = ZoneModelEngine(predictive_map, 1, NOW)
+        uninterrupted.observe(
+            SensorInput("event.room_scene_001", "pressed", press_at)
+        )
+        expected = uninterrupted.advance(restore_at)
+        restored = restore_target_state(predictive_map, payload, restore_at)
+        assert restored.snapshot == expected.snapshot
+
+    pending = ZoneModelEngine(predictive_map, 1, NOW)
+    pending.observe(SensorInput("event.room_scene_001", "pressed", press_at))
+    pending.advance(press_at + timedelta(minutes=61))
+    pending_since = pending.snapshot.policy_states[0].pending_release_since
+    assert pending_since is not None
+    release_at = (
+        pending_since
+        + POLICY_CALIBRATIONS["stay_presence"].release_dwell
+    )
+    pending_payload = serialize_target_state(predictive_map, pending)
+
+    restored_release = None
+    for restore_at in (
+        release_at - timedelta(microseconds=1),
+        release_at,
+        release_at + timedelta(microseconds=1),
+    ):
+        uninterrupted = ZoneModelEngine(predictive_map, 1, NOW)
+        uninterrupted.observe(
+            SensorInput("event.room_scene_001", "pressed", press_at)
+        )
+        uninterrupted.advance(press_at + timedelta(minutes=61))
+        expected_release = uninterrupted.advance(restore_at)
+        restored_release = restore_target_state(
+            predictive_map,
+            pending_payload,
+            restore_at,
+        )
+        assert restored_release.snapshot == expected_release.snapshot
+
+    assert restored_release is not None
+    room = next(
+        state
+        for state in restored_release.snapshot.policy_states
+        if state.zone == "room"
+    )
+    assert room.active is False
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "episode_contract",
+        "contribution_contract",
+        "contribution_identity",
+        "contribution_occurrence",
+        "token_contract",
+        "support_contract",
+        "policy_contract",
+        "audit_contract",
+        "audit_identity",
+        "audit_trust",
+    ),
+)
+def test_v4_restore_rejects_malformed_interaction_provenance(
+    mutation: str,
+) -> None:
+    predictive_map = interaction_map()
+    engine = ZoneModelEngine(predictive_map, 1, NOW)
+    press_at = NOW + timedelta(seconds=1)
+    engine.observe(SensorInput("event.room_scene_001", "pressed", press_at))
+    payload = serialize_target_state(predictive_map, engine)
+    snapshot = payload["snapshot"]
+    assert isinstance(snapshot, dict)
+
+    if mutation == "episode_contract":
+        episodes = snapshot["episode_states"]
+        assert isinstance(episodes, list) and isinstance(episodes[0], dict)
+        episodes[0]["status"] = "asserted"
+        aliases = episodes[0]["alias_states"]
+        assert isinstance(aliases, list)
+        episodes[0]["alias_states"] = [[item[0], "on"] for item in aliases]
+        episodes[0]["clear_started_at"] = None
+        episodes[0]["clear_deadline"] = None
+    elif mutation in {
+        "contribution_contract",
+        "contribution_identity",
+        "contribution_occurrence",
+    }:
+        beliefs = snapshot["belief_states"]
+        assert isinstance(beliefs, list) and isinstance(beliefs[0], dict)
+        contributions = beliefs[0]["contributions"]
+        assert (
+            isinstance(contributions, list)
+            and isinstance(contributions[0], dict)
+        )
+        if mutation == "contribution_contract":
+            contributions[0]["kind"] = "local_positive"
+        elif mutation == "contribution_identity":
+            contributions[0]["episode_id"] = None
+        else:
+            contributions[0]["at"] = NOW.isoformat()
+    elif mutation == "token_contract":
+        tokens = snapshot["traversal_tokens"]
+        assert isinstance(tokens, list) and isinstance(tokens[0], dict)
+        tokens[0]["provenance_kind"] = "adjacent"
+        tokens[0]["equivalent_confirmed_strength"] = False
+    elif mutation == "support_contract":
+        supports = snapshot["anonymous_supports"]
+        assert isinstance(supports, list) and isinstance(supports[0], dict)
+        supports[0]["provenance_kind"] = "adjacent"
+    elif mutation == "policy_contract":
+        policies = snapshot["policy_states"]
+        assert isinstance(policies, list) and isinstance(policies[0], dict)
+        policies[0]["activation_reason"] = "boundary_authorized"
+        policies[0]["activation_provenance_kind"] = "boundary"
+    else:
+        audit = payload["audit"]
+        assert isinstance(audit, list) and isinstance(audit[0], dict)
+        if mutation == "audit_contract":
+            audit[0]["local_evidence_kind"] = "positive"
+        elif mutation == "audit_identity":
+            audit[0]["node_id"] = None
+        else:
+            audit[0]["local_trustworthy"] = False
+
+    with pytest.raises(ValueError, match="[Ii]nteraction"):
+        restore_target_state(predictive_map, payload, press_at)
 
 
 def test_correlated_continuity_lineage_round_trips_dormant_and_reopened() -> None:

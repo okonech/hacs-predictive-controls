@@ -179,6 +179,65 @@ def test_initial_reliability_alias_is_supported() -> None:
     assert predictive_map.nodes["entry"].initial_weight == 0.75
 
 
+def test_interaction_nodes_cannot_mix_state_entities_or_actuator_domains() -> None:
+    with pytest.raises(PredictiveMapError, match="cannot mix interaction and state"):
+        PredictiveMap.from_mapping(
+            {
+                "nodes": {
+                    "switch": {
+                        "entities": {
+                            "interaction_scene_001": "event.switch_scene_001",
+                            "motion": "binary_sensor.switch_motion",
+                        }
+                    }
+                }
+            }
+        )
+
+    with pytest.raises(PredictiveMapError, match="must use the event domain"):
+        PredictiveMap.from_mapping(
+            {
+                "nodes": {
+                    "switch": {
+                        "entities": {
+                            "interaction_scene_001": "light.room"
+                        }
+                    }
+                }
+            }
+        )
+
+
+def test_interaction_nodes_require_unit_reliability() -> None:
+    with pytest.raises(PredictiveMapError, match="reliability must be exactly 1.0"):
+        PredictiveMap.from_mapping(
+            {
+                "nodes": {
+                    "switch": {
+                        "entities": {
+                            "interaction_scene_001": "event.switch_scene_001"
+                        },
+                        "reliability": 0.99,
+                    }
+                }
+            }
+        )
+
+    predictive_map = PredictiveMap.from_mapping(
+        {
+            "nodes": {
+                "switch": {
+                    "entities": {
+                        "interaction_scene_001": "event.switch_scene_001"
+                    }
+                }
+            }
+        }
+    )
+
+    assert predictive_map.nodes["switch"].reliability == 1.0
+
+
 def test_reliability_aliases_must_agree() -> None:
     with pytest.raises(PredictiveMapError, match="aliases must agree"):
         PredictiveMap.from_mapping(

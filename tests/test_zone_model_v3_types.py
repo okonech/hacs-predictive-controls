@@ -41,6 +41,8 @@ def test_v3_profile_and_physical_input_validation_boundaries() -> None:
     for changes in ({"reliability": 0.0}, {"route_prior_weight": 0.0}):
         with pytest.raises(ValueError):
             replace(node, **changes)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="Interaction aliases"):
+        replace(node, interaction_aliases=("event.unmapped",))
 
     with pytest.raises(ValueError, match="Sensor reliability"):
         SensorInput("binary_sensor.node", "on", NOW, 0.0)

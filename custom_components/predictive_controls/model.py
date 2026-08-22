@@ -5,6 +5,15 @@ from dataclasses import dataclass, field
 from typing import Any
 
 OCCUPANCY_BEHAVIORS = ("transient", "sustained", "sticky", "ambiguous")
+INTERACTION_SIGNAL_PREFIX = "interaction"
+
+
+def is_interaction_signal_type(signal_type: str) -> bool:
+    """Return whether a map binding represents a physical interaction pulse."""
+
+    return signal_type == INTERACTION_SIGNAL_PREFIX or signal_type.startswith(
+        f"{INTERACTION_SIGNAL_PREFIX}_"
+    )
 
 
 class PredictiveMapError(ValueError):
@@ -93,6 +102,22 @@ class NodeConfig:
         if not isinstance(entities, dict):
             raise PredictiveMapError(f"Node {node_id!r} entities must be a mapping")
         parsed_entities = {str(key): str(value) for key, value in entities.items()}
+        interaction_signals = {
+            signal_type
+            for signal_type in parsed_entities
+            if is_interaction_signal_type(signal_type)
+        }
+        if interaction_signals and len(interaction_signals) != len(parsed_entities):
+            raise PredictiveMapError(
+                f"Node {node_id!r} cannot mix interaction and state entities"
+            )
+        if any(
+            not parsed_entities[signal_type].startswith("event.")
+            for signal_type in interaction_signals
+        ):
+            raise PredictiveMapError(
+                f"Node {node_id!r} interaction entities must use the event domain"
+            )
 
         adjacent = raw.get("adjacent", [])
         if not isinstance(adjacent, list):
@@ -140,6 +165,10 @@ class NodeConfig:
         if not math.isfinite(parsed_reliability) or not 0 < parsed_reliability <= 1:
             raise PredictiveMapError(
                 f"Node {node_id!r} reliability must be finite and in (0, 1]"
+            )
+        if interaction_signals and parsed_reliability != 1.0:
+            raise PredictiveMapError(
+                f"Node {node_id!r} interaction reliability must be exactly 1.0"
             )
 
         route_prior_weight = raw.get("route_prior_weight", 1.0)

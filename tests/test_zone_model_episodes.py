@@ -221,6 +221,72 @@ def test_stale_duplicate_and_invalid_inputs_are_model_neutral() -> None:
         model.advance(NOW.replace(tzinfo=None))
 
 
+def test_interaction_pulses_deduplicate_replay_but_accept_new_scene_edges() -> None:
+    aliases = ("event.switch_scene_001", "event.switch_scene_002")
+    model = PhysicalEpisodes(
+        (
+            PhysicalNode(
+                "switch",
+                "room",
+                aliases,
+                "stay_pir",
+                interaction_aliases=aliases,
+            ),
+        )
+    )
+    first_input = SensorInput(aliases[0], "pressed", NOW)
+
+    first = model.observe(first_input)
+    duplicate = model.observe(first_input)
+    repeated = model.observe(
+        SensorInput(aliases[1], "pressed", NOW + timedelta(seconds=1))
+    )
+    snapshot = model.states
+    stale = model.observe(
+        SensorInput(aliases[0], "pressed", NOW + timedelta(milliseconds=500))
+    )
+
+    assert first.disposition == "accepted_interaction"
+    assert [effect.kind for effect in first.effects] == ["interaction"]
+    assert duplicate.disposition == "duplicate"
+    assert duplicate.effects == ()
+    assert repeated.disposition == "accepted_interaction"
+    assert repeated.state.generation == first.state.generation + 1
+    assert [effect.kind for effect in repeated.effects] == ["interaction"]
+    assert stale.disposition == "stale"
+    assert model.states == snapshot
+
+    with pytest.raises(ValueError, match="must use an interaction alias"):
+        episodes().observe(SensorInput("binary_sensor.a", "pressed", NOW))
+
+
+def test_interaction_health_state_invalidates_single_alias_authority() -> None:
+    aliases = ("event.switch_scene_001", "event.switch_scene_002")
+    model = PhysicalEpisodes(
+        (
+            PhysicalNode(
+                "switch",
+                "room",
+                aliases,
+                "stay_pir",
+                interaction_aliases=aliases,
+            ),
+        )
+    )
+    pressed = model.observe(SensorInput(aliases[0], "pressed", NOW))
+
+    unavailable = model.observe(
+        SensorInput(aliases[1], "unknown", NOW + timedelta(seconds=1))
+    )
+
+    assert pressed.state.traversal_valid_until is not None
+    assert unavailable.disposition == "neutral_availability"
+    assert unavailable.state.status == "unavailable"
+    assert unavailable.state.traversal_valid_until is None
+    assert unavailable.state.clear_started_at is None
+    assert unavailable.state.clear_deadline is None
+
+
 def test_snapshot_restore_and_time_advancement_are_deterministic() -> None:
     uninterrupted = episodes(profile="stay_pir")
     uninterrupted.observe(sensor("binary_sensor.a", "on", 0))

@@ -57,6 +57,36 @@ def test_supported_arrival_bounds_high_prior_without_entering_release_region() -
     assert supported.probability > 0.7
 
 
+def test_interaction_applies_the_finite_ceiling_once_per_episode() -> None:
+    filter_ = belief_filter()
+
+    applied = filter_.apply_interaction("interaction", NOW)
+    duplicate = filter_.apply_interaction("interaction", NOW)
+
+    assert applied.log_odds == 30.0
+    assert duplicate == applied
+    assert contribution_count(filter_, "local_interaction") == 1
+
+
+def test_interaction_idempotency_uses_generation_after_restore() -> None:
+    filter_ = belief_filter(contribution_limit=1)
+    filter_.apply_interaction("interaction", NOW)
+    evicted = filter_.advance(NOW + timedelta(seconds=1))
+    assert contribution_count(filter_, "local_interaction") == 0
+
+    restored = ZoneBeliefFilter.restore(
+        BELIEF_PROFILES["stay_pir"],
+        evicted,
+        contribution_limit=1,
+    )
+    duplicate = restored.apply_interaction(
+        "interaction", NOW + timedelta(seconds=1)
+    )
+
+    assert duplicate == evicted
+    assert duplicate.log_odds < 30.0
+
+
 def test_arrival_transition_and_observation_reliability_reject_invalid_inputs() -> None:
     filter_ = belief_filter()
     filter_.apply_positive("episode", NOW)

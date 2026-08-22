@@ -69,3 +69,46 @@ def test_event_from_entity_preserves_health_states_and_rejects_junk() -> None:
         allow_unsupported_state=True,
     )
     assert normalized is not None and normalized.state == "unknown"
+
+
+def test_event_from_entity_normalizes_live_interaction_but_not_startup_state() -> None:
+    predictive_map = PredictiveMap.from_mapping(
+        {
+            "nodes": {
+                "bathroom_switch": {
+                    "zone": "bathroom",
+                    "role": "room_occupancy",
+                    "occupancy_behavior": "sticky",
+                    "entities": {
+                        "interaction_scene_002": "event.bathroom_scene_002"
+                    },
+                }
+            }
+        }
+    )
+    now = datetime(2026, 8, 22, 7, 28, 36, 46000, tzinfo=UTC)
+    retained_timestamp = "2026-08-22T07:28:36.046+00:00"
+
+    live = event_from_entity(
+        predictive_map,
+        "event.bathroom_scene_002",
+        retained_timestamp,
+        now,
+    )
+    startup = event_from_entity(
+        predictive_map,
+        "event.bathroom_scene_002",
+        retained_timestamp,
+        now,
+        allow_unsupported_state=True,
+    )
+    unavailable = event_from_entity(
+        predictive_map,
+        "event.bathroom_scene_002",
+        "unavailable",
+        now,
+    )
+
+    assert live is not None and live.state == "pressed"
+    assert startup is not None and startup.state == "unknown"
+    assert unavailable is not None and unavailable.state == "unavailable"

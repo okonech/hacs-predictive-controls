@@ -171,10 +171,16 @@ class ZoneModelEngine:
         audits: dict[str, PolicyAuditLog] = {
             zone: PolicyAuditLog() for zone in candidate._policies
         }
+        episodes = {state.node_id: state for state in snapshot.episode_states}
         for row in sorted(audit_rows, key=lambda item: (item.event_at, item.zone)):
             audit = audits.get(row.zone)
             if audit is None or row.event_at > snapshot.updated_at:
                 raise ValueError("Zone-model audit row is incompatible")
+            candidate._validate_interaction_audit(
+                row,
+                episodes,
+                snapshot.updated_at,
+            )
             audit.append(row)
         candidate._policies = {
             zone: ZonePolicy(
@@ -371,7 +377,7 @@ class ZoneModelEngine:
         # not erase the asserted episode before its health diagnosis. Positive
         # acquisition events defer this whole-house work until after the local
         # publication callback.
-        if event.state != "on":
+        if event.state not in {"on", "pressed"}:
             self._apply_count_conflicts(event.event_at)
         update = self._episodes.observe(event)
         if update.disposition in {"stale", "duplicate"}:
@@ -648,6 +654,12 @@ class ZoneModelEngine:
         TraversalToken | None,
     ]:
         filter_ = self._filters[effect.zone]
+        token: TraversalToken | None
+        if effect.kind == "interaction":
+            filter_.apply_interaction(effect.episode_id, effect.at)
+            authorization = self._frontier.authorize_interaction(state, effect.at)
+            token = self._frontier.issue(state, effect, authorization)
+            return authorization, effect, token
         if effect.kind == "positive":
             filter_.apply_positive(effect.episode_id, effect.at, effect.reliability)
             authorization = self._frontier.authorize(
@@ -679,9 +691,10 @@ class ZoneModelEngine:
             self._frontier.sync(state, effect.at)
             return None, effect, None
         if effect.kind == "stable_clear":
-            filter_.apply_stable_clear(
-                effect.episode_id, effect.at, effect.reliability
-            )
+            if filter_.state.generation_episode_id == effect.episode_id:
+                filter_.apply_stable_clear(
+                    effect.episode_id, effect.at, effect.reliability
+                )
         elif effect.kind == "health_degraded":
             filter_.apply_health_degraded(effect.episode_id, effect.at)
         else:
@@ -1002,11 +1015,45 @@ class ZoneModelEngine:
         if processing_at < event_at:
             raise ValueError("Zone-model processing time cannot precede event time")
 
+    def _validate_interaction_audit(
+        self,
+        row: PolicyDecision,
+        episodes: Mapping[str, EpisodeState],
+        frontier: datetime,
+    ) -> None:
+        interaction_evidence = row.local_evidence_kind == "interaction"
+        interaction_traversal = row.traversal_reason == "local_interaction"
+        if interaction_evidence != interaction_traversal:
+            raise ValueError("Interaction audit provenance is inconsistent")
+        if not interaction_evidence:
+            return
+        if row.node_id is None or row.episode_id is None:
+            raise ValueError("Interaction audit identity is incomplete")
+        state, created_at = self._episode_reference(
+            row.episode_id,
+            episodes,
+            frontier,
+            exact=False,
+        )
+        node = next(item for item in self._nodes if item.node_id == state.node_id)
+        if (
+            state.node_id != row.node_id
+            or state.zone != row.zone
+            or not node.interaction_aliases
+            or node.reliability != 1.0
+            or row.event_at != created_at
+            or not row.local_trustworthy
+            or not row.authorization_authorized
+            or row.episode_id not in row.evidence_ids
+        ):
+            raise ValueError("Interaction audit is not episode-derived")
+
     def _validate_snapshot_integrity(self, snapshot: ZoneModelSnapshot) -> None:
         """Validate cross-component links and frontiers before installing state."""
 
         at = snapshot.updated_at
         episodes = {state.node_id: state for state in snapshot.episode_states}
+        physical_nodes = {node.node_id: node for node in self._nodes}
         for state in snapshot.episode_states:
             historical_frontiers = (
                 state.started_at,
@@ -1030,6 +1077,37 @@ class ZoneModelEngine:
                 )
                 if state.zone != belief.zone:
                     raise ValueError("Belief snapshot episode is zone-incompatible")
+            for contribution in belief.contributions:
+                if contribution.episode_id is None:
+                    if contribution.kind == "local_interaction":
+                        raise ValueError(
+                            "Interaction belief contribution has no episode"
+                        )
+                    continue
+                source, created_at = self._episode_reference(
+                    contribution.episode_id,
+                    episodes,
+                    at,
+                    exact=False,
+                )
+                interaction_source = bool(
+                    physical_nodes[source.node_id].interaction_aliases
+                )
+                if contribution.kind == "local_interaction" and (
+                    not interaction_source
+                    or source.zone != belief.zone
+                    or contribution.at != created_at
+                ):
+                    raise ValueError(
+                        "Interaction belief contribution is not episode-derived"
+                    )
+                if interaction_source and contribution.kind in {
+                    "arrival_transition",
+                    "local_positive",
+                }:
+                    raise ValueError(
+                        "Interaction episode retains ordinary positive belief"
+                    )
 
         for policy in snapshot.policy_states:
             if policy.last_evaluated_at > at:
@@ -1060,9 +1138,12 @@ class ZoneModelEngine:
                     at,
                     exact=False,
                 )
+                physical_node = physical_nodes[state.node_id]
+                interaction_episode = bool(physical_node.interaction_aliases)
                 expected_provenance = {
                     "adjacent_authorized": "adjacent",
                     "boundary_authorized": "boundary",
+                    "local_interaction": "local_interaction",
                     "missed_edge_authorized": "missed_edge",
                     "prediction_confirmed": "prediction_confirmation",
                     "provisional_track_acquired": "adjacent_pair",
@@ -1082,8 +1163,13 @@ class ZoneModelEngine:
                 source_nodes = {source.node_id for source in source_states}
                 requires_source = policy.activation_reason not in {
                     "boundary_authorized",
+                    "local_interaction",
                     "prediction_confirmed",
                 }
+                if interaction_episode != (
+                    policy.activation_reason == "local_interaction"
+                ):
+                    raise ValueError("Interaction policy provenance is incompatible")
                 if (
                     state.zone != policy.zone
                     or created_at != policy.activation_at
@@ -1136,6 +1222,14 @@ class ZoneModelEngine:
                             or source_states
                         )
                     )
+                    or (
+                        policy.activation_reason == "local_interaction"
+                        and (
+                            policy.activation_track_confidence != "provisional"
+                            or len(path) != 1
+                            or source_states
+                        )
+                    )
                 ):
                     raise ValueError(
                         "Evidence-active policy is not bound to its acquisition episode"
@@ -1166,6 +1260,7 @@ class ZoneModelEngine:
             "adjacent",
             "adjacent_pair",
             "boundary",
+            "local_interaction",
             "missed_edge",
             "same_zone",
         }
@@ -1202,6 +1297,9 @@ class ZoneModelEngine:
                     trust_until,
                 )
             retained = token.token_id in retained_tokens
+            physical_node = physical_nodes[state.node_id]
+            interaction_episode = bool(physical_node.interaction_aliases)
+            interaction_token = token.provenance_kind == "local_interaction"
             if (
                 state.node_id != token.node_id
                 or created_at != token.accepted_at
@@ -1218,13 +1316,31 @@ class ZoneModelEngine:
                 or (not retained and token.valid_until <= at)
             ):
                 raise ValueError("Traversal token is not bound to its physical episode")
+            if interaction_episode != interaction_token or (
+                interaction_token
+                and (
+                    physical_node.reliability != 1.0
+                    or token.track_confidence != "provisional"
+                    or token.path_node_ids != (state.node_id,)
+                    or not token.equivalent_confirmed_strength
+                )
+            ):
+                raise ValueError("Interaction traversal token is incompatible")
             if token.provenance_kind not in allowed_provenance:
                 raise ValueError("Traversal token provenance is incompatible")
             if token.track_confidence == "confirmed" and len(token.path_node_ids) != 3:
                 raise ValueError("Confirmed traversal token lacks a bounded path")
             if token.equivalent_confirmed_strength and (
-                token.provenance_kind not in {"boundary", "missed_edge"}
-                or len(token.path_node_ids) != 3
+                (
+                    token.provenance_kind in {"boundary", "missed_edge"}
+                    and len(token.path_node_ids) != 3
+                )
+                or (
+                    token.provenance_kind == "local_interaction"
+                    and len(token.path_node_ids) != 1
+                )
+                or token.provenance_kind
+                not in {"boundary", "local_interaction", "missed_edge"}
             ):
                 raise ValueError("Equivalent traversal strength is incompatible")
             if any(node_id not in self._map.nodes for node_id in token.path_node_ids):
@@ -1305,8 +1421,12 @@ class ZoneModelEngine:
                 raise ValueError("Pending candidate is not bound to its episode")
 
         for use in snapshot.authorization_uses:
-            source = tokens.get(use.token_id) or retained_tokens.get(use.token_id)
-            if source is None or not source.accepted_at <= use.authorized_at <= at:
+            traversal_source = tokens.get(use.token_id) or retained_tokens.get(
+                use.token_id
+            )
+            if traversal_source is None or not (
+                traversal_source.accepted_at <= use.authorized_at <= at
+            ):
                 raise ValueError("Traversal use has an incompatible source frontier")
             _state, target_created_at = self._episode_reference(
                 use.target_episode_id,
@@ -1358,6 +1478,15 @@ class ZoneModelEngine:
                 or support.updated_at > snapshot.updated_at
             ):
                 raise ValueError("Anonymous-support endpoint is incompatible")
+            origin_token = tokens.get(
+                support.support_id.removeprefix("support:")
+            )
+            if (
+                origin_token is not None
+                and origin_token.accepted_at == support.created_at
+                and origin_token.provenance_kind != support.provenance_kind
+            ):
+                raise ValueError("Interaction support provenance is incompatible")
             if support.state == "settled":
                 calibration = POLICY_CALIBRATIONS[node.profile_name]
                 if (

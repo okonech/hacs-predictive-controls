@@ -65,6 +65,7 @@ def test_benchmark_rejects_more_than_one_thousand_events() -> None:
 
 def test_target_benchmark_reports_required_bounded_metrics() -> None:
     instrumented = run_benchmark(MAP_PATH, event_count=1, target_counts=(2,))
+    assert "local_interaction" in instrumented["fast_paths"]
     for trace in instrumented["fast_paths"].values():
         assert trace["all_activated"]
         assert trace["all_path_qualified"]
@@ -92,6 +93,7 @@ def test_target_benchmark_reports_required_bounded_metrics() -> None:
         "boundary",
         "confirmed_token",
         "correlated_continuity",
+        "local_interaction",
         "missed_edge",
         "mature_prediction",
         "same_zone",

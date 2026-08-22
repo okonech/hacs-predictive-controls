@@ -770,12 +770,15 @@ class ZonePolicy:
         return bool(
             state is not None
             and effect is not None
-            and effect.kind == "positive"
+            and effect.kind in {"interaction", "positive"}
             and effect.at == at
             and effect.node_id == state.node_id
             and effect.zone == state.zone
             and effect.episode_id == state.episode_id
-            and state.status == "asserted"
+            and (
+                state.status == "asserted"
+                or (effect.kind == "interaction" and state.status == "clearing")
+            )
             and not state.health_warning
             and not state.cadence_warning
             and state.started_at is not None

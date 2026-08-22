@@ -177,6 +177,50 @@ def test_runtime_start_bootstraps_snapshot_without_public_activation(
     assert runtime.latency_metrics["sample_count"] == 1
 
 
+def test_runtime_start_does_not_replay_retained_interaction_timestamp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = runtime_module(monkeypatch)
+    predictive_map = PredictiveMap.from_mapping(
+        {
+            "nodes": {
+                "bathroom_switch": {
+                    "zone": "bathroom",
+                    "role": "room_occupancy",
+                    "occupancy_behavior": "sticky",
+                    "entities": {
+                        "interaction_scene_002": "event.bathroom_scene_002"
+                    },
+                }
+            }
+        }
+    )
+    runtime = module.PredictiveControlsRuntime(
+        _FakeHass(
+            {
+                "event.bathroom_scene_002": _FakeState(
+                    "2026-08-22T07:28:36.046+00:00"
+                )
+            }
+        ),
+        predictive_map,
+        (),
+        transition_window=30,
+        expected_occupants=1,
+    )
+
+    runtime.start()
+
+    assert runtime_automation_summary(runtime).keep_on_zones == ()
+    live_at = datetime.now(UTC) + timedelta(seconds=1)
+    runtime.observe_entity(
+        "event.bathroom_scene_002",
+        "2026-08-22T08:00:00.000+00:00",
+        live_at,
+    )
+    assert runtime_automation_summary(runtime).keep_on_zones == ("bathroom",)
+
+
 def test_runtime_lifecycle_persistence_callbacks_and_no_direct_actions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -344,6 +344,24 @@ def _measure_fast_paths(
             "dining_sensor": {"gym_sensor": 10.0},
         },
     )
+    interaction_node_id = "living_room_interaction"
+    interaction_map = _benchmark_map(
+        predictive_map,
+        additional_nodes={
+            interaction_node_id: {
+                "zone": "living_room",
+                "role": "anchor_sensor",
+                "occupancy_behavior": "sticky",
+                "entities": {
+                    "interaction_scene_001": "event.benchmark_bathroom_scene_001"
+                },
+                "reliability": 1.0,
+            }
+        },
+    )
+    entities[interaction_node_id] = next(
+        iter(interaction_map.nodes[interaction_node_id].entities.values())
+    )
 
     (
         runtime_type,
@@ -379,6 +397,7 @@ def _measure_fast_paths(
         "boundary": [],
         "confirmed_token": [],
         "correlated_continuity": [],
+        "local_interaction": [],
         "missed_edge": [],
         "same_zone": [],
         "third_node_confirmation": [],
@@ -430,6 +449,25 @@ def _measure_fast_paths(
         return runtime.confidence
 
     for _ in range(iterations):
+        interaction = make_runtime(interaction_map, 2)
+        interaction_result = measured_observe(
+            "local_interaction",
+            interaction,
+            interaction_node_id,
+            1,
+            "living_room",
+        )
+        activations["local_interaction"] += any(
+            policy.zone == "living_room" and policy.active
+            for policy in interaction_result.policy_states.values()
+        )
+        qualifications["local_interaction"] += any(
+            item.reason == "local_interaction"
+            and item.provenance_kind == "local_interaction"
+            and item.equivalent_confirmed_strength
+            for item in interaction_result.authorizations
+        )
+
         pair = make_runtime(predictive_map, 2)
         observe(pair, "entrance_sensor", 1)
         pair_result = measured_observe(
@@ -632,11 +670,13 @@ def _benchmark_map(
     *,
     role_overrides: dict[str, tuple[str, str]] | None = None,
     transition_overrides: dict[str, dict[str, float]] | None = None,
+    additional_nodes: dict[str, dict[str, object]] | None = None,
 ) -> PredictiveMap:
     """Clone the reference graph with one reviewed fast-path calibration."""
 
     role_overrides = {} if role_overrides is None else role_overrides
     transition_overrides = {} if transition_overrides is None else transition_overrides
+    additional_nodes = {} if additional_nodes is None else additional_nodes
     nodes: dict[str, dict[str, object]] = {}
     for node_id, node in predictive_map.nodes.items():
         role, behavior = role_overrides.get(
@@ -660,6 +700,7 @@ def _benchmark_map(
             "reliability": node.reliability,
             "route_prior_weight": node.route_prior_weight,
         }
+    nodes.update(additional_nodes)
     return PredictiveMap.from_mapping({"nodes": nodes})
 
 

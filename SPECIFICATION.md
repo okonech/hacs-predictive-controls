@@ -128,6 +128,8 @@ The model consumes:
 
 - physical sensor state events with occurrence timestamps and a separate
   processing/receipt frontier;
+- mapped physical human-interaction event entities, such as local wall-switch
+  scene presses, with occurrence timestamps and no persistent asserted state;
 - a map of zones, physical nodes, entity aliases, node roles, sensor profiles,
   reliability, adjacency, and graph timing;
 - an authoritative occupant count in the supported range; and
@@ -155,10 +157,16 @@ zone and declares one role:
   close their future traversal authority until recovery. They atomically
   invalidate pending candidates and traversal tokens sourced from that physical
   node, so later activity cannot recreate authority from stale health state.
-  They are not clear or absence evidence.
+  They are not clear or absence evidence. After live operation begins, either
+  health state on any alias of an interaction-only node immediately invalidates
+  that node's token, pending context, and count support without waiting for an
+  all-alias health quorum. Startup neutralization creates no such authority.
 - **REQ-MAP-005:** Every physical node declares a finite reliability in `(0, 1]`.
   Reliability must temper local likelihood and health/conflict evaluation; it
-  may not be retained only for display or prediction smoothing.
+  may not be retained only for display or prediction smoothing. An interaction
+  node using the conclusive finite-ceiling update in `REQ-BELIEF-010` must
+  declare reliability exactly `1.0`; a source with uncertain reliability must
+  use the ordinary reliability-tempered sensor contract instead.
 
 ## 5. Physical Sensor Episodes
 
@@ -236,6 +244,15 @@ Every sensor profile declares independently:
   after hardware re-arm is not impossible cadence: it still adds no evidence,
   but may preserve bounded continuity of an already-authorized path under
   `REQ-TRAV-013`.
+- **REQ-EVID-011:** A mapped local human-interaction event is a discrete physical
+  pulse, never light, switch, fan, or other actuator output state. Each distinct
+  live event-entity occurrence starts one finite interaction episode directly in
+  clearing, while duplicate or out-of-order occurrences add no evidence. Startup
+  snapshots treat the retained event-entity timestamp as neutral and never replay
+  it as a press. Interaction aliases occupy an interaction-only physical node so
+  their pulse lifecycle cannot overwrite a motion or presence sensor episode.
+  The episode then uses the shared stable-clear, outward-conditioned decay,
+  fallback decay, threshold, and release-dwell lifecycle.
 
 ## 6. Per-Zone Belief Model
 
@@ -264,6 +281,18 @@ filter, or another reviewed formulation that preserves the following semantics:
 7. reliability tempers the strength of a local observation without changing its
    episode identity; and
 8. every continuous-time transition approaches a finite baseline.
+
+A fresh trustworthy human-interaction pulse is conclusive local evidence at the
+model's finite numerical ceiling. It sets the zone log odds to
+`LOG_ODDS_LIMIT`, never to literal probability one, and receives immediate local
+acquisition authorization without requiring prior traversal. The pulse enters
+the profile's normal stable-clear lifecycle immediately, retains one bounded
+traversal token for outward-track evidence, and then uses the same profile decay,
+threshold, and release dwell as other evidence. Compatible outward evidence
+selects `cleared_with_outward` decay; absent outward evidence selects the slower
+`cleared_without_outward` fallback so a missed exit cannot latch occupancy
+indefinitely. Remote, voice, automation, or UI changes to a light or switch state
+are not interaction evidence.
 
 Graph authorization supplies a distinct arrival-state transition after the
 reliability-tempered local observation. For a trustworthy fresh physical target
@@ -360,6 +389,13 @@ room-specific inactivity timers.
   $\log LR_{effective}=r\log LR_{profile}$. The same tempered observation drives
   belief and health/conflict evaluation; code must not discard reliability
   between input normalization and zone-model evaluation.
+- **REQ-BELIEF-010:** A trustworthy human-interaction pulse applies the finite
+  numerical ceiling exactly once for its current episode generation. Generation
+  identity, not bounded contribution or audit retention, makes the update
+  idempotent across eviction and restore. The pulse does not also apply ordinary
+  positive likelihood or the supported-arrival matrix. It does not stack with
+  repeated callbacks, bypass categorical count zero, alter thresholds or dwell,
+  or create a permanent occupancy floor; ordinary clear and decay can release it.
 
 ## 7. Traversal Frontier, Acquisition, and Reacquisition
 
@@ -437,10 +473,12 @@ candidate used as the first half of an adjacent pair is removed atomically.
   lineage retained solely for `REQ-TRAV-013` is not a usable token.
 - **REQ-TRAV-002:** Tokens are anonymous and independently consumable by distinct
   target episodes. Each token carries `provisional` or `confirmed` track
-  provenance and never becomes persistent occupant identity. Every accepted
-  authorization exposes its complete accepted source-token set and issued target
-  token to the count-only support layer without granting that layer authority to
-  change traversal acceptance.
+  provenance, or explicit `local_interaction` provenance for a source-free local
+  pulse, and never becomes persistent occupant identity. A `local_interaction`
+  authorization issues exactly one bounded one-node token for the interaction's
+  own node. Every accepted authorization exposes its complete accepted
+  source-token set and issued target token to the count-only support layer
+  without granting that layer authority to change traversal acceptance.
 - **REQ-TRAV-003:** The sequence hallway to room A to still-open hallway to room B
   must permit both fresh room episodes. Room A begins faster decay only after its
   local evidence clears and the room B episode supplies plausible outward
@@ -519,7 +557,8 @@ learning, and a credible settled endpoint may remain after ordinary token expiry
 
 - **REQ-COUNT-001:** $N=0$ sets every $q_z$ to the empty baseline, clears every
   `active` output, invalidates traversal tokens and prediction leases, and emits
-  one explained edge per changed public entity.
+  one explained edge per changed public entity. A local interaction pulse cannot
+  bypass this categorical empty-house state.
 - **REQ-COUNT-002:** A change to positive $N$ must not invent a room, movement,
   activation, or person identity. Boundary evidence may shape reacquisition.
 - **REQ-COUNT-003:** For $N>0$, count is a bounded soft regularizer over independent
@@ -536,25 +575,31 @@ learning, and a credible settled endpoint may remain after ordinary token expiry
   is unnecessary when local filtered belief already satisfies release policy.
 - **REQ-COUNT-005:** Same-zone multiplicity is always possible. Two occupants do
   not require two active zones, and one occupant may leave one of several recently
-  active zones ambiguous.
+  active zones ambiguous. Multiple supports settling in one zone, including
+  interaction-derived support, coalesce rather than force another room active.
 - **REQ-COUNT-006:** Stale, duplicate, invalid, or unavailable count controls are
   ignored and diagnosed without changing the last valid count.
 - **REQ-COUNT-007:** Count conflict never delays an adjacent-token,
   adjacent-pair bootstrap, same-zone independent, boundary, bounded missed-edge,
-  or mature prediction authorization. Those paths explain movement or establish a
-  graph-supported front rather than inventing an isolated additional front.
+  local-interaction, or mature prediction authorization while $N>0$. Those paths
+  explain movement or establish a graph-supported front rather than inventing an
+  isolated additional front.
 - **REQ-COUNT-008:** Support construction is anonymous, deterministic,
   reliability-aware, and bounded by `PRODUCT_MAX_OCCUPANTS`. A support begins
   only from confirmed three-node adjacent provenance or a reviewed
-  boundary/missed-edge equivalent already accepted by traversal. Its ID is
-  derived from the first confirmed target token. Accepted source-token mappings
-  transfer the same support to one new endpoint; a mapped source set containing
-  several supports coalesces them under the least ID before transfer. Connected
-  current confirmed token components and distinct supports settled in one zone
-  also coalesce. A split never clones support. Current front evidence is never
-  counted alongside its derived support, and lingering `active` or high belief
-  alone cannot create support. Topology-preserving transfer retains identity and
-  conflict dwell; selected-support loss, split, or merge cancels dwell.
+  boundary/missed-edge equivalent already accepted by traversal, or one fresh
+  unit-reliability `local_interaction` token. Local interaction is
+  confirmed-equivalent only for creating one count-only support; the support
+  gains no belief, traversal, prediction, learning, or policy authority. Its ID
+  is derived from the first confirmed-equivalent target token. Accepted
+  source-token mappings transfer the same support to one new endpoint; a mapped
+  source set containing several supports coalesces them under the least ID before
+  transfer. Connected current confirmed-equivalent token components and distinct
+  supports settled in one zone also coalesce. A split never clones support.
+  Current front evidence is never counted alongside its derived support, and
+  lingering `active` or high belief alone cannot create support.
+  Topology-preserving transfer retains identity and conflict dwell;
+  selected-support loss, split, or merge cancels dwell.
 - **REQ-COUNT-009:** When at least $N>0$ independent count supports outside an
   asserted target persist continuously for that target profile's release dwell,
   and the target receives no new independent episode or compatible traversal
@@ -622,9 +667,13 @@ than replacing it with a separate proof system.
 
 - **REQ-POLICY-001:** Evidence acquisition requires a fresh trustworthy local
   episode, or its still-valid pending candidate, plus one traversal or
-  reacquisition authorization from Section 7. Prediction acquisition instead
-  requires the mature authorization in Section 12. Existing `active`, waiting,
-  and timer callbacks are not acquisition evidence.
+  reacquisition authorization from Section 7. A fresh trustworthy
+  human-interaction pulse is the sole source-free local-authorization exception
+  and explicitly acquires immediately when $N>0$ and its bounded belief is above
+  the ordinary on threshold. Its release uses the ordinary profile threshold and
+  dwell. Prediction acquisition instead requires the mature authorization in
+  Section 12. Existing `active`, waiting, light/output state, and timer callbacks
+  are not acquisition evidence.
 - **REQ-POLICY-002:** Release occurs when filtered belief is at or below
   $\theta_{off}$ for the profile's release-confirmation dwell. It does not require
   globally finalized movement, support certificates, or accounting for every
@@ -717,7 +766,9 @@ must reflect actual hardware behavior.
   prediction authorization bypasses it completely, including when a candidate
   was already pending.
 - **REQ-PROFILE-008:** Reliability tempers positive likelihood and sensor-health
-  conflict evaluation. Reliability alone never authorizes an inactive zone.
+  conflict evaluation. Reliability alone never authorizes an inactive zone. The
+  conclusive interaction profile is restricted to nodes with reliability exactly
+  `1.0`; uncertain physical interactions use an ordinary tempered profile.
 - **REQ-PROFILE-009:** Track-bootstrap retention never delays or vetoes compatible
   same-zone independent, adjacency, boundary, missed-edge, or mature prediction
   authorization. Its expiry only removes the candidate's ability to pair later.
@@ -833,7 +884,8 @@ Persist only state needed to reproduce the next decision:
 
 - **REQ-STATE-001:** Restore validates schema, map fingerprint, count, timestamps,
   finite probabilities, episode identity, token expiry, supports, bindings, and
-  policy state atomically.
+  policy state atomically, including every interaction episode, contribution,
+  token, authorization, support, policy, and audit provenance enum.
   Evidence-acquired active state remains bound to its acquisition episode, time,
   reason, bounded path, and source episodes. A prediction lease remains bound to
   the exact confirmed source token; its support must equal the retained target
@@ -844,14 +896,19 @@ Persist only state needed to reproduce the next decision:
   from current sensor/count snapshots without movement or public edges.
 - **REQ-STATE-003:** Restore advances decay, traversal, moving-support expiry, and
   count-conflict dwell exactly once to the restore frontier. It must not reapply
-  historical observation likelihoods or reconstruct support from belief.
+  historical observation likelihoods, including finite-ceiling interaction
+  updates, or reconstruct support from belief.
 - **REQ-STATE-004:** The one-time exact-assignment schema-6 importer may preserve
   public `active` state only as a compatibility seed. It must not invent zone
   belief, traversal tokens, or support provenance. Migration is deferred until
   current sensor state is available, and a current valid authoritative count
   overrides the stored legacy count.
 - **REQ-STATE-005:** The current persisted inference schema is
-  `zone-belief-v4`. A `zone-belief-v3` importer restores otherwise-compatible
+  `zone-belief-v4`. Interaction adds validated enum values to existing bounded
+  record shapes and no required field, so pre-interaction v4 snapshots with a
+  compatible map remain readable. Readers that do not recognize interaction
+  provenance may reject inference state and cold bootstrap without modifying map,
+  entity, learned, or user configuration. A `zone-belief-v3` importer restores otherwise-compatible
   target state but creates no support from historical `active`, belief, or expired
   traversal. It drops unmatured legacy front conflicts because continuity cannot
   be proven in the support-ID domain. A `zone-belief-v2` importer may retain compatible filter,
@@ -871,12 +928,13 @@ Persist only state needed to reproduce the next decision:
   original event-time deadlines. Restart cannot extend a track-bootstrap window,
   renew a prediction lease, or turn an expired phase on.
 - **REQ-STATE-008:** Restart preserves provisional/confirmed track provenance
-  without increasing confidence or converting restored same-node callbacks into
-  new episodes. Unexpired historical tokens from an older valid generation may
-  coexist with the node's exact current-generation token; only the latter may be
-  marked physically current. Support bindings reference only tokens present in
-  the same active/retained traversal snapshot; settled support may retain no
-  binding after traversal retention expires.
+  and local-interaction provenance without increasing confidence or converting
+  restored same-node callbacks into new episodes. Unexpired historical tokens
+  from an older valid generation may coexist with the node's exact
+  current-generation token; only the latter may be marked physically current or
+  authorize a finite-ceiling update. Support bindings reference only tokens
+  present in the same active/retained traversal snapshot; settled support may
+  retain no binding after traversal retention expires.
 - **REQ-STATE-009:** Every validity window is half-open: evidence is usable for
   `created_at <= event_at < expires_at`. At one timestamp, stored timer
   frontiers with deadline less than or equal to that timestamp are advanced
@@ -886,12 +944,13 @@ Persist only state needed to reproduce the next decision:
   emit the same ordered result.
 - **REQ-STATE-010:** Supports restore only when IDs, bounded paths, endpoint
   node/zone/episode, provenance, state/deadline, bindings, current episode health,
-  and belief threshold are mutually compatible. A moving support requires its
-  mapped current target token; a settled support has no deadline and may outlive
-  all bindings. Invalid v4 state rejects atomically. Before the first v4 primary
-  write, an accepted v3 payload is copied once to a distinct immutable rollback
-  store; downgrade restores that payload or cold-bootstraps inference without
-  modifying map, entity, learned, or user configuration.
+  and belief threshold are mutually compatible, including unit reliability for
+  local-interaction provenance. A moving support requires its mapped current
+  target token; a settled support has no deadline and may outlive all bindings.
+  Invalid or unknown v4 interaction provenance rejects atomically. Before the
+  first v4 primary write, an accepted v3 payload is copied once to a distinct
+  immutable rollback store; downgrade restores that payload or cold-bootstraps
+  inference without modifying map, entity, learned, or user configuration.
 
 ## 14. Explainability and Diagnostics
 
@@ -938,13 +997,15 @@ assignment graph.
 
 - **REQ-PERF-001:** An adjacent-token, reopened correlated-continuity,
   adjacent-pair bootstrap, same-zone independent, boundary, bounded missed-edge,
-  or mature prediction authorization produces its in-memory policy decision with
-  p99 latency at or below 5 ms and hard latency below 10 ms on the 16-zone
-  reference map at $N=2$. The integration schedules the corresponding
-  `active` publication in the same Home Assistant event-loop update in which it
-  receives the accepted evidence. No confirmation timer, blocking I/O,
-  persistence, audit materialization, or learning update may precede that
-  decision and schedule.
+  local-interaction, or mature prediction authorization produces its in-memory
+  policy decision with p99 latency at or below 5 ms and hard latency below 10 ms
+  on the 16-zone reference map at $N=2$. The retained 100-event benchmark must
+  exercise and explicitly qualify each named fast path, including 100/100
+  local-interaction acquisitions and public writes. The integration schedules
+  the corresponding `active` publication in the same Home Assistant event-loop
+  update in which it receives the accepted evidence. No confirmation timer,
+  blocking I/O, persistence, audit materialization, or learning update may
+  precede that decision and schedule.
 - **REQ-PERF-002:** Routine benchmark validation uses 100 events. Every benchmark
   entry point hard-rejects more than 1,000 requested events.
 - **REQ-PERF-003:** Per-event work is bounded by configured nodes, local graph
@@ -1012,9 +1073,14 @@ scenarios and adversarial tests demonstrate:
    expires within 10 seconds when unconfirmed;
 14. sparse, provisional, untracked, self-confirming, and below-threshold
    predictions cannot activate or teach the model;
-15. the fast paths meet `REQ-PERF-001` independently of diagnostics and retained
-   audit size; and
-16. all retained production incident regressions pass at the public contract.
+15. the fast paths, including a 100-event local-interaction trace, meet
+  `REQ-PERF-001` independently of diagnostics and retained audit size;
+16. a mapped unit-reliability physical event pulse acquires at the finite
+  numerical ceiling in the same update for $N=1$ and $N=2$, never acquires for
+  $N=0$, deduplicates by current episode generation across eviction and restore,
+  invalidates authority on either live alias health state, and releases through
+  outward-accelerated or fallback ordinary decay; and
+17. all retained production incident regressions pass at the public contract.
 
 ## 17. Change Governance
 
@@ -1059,26 +1125,27 @@ This section is the maintained current-state index for the implementation. It is
 descriptive evidence of conformance, not a second source of requirements. The
 numbered requirements above remain authoritative if a summary here is incomplete.
 
-**Last conformance review:** 2026-08-20, after incident verification
+**Last conformance review:** 2026-08-22, after independent physical-interaction
+implementation review
 **Repository version:** `0.2.6`
 **Home Assistant Store version:** `7`
 **Current inference schema:** `zone-belief-v4`
 **Known specification divergences:** none
 
-| Layer                     | Implemented contract                                                                                                                                                         | Owning implementation                                                    |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| Map and profiles          | Physical aliases, reciprocal adjacency, directed timing overrides, reliability, and capability-based shared profile assignment                                               | `model.py`, `yaml_config.py`, `zone_model/profiles.py`                   |
-| Physical evidence         | Bounded physical episodes, alias/flap deduplication, stable clear, unavailable handling, hardware hold, trust horizons, and cadence health                                   | `zone_model/episodes.py`                                                 |
-| Zone belief               | Per-zone binary log-odds filtering, reliability-tempered likelihoods, role/context decay, supported-arrival transition, and finite asserted baselines                        | `zone_model/filter.py`, `zone_model/calibration.py`                      |
-| Traversal and acquisition | Pending bootstrap, provisional and confirmed anonymous paths, adjacency, same-zone, boundary, missed-edge, and bounded continuity reopening                                  | `zone_model/traversal.py`, `zone_model/engine.py`                        |
-| Anonymous supports        | Bounded moving/settled support state, creation from confirmed traversal, source-token transfer, coalescence, same-zone settlement, token bindings, and deterministic removal | `zone_model/supports.py`                                                 |
-| Count context             | Categorical count zero, positive-count validation, and count-conflict dwell, health degradation, and recovery from immutable support projections                             | `zone_model/count.py`, `zone_model/engine.py`                            |
-| Policy and public control | Shared 0.70/0.30 hysteresis, profile release dwell, one `active` entity per zone, `home_active`, and optional deduplicated arrival events                                    | `zone_model/policy.py`, `binary_sensor.py`, `event.py`                   |
-| Prediction and learning   | Confirmed-route learning, fixed 0.85 maturity threshold, minimum five accepted transitions, and nonrenewing 10-second internal activation leases                             | `zone_model/prediction.py`, `markov.py`                                  |
-| Persistence and migration | Atomic v4 persistence; strict restore; conservative v3 and v2 import; deferred schema-6 active seed; immutable accepted-v3 rollback backup                                   | `zone_model/persistence.py`, `storage.py`, `occupancy_tracker.py`        |
-| Diagnostics and UI        | Bounded policy audit, beliefs, episodes, health, traversal, supports, conflicts, predictions, lifecycle counters, WebSocket status, and Activity/map panel                   | `zone_model/policy.py`, `status.py`, `websocket.py`, `frontend/panel.js` |
-| Runtime integration       | Event-time normalization, authoritative count, deterministic timer advancement, edge-gated entity publication, delayed persistence, and final shutdown save                  | `runtime.py`, `occupancy_tracker.py`, `__init__.py`                      |
-| Validation                | Retained public incidents and target fixtures, 100% Python branch coverage, Ruff, strict mypy, frontend tests/build, and bounded 100-event benchmark                         | `tests/`, `benchmarks/occupancy_performance.py`                          |
+| Layer                     | Implemented contract                                                                                                                                                                   | Owning implementation                                                    |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| Map and profiles          | Physical aliases, reciprocal adjacency, directed timing overrides, reliability, capability-based shared profile assignment, and unit reliability for conclusive interaction nodes      | `model.py`, `yaml_config.py`, `zone_model/profiles.py`                   |
+| Physical evidence         | Bounded sensor and interaction-pulse episodes, alias/flap deduplication, stable clear, per-alias interaction health invalidation, hardware hold, trust horizons, and cadence health    | `zone_model/episodes.py`                                                 |
+| Zone belief               | Per-zone binary log-odds filtering, reliability-tempered likelihoods, generation-idempotent finite-ceiling interaction evidence, role/context decay, and supported-arrival transitions | `zone_model/filter.py`, `zone_model/calibration.py`                      |
+| Traversal and acquisition | Pending bootstrap, immediate local-interaction acquisition, provisional and confirmed anonymous paths, adjacency, same-zone, boundary, missed-edge, and continuity reopening           | `zone_model/traversal.py`, `zone_model/engine.py`                        |
+| Anonymous supports        | Bounded moving/settled support state, creation from confirmed traversal, source-token transfer, coalescence, same-zone settlement, token bindings, and deterministic removal           | `zone_model/supports.py`                                                 |
+| Count context             | Categorical count zero, positive-count validation, and count-conflict dwell, health degradation, and recovery from immutable support projections                                       | `zone_model/count.py`, `zone_model/engine.py`                            |
+| Policy and public control | Shared 0.70/0.30 hysteresis, profile release dwell, one `active` entity per zone, `home_active`, and optional deduplicated arrival events                                              | `zone_model/policy.py`, `binary_sensor.py`, `event.py`                   |
+| Prediction and learning   | Confirmed-route learning, fixed 0.85 maturity threshold, minimum five accepted transitions, and nonrenewing 10-second internal activation leases                                       | `zone_model/prediction.py`, `markov.py`                                  |
+| Persistence and migration | Atomic v4 persistence; strict restore; conservative v3 and v2 import; deferred schema-6 active seed; immutable accepted-v3 rollback backup                                             | `zone_model/persistence.py`, `storage.py`, `occupancy_tracker.py`        |
+| Diagnostics and UI        | Bounded policy audit, beliefs, episodes, health, traversal, supports, conflicts, predictions, lifecycle counters, WebSocket status, and Activity/map panel                             | `zone_model/policy.py`, `status.py`, `websocket.py`, `frontend/panel.js` |
+| Runtime integration       | State and physical-interaction event normalization, authoritative count, deterministic timer advancement, edge-gated publication, delayed persistence, and final save                  | `runtime.py`, `occupancy_tracker.py`, `__init__.py`                      |
+| Validation                | Retained public incidents and target fixtures, 100% Python branch coverage, Ruff, strict mypy, frontend tests/build, and bounded 100-event benchmark including local interaction       | `tests/`, `benchmarks/occupancy_performance.py`                          |
 
 The current implementation includes the retained 2026-08-20 office false-release
 repair: loss of a selected outside support clears an already-degraded count

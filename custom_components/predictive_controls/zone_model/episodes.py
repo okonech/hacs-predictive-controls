@@ -59,6 +59,21 @@ class PhysicalEpisodes:
                 or set(dict(state.alias_states)) != set(dict(expected.alias_states))
             ):
                 raise ValueError("Episode snapshot is incompatible with physical nodes")
+            node = self._nodes[node_id]
+            if node.interaction_aliases and (
+                set(node.interaction_aliases) != set(node.aliases)
+                or state.status not in {
+                    "baseline",
+                    "clear",
+                    "clearing",
+                    "unavailable",
+                }
+                or any(
+                    value not in {"unknown", "unavailable"}
+                    for _, value in state.alias_states
+                )
+            ):
+                raise ValueError("Interaction episode snapshot is incompatible")
         self._states = restored
 
     def observe(self, event: SensorInput) -> EpisodeUpdate:
@@ -71,8 +86,39 @@ class PhysicalEpisodes:
         state = self._states[node_id]
         if self._is_stale(state, event.event_at):
             return EpisodeUpdate("stale", state)
+        if event.state == "pressed":
+            if event.entity_id not in self._nodes[node_id].interaction_aliases:
+                raise ValueError("Pressed input must use an interaction alias")
+            if state.last_event_at == event.event_at:
+                return EpisodeUpdate("duplicate", state)
+            state, frontier_effects = self._advance_state(state, event.event_at)
+            state, interaction_effects = self._start_interaction_episode(
+                state,
+                event.event_at,
+                event.reliability,
+            )
+            state = replace(
+                state,
+                last_event_at=event.event_at,
+                advanced_at=event.event_at,
+            )
+            self._states[node_id] = state
+            return EpisodeUpdate(
+                "accepted_interaction",
+                state,
+                (*frontier_effects, *interaction_effects),
+            )
         alias_states = dict(state.alias_states)
-        if alias_states[event.entity_id] == event.state:
+        interaction_health_transition = bool(
+            event.state in {"unknown", "unavailable"}
+            and self._nodes[node_id].interaction_aliases
+            and state.generation > 0
+            and state.status != "unavailable"
+        )
+        if (
+            alias_states[event.entity_id] == event.state
+            and not interaction_health_transition
+        ):
             return EpisodeUpdate("duplicate", state)
 
         state, frontier_effects = self._advance_state(state, event.event_at)
@@ -93,7 +139,11 @@ class PhysicalEpisodes:
                 value in {"unknown", "unavailable"}
                 for value in alias_states.values()
             )
-            if (was_known_on and not is_known_on) or all_unavailable:
+            if (
+                interaction_health_transition
+                or (was_known_on and not is_known_on)
+                or all_unavailable
+            ):
                 state = replace(
                     state,
                     status="unavailable",
@@ -474,6 +524,49 @@ class PhysicalEpisodes:
                 cadence_warning=False,
             ),
             tuple(effects),
+        )
+
+    def _start_interaction_episode(
+        self,
+        state: EpisodeState,
+        at: datetime,
+        reliability: float,
+    ) -> tuple[EpisodeState, tuple[EpisodeEffect, ...]]:
+        profile = self._profile(state)
+        generation = state.generation + 1
+        episode_id = f"{state.node_id}:{generation}:{at.isoformat()}"
+        trust_until = at + profile.assertion_trust_horizon
+        return (
+            replace(
+                state,
+                generation=generation,
+                episode_id=episode_id,
+                status="clearing",
+                started_at=at,
+                clear_started_at=at,
+                clear_deadline=at + profile.stable_clear_window,
+                hold_until=at + profile.hardware_hold_interval,
+                assertion_trust_until=trust_until,
+                traversal_valid_until=min(
+                    at + profile.traversal_context_window,
+                    trust_until,
+                ),
+                degraded_at=None,
+                degradation_reason=None,
+                clear_emitted=False,
+                health_warning=False,
+                cadence_warning=False,
+            ),
+            (
+                EpisodeEffect(
+                    state.node_id,
+                    state.zone,
+                    episode_id,
+                    "interaction",
+                    at,
+                    reliability,
+                ),
+            ),
         )
 
     def _advance_state(

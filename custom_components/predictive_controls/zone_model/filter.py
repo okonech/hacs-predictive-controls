@@ -101,6 +101,30 @@ class ZoneBeliefFilter:
         self._record("local_positive", before, episode_id)
         return self._state
 
+    def apply_interaction(
+        self,
+        episode_id: str,
+        at: datetime,
+    ) -> ZoneBeliefState:
+        """Apply one conclusive but finite local human-interaction pulse."""
+
+        self._require_episode_id(episode_id)
+        self._advance_to(at)
+        if self._state.generation_episode_id == episode_id:
+            return self._state
+        before = self._state
+        self._state = replace(
+            before,
+            log_odds=LOG_ODDS_LIMIT,
+            context="asserted",
+            generation_episode_id=episode_id,
+            asserted_episode_id=episode_id,
+            outward_context=None,
+            health_warning=False,
+        )
+        self._record("local_interaction", before, episode_id)
+        return self._state
+
     def apply_stable_clear(
         self, episode_id: str, at: datetime, reliability: float = 1.0
     ) -> ZoneBeliefState:

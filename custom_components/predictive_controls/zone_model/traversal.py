@@ -238,10 +238,10 @@ class TraversalFrontier:
         self.advance(effect.at)
         node = self._validated_episode(state)
         if (
-            effect.kind != "positive"
+            effect.kind not in {"interaction", "positive"}
             or effect.node_id != state.node_id
             or effect.episode_id != state.episode_id
-            or state.status != "asserted"
+            or state.status not in {"asserted", "clearing"}
             or state.traversal_valid_until is None
             or state.traversal_valid_until <= effect.at
             or not authorization.authorized
@@ -274,6 +274,41 @@ class TraversalFrontier:
         self._current.add(token_id)
         self._enforce_token_bound()
         return token
+
+    def authorize_interaction(
+        self,
+        target: EpisodeState,
+        at: datetime,
+    ) -> TraversalAuthorization:
+        """Authorize one trustworthy local human-interaction pulse."""
+
+        self.advance(at)
+        self._validated_episode(target)
+        if (
+            target.status != "clearing"
+            or target.episode_id is None
+            or target.started_at != at
+            or target.traversal_valid_until is None
+            or target.traversal_valid_until <= at
+            or target.health_warning
+            or target.cadence_warning
+        ):
+            raise ValueError("Interaction authorization requires a fresh pulse")
+        self._pending_by_zone.pop(target.zone, None)
+        return TraversalAuthorization(
+            target.node_id,
+            target.zone,
+            target.episode_id,
+            at,
+            True,
+            "local_interaction",
+            (),
+            (),
+            "provisional",
+            (target.node_id,),
+            "local_interaction",
+            True,
+        )
 
     def sync(self, state: EpisodeState, at: datetime) -> None:
         self.advance(at)

@@ -168,6 +168,14 @@ def issue(frontier: TraversalFrontier, state: EpisodeState) -> TraversalToken:
     return frontier.issue(state, effect, authorization)
 
 
+def test_interaction_authorization_requires_a_fresh_clearing_pulse() -> None:
+    frontier = TraversalFrontier(graph(), NODES)
+    asserted = episode("room_a", "room_a", "stay_pir", NOW)
+
+    with pytest.raises(ValueError, match="requires a fresh pulse"):
+        frontier.authorize_interaction(asserted, NOW)
+
+
 def test_one_open_transition_authorizes_distinct_targets_once_each() -> None:
     frontier = TraversalFrontier(graph(), NODES)
     hall = episode("hall", "hall", "transition_fast", NOW)

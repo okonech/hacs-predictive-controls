@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 PROFILE_NAMES = frozenset(
     {"entry_boundary", "stay_pir", "stay_presence", "transition_fast"}
 )
-SENSOR_STATES = frozenset({"off", "on", "unavailable", "unknown"})
+SENSOR_STATES = frozenset({"off", "on", "pressed", "unavailable", "unknown"})
 EPISODE_STATUSES = frozenset(
     {"asserted", "baseline", "clear", "clearing", "degraded", "unavailable"}
 )
@@ -31,6 +31,7 @@ BELIEF_CONTRIBUTION_KINDS = frozenset(
         "elapsed_decay",
         "health_degraded",
         "health_recovered",
+        "local_interaction",
         "local_positive",
         "outward_superseded",
         "stable_clear",
@@ -46,6 +47,7 @@ ACTIVE_EVIDENCE_REASONS = frozenset(
     {
         "adjacent_authorized",
         "boundary_authorized",
+        "local_interaction",
         "missed_edge_authorized",
         "prediction_confirmed",
         "provisional_track_acquired",
@@ -268,6 +270,7 @@ class PhysicalNode:
     profile_name: str
     reliability: float = 1.0
     route_prior_weight: float = 1.0
+    interaction_aliases: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.node_id or not self.zone:
@@ -276,6 +279,11 @@ class PhysicalNode:
             raise ValueError("Physical node must define at least one unique alias")
         if any(not alias for alias in self.aliases):
             raise ValueError("Physical-node aliases must be non-empty")
+        if (
+            len(self.interaction_aliases) != len(set(self.interaction_aliases))
+            or not set(self.interaction_aliases) <= set(self.aliases)
+        ):
+            raise ValueError("Interaction aliases must be unique physical aliases")
         if self.profile_name not in PROFILE_NAMES:
             raise ValueError(f"Unknown sensor profile: {self.profile_name}")
         if not math.isfinite(self.reliability) or not 0 < self.reliability <= 1:
@@ -297,7 +305,9 @@ class SensorInput:
         if not self.entity_id:
             raise ValueError("Sensor entity ID must be non-empty")
         if self.state not in SENSOR_STATES:
-            raise ValueError("Sensor state must be on, off, unknown, or unavailable")
+            raise ValueError(
+                "Sensor state must be on, off, pressed, unknown, or unavailable"
+            )
         require_utc(self.event_at, "Sensor event time")
         if not math.isfinite(self.reliability) or not 0 < self.reliability <= 1:
             raise ValueError("Sensor reliability must be finite and in (0, 1]")
@@ -321,6 +331,7 @@ class EpisodeEffect:
             "impossible_cadence",
             "health_degraded",
             "health_recovered",
+            "interaction",
             "positive",
             "stable_clear",
         }:
@@ -625,7 +636,12 @@ class AnonymousOccupancySupport:
             raise ValueError("Anonymous-support ID must derive from a token")
         if self.state not in SUPPORT_STATES:
             raise ValueError("Anonymous-support state is invalid")
-        if self.provenance_kind not in {"adjacent", "boundary", "missed_edge"}:
+        if self.provenance_kind not in {
+            "adjacent",
+            "boundary",
+            "local_interaction",
+            "missed_edge",
+        }:
             raise ValueError("Anonymous-support provenance is invalid")
         if self.last_transition not in SUPPORT_TRANSITIONS:
             raise ValueError("Anonymous-support transition is invalid")
@@ -1046,6 +1062,7 @@ class PolicyDecision:
             "health_degraded",
             "health_recovered",
             "impossible_cadence",
+            "interaction",
             "positive",
             "stable_clear",
         }:

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from types import MappingProxyType
 
-from ..model import PredictiveMap
+from ..model import PredictiveMap, is_interaction_signal_type
 from .types import BeliefProfile, DecayCalibration, PhysicalNode, SensorProfile
 
 TRANSITION_FAST = SensorProfile(
@@ -150,6 +150,9 @@ def profile_assignment_for_node(
         zone_config.role if zone_config is not None and zone_config.role else node.role
     ).lower()
     signal_types = {signal_type.lower() for signal_type in node.entities}
+    interaction_only = bool(signal_types) and all(
+        is_interaction_signal_type(signal_type) for signal_type in signal_types
+    )
     entry_roles = {"boundary", "entry", "entry_boundary", "household_boundary"}
     stay_roles = {"room_occupancy", "stay", "subzone", "subzone_occupancy"}
 
@@ -166,6 +169,8 @@ def profile_assignment_for_node(
         profile_name = "transition_fast"
     elif role == "anchor_sensor" and behavior == "sticky":
         profile_name = "stay_presence"
+    elif role in stay_roles and interaction_only:
+        profile_name = "stay_presence" if behavior == "sticky" else "stay_pir"
     elif role in stay_roles and signal_types & {"motion", "pir"}:
         # Occupancy behavior controls the zone policy, but it cannot upgrade a
         # motion-only device into true-presence hardware.  In particular,
@@ -210,6 +215,13 @@ def build_physical_nodes(predictive_map: PredictiveMap) -> PhysicalNodeBuild:
             errors.append(assignment.error)
             continue
         aliases = tuple(sorted(node.entities.values()))
+        interaction_aliases = tuple(
+            sorted(
+                entity_id
+                for signal_type, entity_id in node.entities.items()
+                if is_interaction_signal_type(signal_type)
+            )
+        )
         if not aliases:
             errors.append(
                 f"Node {node_id!r} has no physical entity aliases; "
@@ -224,6 +236,7 @@ def build_physical_nodes(predictive_map: PredictiveMap) -> PhysicalNodeBuild:
                 assignment.profile_name,
                 node.reliability,
                 node.route_prior_weight,
+                interaction_aliases,
             )
         )
     return PhysicalNodeBuild(tuple(nodes), tuple(errors))

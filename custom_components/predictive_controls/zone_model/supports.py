@@ -113,7 +113,7 @@ class AnonymousSupportTracker:
             active_tokens,
             retained_tokens,
         )
-        if effect is not None and effect.kind == "positive":
+        if effect is not None and effect.kind in {"interaction", "positive"}:
             next_state = self._rebind_settled_endpoint(
                 next_state,
                 effect,
@@ -122,7 +122,7 @@ class AnonymousSupportTracker:
             )
         if (
             effect is None
-            or effect.kind != "positive"
+            or effect.kind not in {"interaction", "positive"}
             or authorization is None
             or not authorization.authorized
             or issued_target_token is None
@@ -703,18 +703,24 @@ class AnonymousSupportTracker:
 
     def _confirmed_strength(self, token: TraversalToken) -> bool:
         return bool(
-            token.track_confidence == "confirmed"
-            and (
-                (
-                    token.provenance_kind == "adjacent"
-                    and len(token.path_node_ids) == 3
-                    and len(set(token.path_node_ids)) == 3
-                    and self._path_compatible(token.path_node_ids)
-                )
-                or (
-                    token.equivalent_confirmed_strength
-                    and token.provenance_kind in {"boundary", "missed_edge"}
-                    and self._path_compatible(token.path_node_ids)
+            (
+                token.track_confidence == "confirmed"
+                and token.provenance_kind == "adjacent"
+                and len(token.path_node_ids) == 3
+                and len(set(token.path_node_ids)) == 3
+                and self._path_compatible(token.path_node_ids)
+            )
+            or (
+                token.equivalent_confirmed_strength
+                and (
+                    (
+                        token.provenance_kind in {"boundary", "missed_edge"}
+                        and self._path_compatible(token.path_node_ids)
+                    )
+                    or (
+                        token.provenance_kind == "local_interaction"
+                        and len(token.path_node_ids) == 1
+                    )
                 )
             )
         )

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from .model import PredictiveMap
+from .model import PredictiveMap, is_interaction_signal_type
 
 
 @dataclass(frozen=True)
@@ -32,15 +32,18 @@ def event_from_entity(
 ) -> OccupancyEvent | None:
     """Normalize one mapped entity state change."""
 
-    supported_states = {"on", "off", "unknown", "unavailable"}
-    if state not in supported_states:
-        if not allow_unsupported_state:
-            return None
-        state = "unknown"
-
     binding = predictive_map.entity_binding_for_entity(entity_id)
     if binding is None:
         return None
+
+    supported_states = {"on", "off", "unknown", "unavailable"}
+    if is_interaction_signal_type(binding.signal_type):
+        if state not in {"unknown", "unavailable"}:
+            state = "unknown" if allow_unsupported_state else "pressed"
+    elif state not in supported_states:
+        if not allow_unsupported_state:
+            return None
+        state = "unknown"
 
     node = predictive_map.nodes[binding.node_id]
     return OccupancyEvent(

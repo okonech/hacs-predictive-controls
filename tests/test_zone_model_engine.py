@@ -64,6 +64,160 @@ def correlated_continuity_map() -> PredictiveMap:
     )
 
 
+def interaction_map() -> PredictiveMap:
+    return PredictiveMap.from_mapping(
+        {
+            "nodes": {
+                "room_interaction": {
+                    "zone": "room",
+                    "role": "room_occupancy",
+                    "occupancy_behavior": "sticky",
+                    "entities": {
+                        "interaction_scene_001": "event.room_scene_001",
+                        "interaction_scene_002": "event.room_scene_002",
+                    },
+                }
+            }
+        }
+    )
+
+
+def test_older_interaction_clear_does_not_withdraw_newer_same_zone_pulse() -> None:
+    predictive_map = PredictiveMap.from_mapping(
+        {
+            "nodes": {
+                "switch_a": {
+                    "zone": "room",
+                    "role": "room_occupancy",
+                    "occupancy_behavior": "sticky",
+                    "entities": {"interaction_a": "event.switch_a"},
+                },
+                "switch_b": {
+                    "zone": "room",
+                    "role": "room_occupancy",
+                    "occupancy_behavior": "sticky",
+                    "entities": {"interaction_b": "event.switch_b"},
+                },
+            }
+        }
+    )
+    engine = ZoneModelEngine(predictive_map, 1, NOW)
+    engine.observe(SensorInput("event.switch_a", "pressed", NOW))
+    engine.observe(
+        SensorInput("event.switch_b", "pressed", NOW + timedelta(seconds=1))
+    )
+    supports = engine.snapshot.anonymous_supports
+    assert len(supports) == 1
+    assert supports[0].current_zone == "room"
+    assert supports[0].provenance_kind == "local_interaction"
+    episodes = {state.node_id: state for state in engine.snapshot.episode_states}
+    first_clear = episodes["switch_a"].clear_deadline
+    second_clear = episodes["switch_b"].clear_deadline
+    assert first_clear is not None and second_clear is not None
+
+    after_first_clear = engine.advance(first_clear)
+    belief = next(
+        state
+        for state in after_first_clear.snapshot.belief_states
+        if state.zone == "room"
+    )
+    assert belief.context == "asserted"
+
+    after_second_clear = engine.advance(second_clear)
+    belief = next(
+        state
+        for state in after_second_clear.snapshot.belief_states
+        if state.zone == "room"
+    )
+    assert belief.context == "cleared_without_outward"
+
+
+def test_interaction_count_two_acquires_without_conflict_delay() -> None:
+    engine = ZoneModelEngine(interaction_map(), 2, NOW)
+
+    result = engine.observe(
+        SensorInput("event.room_scene_001", "pressed", NOW + timedelta(seconds=1))
+    )
+
+    authorization = result.authorizations[0]
+    policy = next(
+        state for state in result.snapshot.policy_states if state.zone == "room"
+    )
+    assert authorization.reason == "local_interaction"
+    assert authorization.provenance_kind == "local_interaction"
+    assert authorization.equivalent_confirmed_strength
+    assert policy.active
+    assert result.snapshot.pending_candidates == ()
+    assert [(event.zone, event.kind) for event in result.policy_events] == [
+        ("room", "acquired")
+    ]
+
+
+def test_interaction_at_clear_deadline_applies_timer_then_new_generation() -> None:
+    engine = ZoneModelEngine(interaction_map(), 1, NOW)
+    first = engine.observe(SensorInput("event.room_scene_001", "pressed", NOW))
+    first_episode = first.snapshot.episode_states[0]
+    clear_deadline = first_episode.clear_deadline
+    assert clear_deadline is not None
+
+    replaced = engine.observe(
+        SensorInput("event.room_scene_002", "pressed", clear_deadline)
+    )
+
+    episode = replaced.snapshot.episode_states[0]
+    belief = replaced.snapshot.belief_states[0]
+    assert episode.generation == first_episode.generation + 1
+    assert belief.generation_episode_id == episode.episode_id
+    assert belief.log_odds == 30.0
+    assert [item.kind for item in belief.contributions[-2:]] == [
+        "stable_clear",
+        "local_interaction",
+    ]
+    assert not any(event.kind == "released" for event in replaced.policy_events)
+
+
+def test_interaction_publication_failure_commits_atomic_snapshot() -> None:
+    engine = ZoneModelEngine(interaction_map(), 1, NOW)
+    event_at = NOW + timedelta(seconds=1)
+
+    def fail(_event: object, _decision: object, _authorization: object) -> None:
+        raise RuntimeError("publication failed")
+
+    with pytest.raises(RuntimeError, match="publication failed"):
+        engine.observe(
+            SensorInput("event.room_scene_001", "pressed", event_at),
+            decision_callback=fail,
+        )
+
+    policy = engine.snapshot.policy_states[0]
+    assert engine.snapshot.updated_at == event_at
+    assert policy.active
+    assert len(engine.snapshot.traversal_tokens) == 1
+    assert len(engine.snapshot.anonymous_supports) == 1
+    assert engine.audit_rows[-1].local_evidence_kind == "interaction"
+    assert engine.audit_rows[-1].traversal_reason == "local_interaction"
+
+
+def test_interaction_health_invalidates_token_and_support_without_release() -> None:
+    engine = ZoneModelEngine(interaction_map(), 1, NOW)
+    acquired = engine.observe(SensorInput("event.room_scene_001", "pressed", NOW))
+    assert acquired.snapshot.traversal_tokens
+    assert acquired.snapshot.anonymous_supports
+
+    unavailable = engine.observe(
+        SensorInput("event.room_scene_002", "unknown", NOW + timedelta(seconds=1))
+    )
+
+    assert unavailable.disposition == "neutral_availability"
+    assert unavailable.snapshot.episode_states[0].status == "unavailable"
+    assert unavailable.snapshot.belief_states[0].context == "unavailable"
+    assert unavailable.snapshot.traversal_tokens == ()
+    assert unavailable.snapshot.retained_traversal_tokens == ()
+    assert unavailable.snapshot.anonymous_supports == ()
+    assert unavailable.snapshot.policy_states[0].active
+    assert not any(event.kind == "released" for event in unavailable.policy_events)
+
+
 def test_engine_composes_transition_authorization_and_policy_acquisition() -> None:
     engine = ZoneModelEngine(target_map(), 1, NOW)
 

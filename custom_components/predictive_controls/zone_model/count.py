@@ -141,7 +141,8 @@ class CountConflictTracker:
                     local_effect is not None
                     and local_effect.node_id == target.node_id
                     and local_effect.episode_id == target.episode_id
-                    and local_effect.kind in {"positive", "health_recovered"}
+                    and local_effect.kind
+                    in {"health_recovered", "interaction", "positive"}
                 )
                 or (
                     authorization is not None
