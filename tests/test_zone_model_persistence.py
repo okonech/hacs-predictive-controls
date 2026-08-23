@@ -36,6 +36,7 @@ from tests.test_zone_model_engine import (
     correlated_continuity_map,
     engine_before_stale_transfer,
     interaction_map,
+    mixed_same_zone_map,
     stale_transfer_map,
     target_map,
 )
@@ -165,6 +166,31 @@ def test_target_state_round_trips_deterministically() -> None:
     assert restored.snapshot == engine.snapshot
     assert restored.audit_rows == engine.audit_rows
     assert serialize_target_state(target_map(), restored) == payload
+
+
+@pytest.mark.parametrize("pre_feature", (False, True))
+def test_reselected_asserted_context_round_trips_v4(pre_feature: bool) -> None:
+    predictive_map = mixed_same_zone_map()
+    engine = ZoneModelEngine(predictive_map, 1, NOW)
+    engine.observe(SensorInput("binary_sensor.room", "on", NOW))
+    engine.observe(SensorInput("event.room_scene_001", "pressed", NOW))
+    engine.observe(SensorInput("event.room_scene_002", "unknown", NOW))
+    payload = serialize_target_state(predictive_map, engine)
+    if pre_feature:
+        payload = as_pre_feature_v4(predictive_map, payload)
+
+    restored = restore_target_state(predictive_map, payload, NOW)
+    presence = next(
+        state
+        for state in restored.snapshot.episode_states
+        if state.node_id == "room_presence"
+    )
+    belief = restored.snapshot.belief_states[0]
+
+    assert presence.episode_id is not None
+    assert belief.context == "asserted"
+    assert belief.generation_episode_id == presence.episode_id
+    assert belief.asserted_episode_id == presence.episode_id
 
 
 def test_reliability_warning_occurrence_round_trips_and_clears_in_place() -> None:

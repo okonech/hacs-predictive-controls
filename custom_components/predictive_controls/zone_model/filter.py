@@ -277,6 +277,33 @@ class ZoneBeliefFilter:
         self._record("unavailable", before, before.generation_episode_id)
         return self._state
 
+    def reselect_asserted_context(
+        self,
+        episode_id: str,
+        at: datetime,
+    ) -> ZoneBeliefState:
+        """Select an existing asserted episode without adding evidence."""
+
+        self._require_episode_id(episode_id)
+        self._advance_to(at)
+        if (
+            self._state.context == "asserted"
+            and self._state.generation_episode_id == episode_id
+            and self._state.asserted_episode_id == episode_id
+            and self._state.outward_context is None
+            and not self._state.health_warning
+        ):
+            return self._state
+        self._state = replace(
+            self._state,
+            context="asserted",
+            generation_episode_id=episode_id,
+            asserted_episode_id=episode_id,
+            outward_context=None,
+            health_warning=False,
+        )
+        return self._state
+
     def apply_availability_clear(
         self,
         episode_id: str | None,

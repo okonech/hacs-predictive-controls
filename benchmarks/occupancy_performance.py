@@ -399,10 +399,12 @@ def _measure_fast_paths(
         return runtime
 
     def observe(runtime: Any, node_id: str, milliseconds: int) -> None:
+        event_at = started_at + timedelta(milliseconds=milliseconds)
+        entity_id = entities[node_id]
         runtime.observe_entity(
-            entities[node_id],
-            "on",
-            started_at + timedelta(milliseconds=milliseconds),
+            entity_id,
+            event_at.isoformat() if entity_id.startswith("event.") else "on",
+            event_at,
         )
 
     samples: dict[str, list[float]] = {

@@ -469,8 +469,12 @@ class OccupancyTracker:
         if self._engine is not None:
             if at > self._engine.snapshot.updated_at:
                 self._record_result(self._engine.advance(at, emit_events=False))
-            else:
-                self._rebuild_policy_projection_cache()
+            if self._restore_status == "restored":
+                self._engine.reconcile_restored_asserted_contexts(
+                    sensor_snapshot,
+                    at,
+                )
+            self._rebuild_policy_projection_cache()
             return
         self._engine = ZoneModelEngine(self._map, self.config.expected_occupants, at)
         self._predictions = self._engine.prediction_manager

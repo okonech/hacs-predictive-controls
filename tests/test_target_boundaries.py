@@ -11,6 +11,7 @@ from custom_components.predictive_controls.automation_summary import (
     _status,
     _top_prediction,
 )
+from custom_components.predictive_controls.events import OccupancyEvent
 from custom_components.predictive_controls.model import ZoneConfig
 from custom_components.predictive_controls.occupancy_settings import (
     authoritative_occupants_from_state_value,
@@ -33,7 +34,7 @@ from custom_components.predictive_controls.zone_model.types import (
     SensorInput,
 )
 from tests.test_confidence import event
-from tests.test_zone_model_engine import target_map
+from tests.test_zone_model_engine import mixed_same_zone_map, target_map
 from tests.test_zone_model_persistence import legacy_v2_payload
 
 NOW = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
@@ -274,6 +275,51 @@ def test_tracker_adopts_restored_count_as_reconciliation_frontier() -> None:
     assert tracker.config.expected_occupants == 0
     assert tracker.requested_expected_occupants == 0
     assert all(not state.active for state in tracker.policy_states.values())
+
+
+def test_tracker_reconciles_matching_asserted_context_after_v4_restore() -> None:
+    predictive_map = mixed_same_zone_map()
+    engine = ZoneModelEngine(predictive_map, 1, NOW)
+    engine.observe(SensorInput("binary_sensor.room", "on", NOW))
+    engine.observe(SensorInput("event.room_scene_001", "pressed", NOW))
+    engine.observe(SensorInput("event.room_scene_002", "unknown", NOW))
+    presence = next(
+        state
+        for state in engine.snapshot.episode_states
+        if state.node_id == "room_presence"
+    )
+    engine._filters["room"].apply_unavailable(NOW)  # noqa: SLF001
+    payload = serialize_target_state(predictive_map, engine)
+    tracker = OccupancyTracker(predictive_map, TrackerConfig(1))
+
+    assert tracker.restore_state(payload, NOW)
+    tracker.bootstrap_state(
+        (
+            OccupancyEvent(
+                "binary_sensor.room",
+                "room_presence",
+                "room",
+                None,
+                "room_occupancy",
+                "sustained",
+                "mmwave",
+                "on",
+                NOW,
+                1.0,
+            ),
+        ),
+        cold_start=False,
+    )
+
+    restored_engine = tracker._engine  # noqa: SLF001
+    assert restored_engine is not None
+    belief = next(iter(restored_engine.snapshot.belief_states))
+    assert presence.episode_id is not None
+    assert belief.context == "asserted"
+    assert belief.generation_episode_id == presence.episode_id
+    assert belief.asserted_episode_id == presence.episode_id
+    assert tracker.policy_states["room"].active
+    assert tracker.policy_events == ()
 
 
 def test_tracker_no_engine_learning_commit_and_active_hold_are_bounded() -> None:

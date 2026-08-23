@@ -131,7 +131,8 @@ The model consumes:
 - physical sensor state events with occurrence timestamps and a separate
   processing/receipt frontier;
 - mapped physical human-interaction event entities, such as local wall-switch
-  scene presses, with occurrence timestamps and no persistent asserted state;
+  scene presses, whose aware ISO state timestamp is the pulse occurrence
+  frontier and which have no persistent asserted state;
 - a map of zones, physical nodes, entity aliases, node roles, sensor profiles,
   reliability, adjacency, and graph timing;
 - an authoritative occupant count in the supported range; and
@@ -162,7 +163,14 @@ zone and declares one role:
   They are not clear or absence evidence. After live operation begins, either
   health state on any alias of an interaction-only node immediately invalidates
   that node's token, pending context, and count support without waiting for an
-  all-alias health quorum. Startup neutralization creates no such authority.
+  all-alias health quorum. Before selecting zone context `unavailable`, the
+  engine preserves an eligible same-zone episode that remains known-on,
+  `asserted`, identity-valid, and free of health degradation. It may preserve
+  the same multi-alias state episode when another alias remains on or a distinct
+  physical-node episode. This zero-likelihood context correction creates no
+  traversal, support, count, prediction, learning, activation, or refresh
+  authority. If no eligible assertion remains, the zone selects `unavailable`.
+  Startup neutralization creates no such authority.
 - **REQ-MAP-005:** Every physical node declares a finite reliability in `(0, 1]`.
   Reliability must temper local likelihood and health/conflict evaluation; it
   may not be retained only for display or prediction smoothing. An interaction
@@ -223,10 +231,15 @@ Every sensor profile declares independently:
   arrivals.
 - **REQ-EVID-006:** Out-of-order or duplicate inputs are ignored and diagnosed.
   They do not advance filter time, decay, traversal, policy, prediction, or
-  learning. Home Assistant `time_fired` is the occurrence frontier used for this
-  ordering; callback receipt time is retained separately as `processing_at` for
-  audit and latency diagnostics. Live and replay normalization both preserve
-  `unknown` and `unavailable` rather than dropping them.
+  learning. Home Assistant `time_fired` is the occurrence frontier used for
+  ordinary state entities. For a mapped Home Assistant EventEntity, a parseable
+  timezone-aware ISO state value normalized to UTC is the physical interaction
+  occurrence frontier; `state_changed.time_fired` bounds that value and callback
+  receipt remains `processing_at`. A malformed, naive, or callback-future
+  non-health value is ignored before model mutation. A parsed value before the
+  model frontier is stale; equality remains subject to physical-node duplicate
+  and idempotency rules. Live and replay normalization both preserve `unknown`
+  and `unavailable` at their callback event time rather than dropping them.
 - **REQ-EVID-007:** Each distinct target episode may consume a compatible open
   transition context once. One still-asserted hallway may therefore authorize
   different fresh room episodes without pretending that the hallway emitted
@@ -255,13 +268,14 @@ Every sensor profile declares independently:
   `REQ-TRAV-013`.
 - **REQ-EVID-011:** A mapped local human-interaction event is a discrete physical
   pulse, never light, switch, fan, or other actuator output state. Each distinct
-  live event-entity occurrence starts one finite interaction episode directly in
-  clearing, while duplicate or out-of-order occurrences add no evidence. Startup
-  snapshots treat the retained event-entity timestamp as neutral and never replay
-  it as a press. Interaction aliases occupy an interaction-only physical node so
-  their pulse lifecycle cannot overwrite a motion or presence sensor episode.
-  The episode then uses the shared stable-clear, outward-conditioned decay,
-  fallback decay, threshold, and release-dwell lifecycle.
+  live event-entity occurrence with a valid frontier under `REQ-EVID-006` starts
+  one finite interaction episode directly in clearing, while malformed,
+  duplicate, stale, or out-of-order occurrences add no evidence. Startup
+  snapshots treat the retained event-entity timestamp as neutral and never
+  replay it as a press. Interaction aliases occupy an interaction-only physical
+  node so their pulse lifecycle cannot overwrite a motion or presence sensor
+  episode. The episode then uses the shared stable-clear, outward-conditioned
+  decay, fallback decay, threshold, and release-dwell lifecycle.
 - **REQ-EVID-012:** A shared `stay_presence` profile links completed cycles across
   fresh episode generations using only aggregate physical-node `known_on`
   transitions. An alias callback that does not change that aggregate state,
@@ -371,10 +385,12 @@ shared parameter family and is not itself a competing state:
   source episode and selects `asserted`; an accepted correlated-continuity
   reassertion discards outward context for that same episode as a zero-likelihood
   context correction and adds no positive evidence; and
-8. unavailable selects `unavailable` until a later accepted state establishes a
-  new episode or clear state. An accepted clear ends the unavailable context as
-  a zero-delta transition to `cleared_without_outward`; only a stable clear
-  contributes calibrated absence evidence.
+8. unavailable selects `unavailable` only when no eligible same-zone asserted
+  episode remains under `REQ-MAP-004`. Otherwise the deterministic maximum
+  `(last_event_at, node_id, episode_id)` selects `asserted` context with that
+  identity and no likelihood contribution. An accepted clear ends unavailable
+  context as a zero-delta transition to `cleared_without_outward`; only a stable
+  clear contributes calibrated absence evidence.
 
 `stay`, `transition`, `entry`, and `hybrid` profiles provide different baselines
 and time constants for these states. In particular, transition profiles decay
@@ -383,7 +399,10 @@ room-specific inactivity timers.
 
 - **REQ-BELIEF-001:** Local evidence is never deleted by one unrelated remote
   event. Remote evidence may affect a zone only through a declared adjacent
-  traversal relationship or the bounded count regularizer.
+  traversal relationship or the bounded count regularizer. Node-local health
+  state likewise cannot delete a separate trustworthy same-zone assertion.
+  Reselecting that already-accepted episode changes context only: it does not
+  reapply likelihood, renew traversal, or create a public edge.
 - **REQ-BELIEF-002:** A fresh target episode with compatible traversal context
   applies the shared arrival-state transition to the target after its
   reliability-tempered local likelihood. It does not require selecting a unique
@@ -1007,7 +1026,12 @@ Persist only state needed to reproduce the next decision:
 - **REQ-STATE-003:** Restore advances decay, traversal, moving-support expiry, and
   count-conflict dwell exactly once to the restore frontier. It must not reapply
   historical observation likelihoods, including finite-ceiling interaction
-  updates, or reconstruct support from belief.
+  updates, or reconstruct support from belief. After advancement and only for
+  positive authoritative count, current raw `on` nodes may reselect an already
+  restored matching episode that remains known-on, `asserted`, identity-valid,
+  and healthy. This compatible-restore correction adds no episode, likelihood,
+  traversal, support, policy acquisition, refresh, or public edge. A raw level
+  with no matching restored asserted episode is ignored.
 - **REQ-STATE-004:** The one-time exact-assignment schema-6 importer may preserve
   public `active` state only as a compatibility seed. It must not invent zone
   belief, traversal tokens, or support provenance. Migration is deferred until
@@ -1044,7 +1068,9 @@ Persist only state needed to reproduce the next decision:
   current-generation token; only the latter may be marked physically current or
   authorize a finite-ceiling update. Support bindings reference only tokens
   present in the same active/retained traversal snapshot; settled support may
-  retain no binding after traversal retention expires.
+  retain no binding after traversal retention expires. An inactive restored
+  policy remains inactive when asserted context is reselected; current level
+  alone cannot synthesize reacquisition.
 - **REQ-STATE-009:** Every validity window is half-open: evidence is usable for
   `created_at <= event_at < expires_at`. At one timestamp, stored timer
   frontiers with deadline less than or equal to that timestamp are advanced
@@ -1245,7 +1271,12 @@ scenarios and adversarial tests demonstrate:
 23. the diagnostic sensor, dual Reliability labels, warning-red graph precedence,
   and single 20:00 automation satisfy `REQ-DIAG-006`, `REQ-DIAG-007`,
   `REQ-PUBLIC-006`, and `REQ-PUBLIC-007`; and
-24. all retained production incident regressions pass at the public contract.
+24. the exact stale EventEntity recovery incident creates no Shaila Office or
+  Upstairs Bathroom interaction generation or public activation, while Alex
+  Office retains the original asserted mmWave belief identity beyond the
+  production false-release frontier without a new likelihood, traversal, or
+  public edge; and
+25. all retained production incident regressions pass at the public contract.
 
 ## 17. Change Governance
 

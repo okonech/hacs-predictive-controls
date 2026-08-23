@@ -68,6 +68,27 @@ def test_interaction_applies_the_finite_ceiling_once_per_episode() -> None:
     assert contribution_count(filter_, "local_interaction") == 1
 
 
+def test_reselect_asserted_context_changes_identity_without_evidence() -> None:
+    filter_ = belief_filter()
+    filter_.apply_positive("presence", NOW)
+    filter_.apply_interaction("interaction", NOW + timedelta(seconds=1))
+    contributions = filter_.state.contributions
+
+    selected = filter_.reselect_asserted_context(
+        "presence", NOW + timedelta(seconds=2)
+    )
+    duplicate = filter_.reselect_asserted_context(
+        "presence", NOW + timedelta(seconds=2)
+    )
+
+    assert selected.context == "asserted"
+    assert selected.generation_episode_id == "presence"
+    assert selected.asserted_episode_id == "presence"
+    assert selected.contributions[:-1] == contributions
+    assert selected.contributions[-1].kind == "elapsed_decay"
+    assert duplicate == selected
+
+
 def test_interaction_idempotency_uses_generation_after_restore() -> None:
     filter_ = belief_filter(contribution_limit=1)
     filter_.apply_interaction("interaction", NOW)

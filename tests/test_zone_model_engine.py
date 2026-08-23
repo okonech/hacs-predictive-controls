@@ -255,6 +255,60 @@ def interaction_map() -> PredictiveMap:
     )
 
 
+def mixed_same_zone_map() -> PredictiveMap:
+    return PredictiveMap.from_mapping(
+        {
+            "nodes": {
+                "room_presence": {
+                    "zone": "room",
+                    "role": "room_occupancy",
+                    "occupancy_behavior": "sustained",
+                    "entities": {"mmwave": "binary_sensor.room"},
+                },
+                "room_interaction": {
+                    "zone": "room",
+                    "role": "room_occupancy",
+                    "occupancy_behavior": "sticky",
+                    "entities": {
+                        "interaction_scene_001": "event.room_scene_001",
+                        "interaction_scene_002": "event.room_scene_002",
+                    },
+                },
+            }
+        }
+    )
+
+
+def multiple_same_zone_assertions_map() -> PredictiveMap:
+    return PredictiveMap.from_mapping(
+        {
+            "nodes": {
+                "presence_a": {
+                    "zone": "room",
+                    "role": "room_occupancy",
+                    "occupancy_behavior": "sustained",
+                    "entities": {"mmwave": "binary_sensor.presence_a"},
+                },
+                "presence_b": {
+                    "zone": "room",
+                    "role": "room_occupancy",
+                    "occupancy_behavior": "sustained",
+                    "entities": {"mmwave": "binary_sensor.presence_b"},
+                },
+                "room_interaction": {
+                    "zone": "room",
+                    "role": "room_occupancy",
+                    "occupancy_behavior": "sticky",
+                    "entities": {
+                        "interaction_scene_001": "event.room_scene_001",
+                        "interaction_scene_002": "event.room_scene_002",
+                    },
+                },
+            }
+        }
+    )
+
+
 def test_older_interaction_clear_does_not_withdraw_newer_same_zone_pulse() -> None:
     predictive_map = PredictiveMap.from_mapping(
         {
@@ -419,6 +473,152 @@ def test_interaction_health_invalidates_token_and_support_without_release() -> N
     assert unavailable.snapshot.anonymous_supports == ()
     assert unavailable.snapshot.policy_states[0].active
     assert not any(event.kind == "released" for event in unavailable.policy_events)
+
+
+def test_interaction_health_preserves_distinct_same_zone_assertion() -> None:
+    engine = ZoneModelEngine(mixed_same_zone_map(), 1, NOW)
+    engine.observe(SensorInput("binary_sensor.room", "on", NOW))
+    engine.observe(
+        SensorInput("event.room_scene_001", "pressed", NOW + timedelta(seconds=1))
+    )
+    before = engine.snapshot
+    presence = next(
+        state for state in before.episode_states if state.node_id == "room_presence"
+    )
+    belief_before = before.belief_states[0]
+
+    result = engine.observe(
+        SensorInput("event.room_scene_002", "unknown", NOW + timedelta(seconds=2))
+    )
+
+    belief_after = result.snapshot.belief_states[0]
+    assert presence.episode_id is not None
+    assert belief_after.context == "asserted"
+    assert belief_after.generation_episode_id == presence.episode_id
+    assert belief_after.asserted_episode_id == presence.episode_id
+    assert belief_after.log_odds < belief_before.log_odds
+    assert belief_after.contributions[:-1] == belief_before.contributions
+    assert belief_after.contributions[-1].kind == "elapsed_decay"
+    assert result.snapshot.traversal_tokens == ()
+    assert result.snapshot.retained_traversal_tokens == ()
+    assert result.snapshot.anonymous_supports == ()
+    assert result.policy_events == ()
+    assert result.snapshot.policy_states[0].active
+
+    clearing = engine.observe(
+        SensorInput("binary_sensor.room", "off", NOW + timedelta(seconds=3))
+    )
+    presence_clearing = next(
+        state
+        for state in clearing.snapshot.episode_states
+        if state.node_id == "room_presence"
+    )
+    assert presence_clearing.clear_deadline is not None
+    cleared = engine.advance(presence_clearing.clear_deadline)
+    assert cleared.snapshot.belief_states[0].context == "cleared_without_outward"
+    assert [
+        item.kind for item in cleared.snapshot.belief_states[0].contributions
+    ].count("stable_clear") == 1
+
+
+def test_bootstrap_neutral_interaction_preserves_same_zone_assertion() -> None:
+    engine = ZoneModelEngine(mixed_same_zone_map(), 1, NOW)
+
+    snapshot = engine.bootstrap_sensor_snapshot(
+        (
+            SensorInput("binary_sensor.room", "on", NOW),
+            SensorInput("event.room_scene_001", "unknown", NOW),
+            SensorInput("event.room_scene_002", "unknown", NOW),
+        ),
+        NOW,
+    )
+
+    presence = next(
+        state
+        for state in snapshot.episode_states
+        if state.node_id == "room_presence"
+    )
+    assert presence.episode_id is not None
+    assert snapshot.belief_states[0].context == "asserted"
+    assert snapshot.belief_states[0].asserted_episode_id == presence.episode_id
+    assert not snapshot.policy_states[0].active
+
+
+@pytest.mark.parametrize(
+    "entity_order",
+    (
+        ("binary_sensor.presence_a", "binary_sensor.presence_b"),
+        ("binary_sensor.presence_b", "binary_sensor.presence_a"),
+    ),
+)
+def test_same_zone_assertion_selection_is_deterministic(
+    entity_order: tuple[str, str],
+) -> None:
+    engine = ZoneModelEngine(multiple_same_zone_assertions_map(), 1, NOW)
+    for entity_id in entity_order:
+        engine.observe(SensorInput(entity_id, "on", NOW))
+    engine.observe(SensorInput("event.room_scene_001", "pressed", NOW))
+
+    result = engine.observe(
+        SensorInput("event.room_scene_002", "unknown", NOW + timedelta(seconds=1))
+    )
+
+    selected = next(
+        state
+        for state in result.snapshot.episode_states
+        if state.node_id == "presence_b"
+    )
+    assert selected.episode_id is not None
+    assert result.snapshot.belief_states[0].asserted_episode_id == selected.episode_id
+
+
+def test_restore_reconciliation_requires_matching_current_on_assertion() -> None:
+    engine = ZoneModelEngine(mixed_same_zone_map(), 1, NOW)
+    engine.observe(SensorInput("binary_sensor.room", "on", NOW))
+    presence = next(
+        state
+        for state in engine.snapshot.episode_states
+        if state.node_id == "room_presence"
+    )
+    engine._filters["room"].apply_unavailable(NOW)  # noqa: SLF001
+
+    unmatched = engine.reconcile_restored_asserted_contexts((), NOW)
+    reconciled = engine.reconcile_restored_asserted_contexts(
+        (SensorInput("binary_sensor.room", "on", NOW),),
+        NOW,
+    )
+
+    assert unmatched.belief_states[0].context == "unavailable"
+    assert presence.episode_id is not None
+    assert reconciled.belief_states[0].context == "asserted"
+    assert reconciled.belief_states[0].generation_episode_id == presence.episode_id
+    assert reconciled.belief_states[0].asserted_episode_id == presence.episode_id
+    assert not reconciled.policy_states[0].active
+
+
+def test_restore_reconciliation_validates_frontier_and_no_op_boundaries() -> None:
+    engine = ZoneModelEngine(mixed_same_zone_map(), 1, NOW)
+    later = NOW + timedelta(seconds=1)
+
+    with pytest.raises(ValueError, match="share one frontier"):
+        engine.reconcile_restored_asserted_contexts(
+            (SensorInput("binary_sensor.room", "on", NOW),),
+            later,
+        )
+
+    unmatched = engine.reconcile_restored_asserted_contexts(
+        (SensorInput("binary_sensor.room", "on", later),),
+        later,
+    )
+    assert unmatched.updated_at == later
+    assert unmatched.belief_states[0].context == "cleared_without_outward"
+
+    empty = ZoneModelEngine(mixed_same_zone_map(), 0, NOW)
+    unchanged = empty.reconcile_restored_asserted_contexts(
+        (SensorInput("binary_sensor.room", "on", NOW),),
+        NOW,
+    )
+    assert unchanged == empty.snapshot
 
 
 def test_engine_composes_transition_authorization_and_policy_acquisition() -> None:

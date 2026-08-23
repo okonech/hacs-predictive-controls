@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from custom_components.predictive_controls.events import event_from_entity
 from custom_components.predictive_controls.model import PredictiveMap
 
@@ -71,7 +73,7 @@ def test_event_from_entity_preserves_health_states_and_rejects_junk() -> None:
     assert normalized is not None and normalized.state == "unknown"
 
 
-def test_event_from_entity_normalizes_live_interaction_but_not_startup_state() -> None:
+def test_event_from_entity_uses_live_interaction_occurrence_timestamp() -> None:
     predictive_map = PredictiveMap.from_mapping(
         {
             "nodes": {
@@ -109,6 +111,79 @@ def test_event_from_entity_normalizes_live_interaction_but_not_startup_state() -
         now,
     )
 
-    assert live is not None and live.state == "pressed"
-    assert startup is not None and startup.state == "unknown"
-    assert unavailable is not None and unavailable.state == "unavailable"
+    assert live is not None
+    assert live.state == "pressed"
+    assert live.event_at == now
+    assert startup is not None
+    assert startup.state == "unknown"
+    assert startup.event_at == now
+    assert unavailable is not None
+    assert unavailable.state == "unavailable"
+    assert unavailable.event_at == now
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    (
+        (
+            "2026-08-22T07:28:35.046Z",
+            datetime(2026, 8, 22, 7, 28, 35, 46000, tzinfo=UTC),
+        ),
+        (
+            "2026-08-22T03:28:35.046-04:00",
+            datetime(2026, 8, 22, 7, 28, 35, 46000, tzinfo=UTC),
+        ),
+    ),
+)
+def test_event_from_entity_normalizes_interaction_timestamp_to_utc(
+    state: str,
+    expected: datetime,
+) -> None:
+    event = event_from_entity(
+        interaction_map(),
+        "event.bathroom_scene_002",
+        state,
+        datetime(2026, 8, 22, 7, 28, 36, tzinfo=UTC),
+    )
+
+    assert event is not None
+    assert event.event_at == expected
+
+
+@pytest.mark.parametrize(
+    "state",
+    (
+        "not-a-timestamp",
+        "2026-08-22T07:28:35.046",
+        "2026-08-22T07:28:37+00:00",
+    ),
+)
+def test_event_from_entity_rejects_invalid_live_interaction_timestamp(
+    state: str,
+) -> None:
+    assert (
+        event_from_entity(
+            interaction_map(),
+            "event.bathroom_scene_002",
+            state,
+            datetime(2026, 8, 22, 7, 28, 36, tzinfo=UTC),
+        )
+        is None
+    )
+
+
+def interaction_map() -> PredictiveMap:
+    return PredictiveMap.from_mapping(
+        {
+            "nodes": {
+                "bathroom_switch": {
+                    "zone": "bathroom",
+                    "role": "room_occupancy",
+                    "occupancy_behavior": "sticky",
+                    "entities": {
+                        "interaction_scene_002": "event.bathroom_scene_002"
+                    },
+                }
+            }
+        }
+    )

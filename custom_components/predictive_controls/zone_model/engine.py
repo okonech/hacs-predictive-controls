@@ -285,7 +285,7 @@ class ZoneModelEngine:
                         effect.episode_id, effect.at, effect.reliability
                     )
                 if event.state in {"unknown", "unavailable"}:
-                    self._filters[update.state.zone].apply_unavailable(at)
+                    self._reconcile_zone_availability(update.state.zone, at)
         self._advance_components(at)
         self._frontier.clear(at)
         self._supports.clear(at, "bootstrap")
@@ -294,6 +294,42 @@ class ZoneModelEngine:
             for filter_ in self._filters.values():
                 filter_.apply_empty_baseline(at)
         self._updated_at = at
+        return self.snapshot
+
+    def reconcile_restored_asserted_contexts(
+        self,
+        events: Sequence[SensorInput],
+        at: datetime,
+    ) -> ZoneModelSnapshot:
+        """Reconcile current raw-on levels with matching restored assertions."""
+
+        self._validate_operation_time(at, at)
+        if any(event.event_at != at for event in events):
+            raise ValueError("Restore sensor snapshot must share one frontier")
+        if at > self._updated_at:
+            self.advance(at, processing_at=at, emit_events=False)
+        if self._count.state.expected_count == 0:
+            return self.snapshot
+
+        current_on_entities = frozenset(
+            event.entity_id for event in events if event.state == "on"
+        )
+        eligible_node_ids = frozenset(
+            node.node_id
+            for node in self._nodes
+            if any(
+                alias in current_on_entities
+                for alias in set(node.aliases) - set(node.interaction_aliases)
+            )
+        )
+        if not eligible_node_ids:
+            return self.snapshot
+        for zone in sorted(self._filters):
+            selected = self._select_asserted_context(zone, eligible_node_ids)
+            if selected is None:
+                continue
+            assert selected.episode_id is not None
+            self._filters[zone].reselect_asserted_context(selected.episode_id, at)
         return self.snapshot
 
     def observe(
@@ -440,7 +476,7 @@ class ZoneModelEngine:
         self._advance_components(event.event_at)
         if event.state in {"unknown", "unavailable"}:
             belief_before = self._filters[update.state.zone].state
-            self._filters[update.state.zone].apply_unavailable(event.event_at)
+            self._reconcile_zone_availability(update.state.zone, event.event_at)
         elif update.disposition == "baseline_clear":
             belief_before = self._filters[update.state.zone].state
             self._filters[update.state.zone].apply_availability_clear(
@@ -506,6 +542,47 @@ class ZoneModelEngine:
             (*pending_expiry_decisions, *deadline_decisions, *decisions),
             tuple(authorizations),
         )
+
+    def _select_asserted_context(
+        self,
+        zone: str,
+        eligible_node_ids: frozenset[str] | None = None,
+    ) -> EpisodeState | None:
+        candidates = tuple(
+            state
+            for state in self._episodes.states
+            if state.zone == zone
+            and state.episode_id is not None
+            and state.last_event_at is not None
+            and state.known_on
+            and state.status == "asserted"
+            and not state.health_warning
+            and (
+                eligible_node_ids is None or state.node_id in eligible_node_ids
+            )
+        )
+        if not candidates:
+            return None
+
+        def selection_key(state: EpisodeState) -> tuple[datetime, str, str]:
+            assert state.last_event_at is not None
+            assert state.episode_id is not None
+            return state.last_event_at, state.node_id, state.episode_id
+
+        return max(candidates, key=selection_key)
+
+    def _reconcile_zone_availability(
+        self,
+        zone: str,
+        at: datetime,
+        eligible_node_ids: frozenset[str] | None = None,
+    ) -> None:
+        selected = self._select_asserted_context(zone, eligible_node_ids)
+        if selected is None:
+            self._filters[zone].apply_unavailable(at)
+            return
+        assert selected.episode_id is not None
+        self._filters[zone].reselect_asserted_context(selected.episode_id, at)
 
     def _observe_empty_house(
         self,
