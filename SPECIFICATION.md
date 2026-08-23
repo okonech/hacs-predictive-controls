@@ -59,8 +59,10 @@ an authorized episode or bounded pending candidate, not an unproven level.
   evidence in that zone and its graph neighborhood. Unrelated weak or unresolved
   activity elsewhere must not make a local result unavailable. A bounded count
   conflict from distinct strong tracked fronts may reject disconnected local
-  evidence and eventually degrade a contradicted stuck assertion, but it may not
-  delay graph-authorized or mature prediction-authorized acquisition.
+  evidence and eventually degrade the inference and traversal authority of a
+  contradicted stuck assertion, but it may not make a currently asserted stay
+  episode eligible for public release or delay graph-authorized or mature
+  prediction-authorized acquisition.
 - **REQ-GOAL-002, probability-driven policy:** The same declared zone belief must
   inform both activation and release. Historical ownership must not override a
   sufficiently low filtered belief indefinitely.
@@ -208,10 +210,13 @@ Every sensor profile declares independently:
 - **REQ-EVID-005:** When a transition or boundary assertion exceeds its trust
   horizon, its likelihood influence decays toward a finite profile floor and a
   sensor-health warning is emitted. A stay assertion remains strong, bounded
-  local evidence while the device is currently asserted unless the persistent
-  external contradiction in `REQ-COUNT-009` health-degrades it; elapsed wall time
-  alone must not convert it into absence. No continuous assertion may authorize
-  unlimited neighboring arrivals.
+  local evidence for public retention while the device is currently asserted.
+  The persistent external contradiction in `REQ-COUNT-009` may health-degrade
+  its inference and traversal authority and remove its belief floor, but is not
+  local absence and cannot start or continue public release dwell until stable
+  clear or unknown/unavailable state. Elapsed wall time alone must not convert it
+  into absence. No continuous assertion may authorize unlimited neighboring
+  arrivals.
 - **REQ-EVID-006:** Out-of-order or duplicate inputs are ignored and diagnosed.
   They do not advance filter time, decay, traversal, policy, prediction, or
   learning. Home Assistant `time_fired` is the occurrence frontier used for this
@@ -568,8 +573,9 @@ learning, and a credible settled endpoint may remain after ordinary token expiry
   count-conflicted when at least $N$ independent count supports already exist.
   The candidate remains publicly off but retained until normal expiry so later
   graph support can still promote it. Count may not force exactly $N$ active zones
-  and may contribute to release only through the persistent stuck-sensor conflict
-  in `REQ-COUNT-009`.
+  and may diagnose inference/traversal health only through the persistent
+  stuck-sensor conflict in `REQ-COUNT-009`. Positive count is not local absence
+  and cannot make a currently asserted stay episode publicly release-eligible.
 - **REQ-COUNT-004:** Evidence for up to $N$ independent outside clusters may
   accelerate decay of a cleared origin. It is not injective proof of absence and
   is unnecessary when local filtered belief already satisfies release policy.
@@ -616,17 +622,23 @@ learning, and a credible settled endpoint may remain after ordinary token expiry
   configured nodes from its latest confirmed traversal and is used only to
   exclude a target on that lineage from the outside set; the path does not claim
   current occupancy at every listed node. The target assertion no longer floors
-  belief, its traversal authority remains closed, and normal
-  probability-driven decay and release proceed. Count does not switch the zone off
-  directly. Stable clear followed by a fresh trustworthy positive, or a compatible
-  new traversal episode, clears the conflict and restores normal evaluation
-  immediately. If any selected outside support is removed, coalesced, transferred
-  through the target, or otherwise ceases to qualify after degradation, the
-  conflict also clears in the same evaluation that observes the invalidation. A
-  still-asserted matching stay episode returns atomically to its normal asserted
-  belief context without a synthetic positive observation, renewed traversal
-  authority, or retroactive public edge. Ordinary policy then evaluates that
-  restored belief in the same model update.
+  belief, its traversal authority remains closed, and normal probability-driven
+  decay proceeds. Count does not switch the zone off directly and the same
+  count-degraded stay episode vetoes creation or continuation of public release
+  dwell while it remains `degraded` or is `clearing` inside stable-clear
+  confirmation. Stable clear or unknown/unavailable state removes that veto and
+  ordinary threshold plus a fresh full release dwell applies. Count zero remains
+  an immediate categorical release. A raw clear/reassert flap inside stable-clear
+  confirmation returns to the same degraded episode, reopens no traversal, and
+  accumulates no release dwell. Stable clear followed by a fresh trustworthy
+  positive, or a compatible new traversal episode, clears the conflict and
+  restores normal evaluation immediately. If any selected outside support is
+  removed, coalesced, transferred through the target, or otherwise ceases to
+  qualify after degradation, the conflict also clears in the same evaluation
+  that observes the invalidation. A still-asserted matching stay episode returns
+  atomically to its normal asserted belief context without a synthetic positive
+  observation, renewed traversal authority, or retroactive public edge. Ordinary
+  policy then evaluates that restored belief in the same model update.
 - **REQ-COUNT-010:** A stuck-off or missed intermediate sensor cannot permanently
   break acquisition elsewhere. An existing frontier may cross only the reviewed
   bounded missed-edge path, while any later pair of adjacent distinct episodes
@@ -688,15 +700,18 @@ than replacing it with a separate proof system.
   Section 12. Existing `active`, waiting, light/output state, and timer callbacks
   are not acquisition evidence.
 - **REQ-POLICY-002:** Release occurs when filtered belief is at or below
-  $\theta_{off}$ for the profile's release-confirmation dwell. It does not require
-  globally finalized movement, support certificates, or accounting for every
-  occupant elsewhere.
+  $\theta_{off}$ for the profile's release-confirmation dwell and no current
+  asserted-stay veto from `REQ-COUNT-009` applies. It does not require globally
+  finalized movement, support certificates, or accounting for every occupant
+  elsewhere.
 - **REQ-POLICY-003:** Current trustworthy stay evidence may floor $q_z$ or extend
   release confirmation according to profile calibration. While a stay sensor
-  remains asserted, assertion age alone cannot release the zone. Stable clear,
-  unavailable state, count zero, or the persistent tracked-front conflict in
-  `REQ-COUNT-009` may remove that floor and begin release under the declared
-  filter and dwell.
+  remains asserted, assertion age alone cannot release the zone. The persistent
+  conflict in `REQ-COUNT-009` may remove the belief floor and close traversal,
+  but while the same episode remains count-degraded or is inside stable-clear
+  confirmation it cancels pending release time and vetoes release. Stable clear
+  or unknown/unavailable state removes that veto and ordinary filter plus full
+  release dwell applies. Count zero releases immediately.
 - **REQ-POLICY-004:** Transition zones use shorter occupancy persistence and
   release dwell than stay zones. Their assertions may remain useful as bounded
   traversal context after transition-zone occupancy belief has decayed.
@@ -1142,8 +1157,8 @@ This section is the maintained current-state index for the implementation. It is
 descriptive evidence of conformance, not a second source of requirements. The
 numbered requirements above remain authoritative if a summary here is incomplete.
 
-**Last conformance review:** 2026-08-22, after independent temporal
-support-transfer authority review
+**Last conformance review:** 2026-08-23, after the asserted-stay count-conflict
+release-authority repair
 **Repository version:** `0.2.6`
 **Home Assistant Store version:** `7`
 **Current inference schema:** `zone-belief-v4`
@@ -1156,13 +1171,13 @@ support-transfer authority review
 | Zone belief               | Per-zone binary log-odds filtering, reliability-tempered likelihoods, generation-idempotent finite-ceiling interaction evidence, role/context decay, and supported-arrival transitions        | `zone_model/filter.py`, `zone_model/calibration.py`                      |
 | Traversal and acquisition | Pending bootstrap, immediate local-interaction acquisition, provisional and confirmed anonymous paths, adjacency, same-zone, boundary, missed-edge, and continuity reopening                  | `zone_model/traversal.py`, `zone_model/engine.py`                        |
 | Anonymous supports        | Bounded moving/settled support state, confirmed creation, causal-frontier and selected-path transfer authority, guarded binding, coalescence, same-zone settlement, and deterministic removal | `zone_model/supports.py`                                                 |
-| Count context             | Categorical count zero, positive-count validation, and count-conflict dwell, health degradation, and recovery from immutable support projections                                              | `zone_model/count.py`, `zone_model/engine.py`                            |
-| Policy and public control | Shared 0.70/0.30 hysteresis, profile release dwell, one `active` entity per zone, `home_active`, and optional deduplicated arrival events                                                     | `zone_model/policy.py`, `binary_sensor.py`, `event.py`                   |
+| Count context             | Categorical count zero, positive-count validation, count-conflict dwell, health degradation, traversal closure, asserted-stay release veto, and recovery from immutable support projections   | `zone_model/count.py`, `zone_model/engine.py`                            |
+| Policy and public control | Shared 0.70/0.30 hysteresis, profile release dwell, asserted-stay pending-dwell cancellation, one `active` entity per zone, `home_active`, and optional deduplicated arrival events           | `zone_model/policy.py`, `binary_sensor.py`, `event.py`                   |
 | Prediction and learning   | Confirmed-route learning, fixed 0.85 maturity threshold, minimum five accepted transitions, and nonrenewing 10-second internal activation leases                                              | `zone_model/prediction.py`, `markov.py`                                  |
 | Persistence and migration | Atomic v4 persistence; strict restore; conservative v3 and v2 import; deferred schema-6 active seed; immutable accepted-v3 rollback backup                                                    | `zone_model/persistence.py`, `storage.py`, `occupancy_tracker.py`        |
 | Diagnostics and UI        | Bounded policy audit, beliefs, episodes, health, traversal, supports, conflicts, predictions, stale-binding and other lifecycle counters, WebSocket status, and Activity/map panel            | `zone_model/policy.py`, `status.py`, `websocket.py`, `frontend/panel.js` |
 | Runtime integration       | State and physical-interaction event normalization, authoritative count, deterministic timer advancement, edge-gated publication, delayed persistence, and final save                         | `runtime.py`, `occupancy_tracker.py`, `__init__.py`                      |
-| Validation                | Retained public incidents and target fixtures, 595 Python tests at 100% branch coverage, Ruff, strict mypy, 29 frontend tests/build, and passing bounded 100-event benchmark                  | `tests/`, `benchmarks/occupancy_performance.py`                          |
+| Validation                | Retained public incidents and target fixtures, 603 Python tests at 100% branch coverage, Ruff, strict mypy, 29 frontend tests/build, and passing bounded 100-event benchmark                  | `tests/`, `benchmarks/occupancy_performance.py`                          |
 
 The current implementation includes the retained 2026-08-20 office false-release
 repair: loss of a selected outside support clears an already-degraded count
@@ -1178,3 +1193,13 @@ on the accepted path. Linked off-path lineage remains bounded but cannot move or
 target-rebind support. Restart, callback failure, coalescence remapping, exact
 expiry, count-conflict inverse, and lifecycle-counter boundaries are retained in
 the target-model regression suites.
+
+The implementation also includes the retained 2026-08-23 Master Bathroom
+asserted-stay repair. Positive count conflict may health-degrade the current stay
+episode, remove its belief floor, and close traversal, but it cannot start or
+retain public release dwell while that same episode remains asserted or inside
+stable-clear confirmation. Stable clear and unknown/unavailable restore ordinary
+full-dwell release eligibility; authoritative count zero remains immediate. The
+exact production timestamps, degraded and release-frontier beliefs, public edge,
+clear/reassert, pending-dwell, count-zero, neutral-availability, and restart
+boundaries are retained in the target-model regression suites.

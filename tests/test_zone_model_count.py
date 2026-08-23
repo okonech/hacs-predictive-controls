@@ -15,7 +15,10 @@ from custom_components.predictive_controls.zone_model.count import (
     apply_count_update,
 )
 from custom_components.predictive_controls.zone_model.engine import ZoneModelEngine
-from custom_components.predictive_controls.zone_model.filter import ZoneBeliefFilter
+from custom_components.predictive_controls.zone_model.filter import (
+    ZoneBeliefFilter,
+    probability_to_log_odds,
+)
 from custom_components.predictive_controls.zone_model.profiles import BELIEF_PROFILES
 from custom_components.predictive_controls.zone_model.traversal import TraversalFrontier
 from custom_components.predictive_controls.zone_model.types import (
@@ -219,6 +222,7 @@ def conflict_map(
     *,
     extend_a: bool = False,
     target_presence: bool = False,
+    target_reliability: float = 1.0,
 ) -> PredictiveMap:
     target_signal = "mmwave" if target_presence else "motion"
     nodes: dict[str, object] = {
@@ -233,6 +237,7 @@ def conflict_map(
             "zone": "target",
             "entities": {target_signal: "binary_sensor.target"},
             "adjacent": ["target_source"],
+            "initial_weight": target_reliability,
         },
     }
     for prefix in ("a", "d"):
@@ -329,11 +334,113 @@ def test_two_settled_supports_degrade_stuck_assertion_only_after_full_dwell() ->
     assert conflict_row.reliability_result == "degraded"
     assert engine.diagnostic_counters["count_conflict_degraded"] == 1
 
-    released = engine.advance(NOW + timedelta(minutes=10))
+    held = engine.advance(NOW + timedelta(minutes=10))
+    target_policy = next(
+        state for state in held.snapshot.policy_states if state.zone == "target"
+    )
+    assert target_policy.active
+    assert target_policy.pending_release_since is None
+    assert any(row.reason == "asserted_stay_hold" for row in engine.audit_rows)
+
+    clear_at = NOW + timedelta(minutes=10, seconds=1)
+    engine.observe(SensorInput("binary_sensor.target", "off", clear_at))
+    stable_clear_at = clear_at + timedelta(seconds=5)
+    cleared = engine.advance(stable_clear_at)
+    cleared_policy = next(
+        state for state in cleared.snapshot.policy_states if state.zone == "target"
+    )
+    assert cleared_policy.active
+    assert cleared_policy.pending_release_since == stable_clear_at
+
+    released = engine.advance(stable_clear_at + timedelta(seconds=60))
     target_policy = next(
         state for state in released.snapshot.policy_states if state.zone == "target"
     )
     assert not target_policy.active
+    assert any(
+        event.zone == "target" and event.kind == "released"
+        for event in released.policy_events
+    )
+
+
+def test_count_degraded_clear_reassertion_remains_held_and_valid() -> None:
+    engine = engine_with_two_front_conflict()
+    deadline = engine.snapshot.count_conflicts[0].deadline
+    engine.advance(deadline)
+
+    engine.observe(
+        SensorInput("binary_sensor.target", "off", deadline + timedelta(seconds=1))
+    )
+    reasserted = engine.observe(
+        SensorInput("binary_sensor.target", "on", deadline + timedelta(seconds=2))
+    )
+    target = next(
+        state
+        for state in reasserted.snapshot.episode_states
+        if state.node_id == "target"
+    )
+    target_policy = next(
+        state
+        for state in reasserted.snapshot.policy_states
+        if state.zone == "target"
+    )
+
+    assert target.status == "degraded"
+    assert target.known_on
+    assert target.health_warning
+    assert target.degradation_reason == "count_conflict"
+    assert target.traversal_valid_until is None
+    assert target.clear_started_at is None
+    assert target.clear_deadline is None
+    assert target_policy.active
+
+    retained = engine.advance(deadline + timedelta(minutes=10))
+    assert next(
+        state for state in retained.snapshot.policy_states if state.zone == "target"
+    ).active
+
+
+@pytest.mark.parametrize("state", ["unknown", "unavailable"])
+def test_neutral_availability_removes_asserted_stay_hold(state: str) -> None:
+    engine = engine_with_two_front_conflict()
+    deadline = engine.snapshot.count_conflicts[0].deadline
+    engine.advance(deadline)
+    unavailable_at = deadline + timedelta(seconds=1)
+
+    result = engine.observe(
+        SensorInput("binary_sensor.target", state, unavailable_at)
+    )
+    target = next(
+        item for item in result.snapshot.episode_states if item.node_id == "target"
+    )
+    assert target.status == "unavailable"
+
+    released = engine.advance(unavailable_at + timedelta(minutes=30))
+    target_policy = next(
+        item for item in released.snapshot.policy_states if item.zone == "target"
+    )
+    assert not target_policy.active
+    assert any(event.kind == "released" for event in released.policy_events)
+
+
+def test_count_zero_bypasses_asserted_stay_hold() -> None:
+    engine = engine_with_two_front_conflict()
+    deadline = engine.snapshot.count_conflicts[0].deadline
+    engine.advance(deadline)
+
+    result = engine.observe_count(
+        CountInput("count-zero", 0, True, deadline + timedelta(seconds=1))
+    )
+
+    assert not next(
+        state for state in result.snapshot.policy_states if state.zone == "target"
+    ).active
+    assert any(
+        event.zone == "target"
+        and event.kind == "released"
+        and event.policy_reason == "count_zero"
+        for event in result.policy_events
+    )
 
 
 def test_retained_support_prevents_count_conflict_on_its_asserted_endpoint() -> None:
@@ -615,6 +722,115 @@ def test_inc_2026_08_20_support_loss_recovers_asserted_stay_zone() -> None:
         for result in (degraded, retained)
         for event in result.policy_events
     )
+
+
+def test_inc_2026_08_23_asserted_stay_never_releases_for_count_conflict() -> None:
+    target_on_at = datetime(2026, 8, 23, 5, 56, 40, 122876, tzinfo=UTC)
+    conflict_started_at = datetime(2026, 8, 23, 5, 56, 43, 75447, tzinfo=UTC)
+    conflict_deadline = datetime(2026, 8, 23, 5, 58, 43, 75447, tzinfo=UTC)
+    release_pending_at = datetime(2026, 8, 23, 6, 4, 11, 52856, tzinfo=UTC)
+    observed_release_at = datetime(2026, 8, 23, 6, 6, 13, 173267, tzinfo=UTC)
+    setup_at = target_on_at - timedelta(minutes=1)
+    predictive_map = conflict_map(
+        target_presence=True,
+        target_reliability=0.7,
+    )
+    engine = ZoneModelEngine(
+        predictive_map,
+        2,
+        setup_at,
+    )
+    for node_id, event_at in (
+        ("a", setup_at),
+        ("am", setup_at + timedelta(seconds=1)),
+        ("as", setup_at + timedelta(seconds=2)),
+        ("d", setup_at + timedelta(seconds=3)),
+        ("dm", setup_at + timedelta(seconds=4)),
+        ("ds", setup_at + timedelta(seconds=5)),
+    ):
+        engine.observe(SensorInput(f"binary_sensor.{node_id}", "on", event_at))
+    engine.observe(
+        SensorInput(
+            "binary_sensor.target_source",
+            "on",
+            target_on_at - timedelta(seconds=1),
+        )
+    )
+    engine.observe(SensorInput("binary_sensor.target", "on", target_on_at))
+    acquired_snapshot = engine.snapshot
+    engine = ZoneModelEngine.restore(
+        predictive_map,
+        replace(
+            acquired_snapshot,
+            belief_states=tuple(
+                replace(
+                    state,
+                    log_odds=probability_to_log_odds(0.7793789008408025),
+                )
+                if state.zone == "target"
+                else state
+                for state in acquired_snapshot.belief_states
+            ),
+        ),
+        (),
+        target_on_at,
+    )
+
+    acquired = next(
+        state for state in engine.snapshot.policy_states if state.zone == "target"
+    )
+    acquired_belief = next(
+        state for state in engine.snapshot.belief_states if state.zone == "target"
+    )
+    assert acquired_belief.probability == pytest.approx(
+        0.7793789008408025,
+        abs=0.02,
+    )
+    assert acquired.active
+    engine.advance(conflict_started_at)
+    conflict = engine.snapshot.count_conflicts[0]
+    assert conflict.started_at == conflict_started_at
+    assert conflict.deadline == conflict_deadline
+    evaluations = [
+        engine.advance(conflict_deadline),
+        engine.advance(release_pending_at),
+    ]
+    degraded_belief = next(
+        state
+        for state in evaluations[0].snapshot.belief_states
+        if state.zone == "target"
+    )
+    assert degraded_belief.probability == pytest.approx(
+        0.7959950372145533,
+        abs=0.02,
+    )
+    retained = engine.advance(observed_release_at)
+    evaluations.append(retained)
+    target = next(
+        state for state in retained.snapshot.episode_states if state.node_id == "target"
+    )
+    target_policy = next(
+        state for state in retained.snapshot.policy_states if state.zone == "target"
+    )
+    target_belief = next(
+        state for state in retained.snapshot.belief_states if state.zone == "target"
+    )
+
+    assert target_belief.probability == pytest.approx(
+        0.21639972587294073,
+        abs=0.02,
+    )
+    assert target_policy.active
+    assert not any(
+        event.zone == "target" and event.kind == "released"
+        for result in evaluations
+        for event in result.policy_events
+    )
+    assert target.known_on
+    assert target.status == "degraded"
+    assert target.health_warning
+    assert target.degradation_reason == "count_conflict"
+    assert target.traversal_valid_until is None
 
 
 def test_support_movement_preserves_continuous_conflict_dwell() -> None:

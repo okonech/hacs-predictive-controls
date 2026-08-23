@@ -349,12 +349,15 @@ class ZonePolicy:
         emit_event: bool = True,
         below_threshold_since: datetime | None = None,
         pending_candidate: PendingAcquisitionCandidate | None = None,
+        asserted_stay_hold: bool = False,
         before_audit: Callable[
             [PolicyEvent, PolicyDecision, TraversalAuthorization | None], None
         ]
         | None = None,
     ) -> PolicyUpdate:
         processing_at = at if processing_at is None else processing_at
+        if not isinstance(asserted_stay_hold, bool):
+            raise ValueError("Asserted-stay hold flag must be boolean")
         self._validate_evaluation(at, processing_at, belief_before, belief_after)
         dedup = self._pruned_dedup(at)
         active_before = self._state.active
@@ -465,7 +468,10 @@ class ZonePolicy:
             else:
                 reason = "prediction_active"
         else:
-            if belief_after.probability <= self._calibration.off_threshold:
+            if asserted_stay_hold:
+                pending = None
+                reason = "asserted_stay_hold"
+            elif belief_after.probability <= self._calibration.off_threshold:
                 pending = (
                     below_threshold_since
                     if pending is None and below_threshold_since is not None

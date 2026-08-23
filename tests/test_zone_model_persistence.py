@@ -475,6 +475,49 @@ def test_count_conflict_dwell_survives_restart_without_extension() -> None:
     assert row.count_conflict_support_ids == conflict.support_ids
 
 
+def test_restored_count_degraded_assertion_cancels_legacy_pending_release() -> None:
+    predictive_map = conflict_map()
+    engine = engine_with_two_front_conflict()
+    conflict = engine.snapshot.count_conflicts[0]
+    engine.advance(conflict.deadline)
+    snapshot = engine.snapshot
+    pending_at = conflict.deadline
+    legacy_pending = replace(
+        snapshot,
+        policy_states=tuple(
+            replace(state, pending_release_since=pending_at)
+            if state.zone == "target"
+            else state
+            for state in snapshot.policy_states
+        ),
+    )
+
+    restored = ZoneModelEngine.restore(
+        predictive_map,
+        legacy_pending,
+        tuple(engine.audit_rows),
+        pending_at,
+    )
+    due_at = pending_at + POLICY_CALIBRATIONS["stay_pir"].release_dwell
+    replayed = restored.observe(
+        SensorInput("binary_sensor.as", "on", due_at),
+    )
+    target_policy = next(
+        state for state in replayed.snapshot.policy_states if state.zone == "target"
+    )
+
+    assert target_policy.active
+    assert target_policy.pending_release_since is None
+    assert not any(
+        event.zone == "target" and event.kind == "released"
+        for event in replayed.policy_events
+    )
+    assert any(
+        row.zone == "target" and row.reason == "asserted_stay_hold"
+        for row in restored.audit_rows
+    )
+
+
 def test_v3_import_invents_no_support_and_keeps_only_degraded_provenance() -> None:
     predictive_map = conflict_map()
     pending = engine_with_two_front_conflict()

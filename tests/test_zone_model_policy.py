@@ -358,6 +358,85 @@ def test_t05_t06_health_degradation_never_extends_pending_release() -> None:
         assert update.state.pending_release_since is None
 
 
+def test_asserted_stay_hold_cancels_and_restarts_full_release_dwell() -> None:
+    policy = ZonePolicy("room", POLICY_CALIBRATIONS["stay_presence"], NOW, active=True)
+    low = belief(0.2, NOW, profile="stay_presence")
+    started = policy.evaluate(
+        NOW,
+        low,
+        low,
+        local_state=None,
+        local_effect=None,
+        authorization=None,
+    )
+    assert started.state.pending_release_since == NOW
+
+    dwell = POLICY_CALIBRATIONS["stay_presence"].release_dwell
+    held_at = NOW + dwell
+    held = policy.evaluate(
+        held_at,
+        belief(0.2, held_at, profile="stay_presence"),
+        belief(0.2, held_at, profile="stay_presence"),
+        local_state=None,
+        local_effect=None,
+        authorization=None,
+        asserted_stay_hold=True,
+    )
+    assert held.state.active
+    assert held.state.pending_release_since is None
+    assert held.decision.reason == "asserted_stay_hold"
+
+    still_held_at = held_at + timedelta(hours=2)
+    still_held = policy.evaluate(
+        still_held_at,
+        belief(0.2, still_held_at, profile="stay_presence"),
+        belief(0.2, still_held_at, profile="stay_presence"),
+        local_state=None,
+        local_effect=None,
+        authorization=None,
+        asserted_stay_hold=True,
+    )
+    assert still_held.state.active
+    assert still_held.state.pending_release_since is None
+
+    clear_at = still_held_at + timedelta(seconds=1)
+    restarted = policy.evaluate(
+        clear_at,
+        belief(0.2, clear_at, profile="stay_presence"),
+        belief(0.2, clear_at, profile="stay_presence"),
+        local_state=None,
+        local_effect=None,
+        authorization=None,
+    )
+    assert restarted.state.pending_release_since == clear_at
+
+    released_at = clear_at + dwell
+    released = policy.evaluate(
+        released_at,
+        belief(0.2, released_at, profile="stay_presence"),
+        belief(0.2, released_at, profile="stay_presence"),
+        local_state=None,
+        local_effect=None,
+        authorization=None,
+    )
+    assert not released.state.active
+    assert released.event is not None and released.event.kind == "released"
+
+
+def test_asserted_stay_hold_flag_must_be_boolean() -> None:
+    policy = ZonePolicy("room", POLICY_CALIBRATIONS["stay_pir"], NOW, active=True)
+    with pytest.raises(ValueError, match="hold flag must be boolean"):
+        policy.evaluate(
+            NOW,
+            belief(0.2, NOW),
+            belief(0.2, NOW),
+            local_state=None,
+            local_effect=None,
+            authorization=None,
+            asserted_stay_hold=1,  # type: ignore[arg-type]
+        )
+
+
 def test_timer_cadence_does_not_change_release_boundary() -> None:
     direct = ZonePolicy("room", POLICY_CALIBRATIONS["stay_pir"], NOW, active=True)
     stepped = ZonePolicy("room", POLICY_CALIBRATIONS["stay_pir"], NOW, active=True)

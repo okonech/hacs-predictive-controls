@@ -14,7 +14,7 @@ For the retained incident, the intended public behavior is:
 1. Shaila Office remains active from a confirmed arrival plus continuing trustworthy local evidence and no plausible departure.
 2. A second anonymous support remains continuous through the confirmed Foyer/Dining/Kitchen route and its continuation through the stairs into Alex Office.
 3. With authoritative count two, those two independent supports start a count contradiction against the unsupported continuously asserted Gym sensor.
-4. After Gym's normal stay-profile conflict dwell, Gym is health-degraded; count does not switch Gym off directly. Normal degraded-belief decay and public release policy remain authoritative. In the retained fixture Gym was never publicly acquired, so its belief falls below the off threshold without a fabricated `released` edge; an already-active equivalent would release only through ordinary policy dwell.
+4. After Gym's normal stay-profile conflict dwell, Gym is health-degraded; count does not switch Gym off directly. Normal degraded-belief decay remains authoritative. In the retained fixture Gym was never publicly acquired, so its belief falls below the off threshold without a fabricated `released` edge. For an already-active equivalent, the later `INC-2026-08-23` authority repair in `asserted-stay-count-conflict-release-authority.md` vetoes public release while the same stay episode remains count-degraded or inside stable-clear confirmation.
 
 ## Verified Implementation State
 
@@ -94,7 +94,7 @@ This design record is not itself authority.
 8. **Conservative same-zone multiplicity:** Distinct supports that settle in the same zone coalesce deterministically. This version never infers same-zone multiplicity from sensor events, simultaneous or serial; `REQ-COUNT-005` remains true because one support is not one occupant assignment.
 9. **Bounded:** Support cardinality is at most `PRODUCT_MAX_OCCUPANTS`. Token-to-support mappings are a subset of the traversal frontier's bounded active/retained token IDs. No episode or transition history grows with runtime.
 10. **Ambiguity loses multiplicity:** Front merge, source-set merge, same-zone settlement, or an over-capacity creation attempt coalesces deterministically or declines the new support. Ambiguity may cause a false negative; it must not create an extra independent support.
-11. **Soft count:** Count may health-degrade a contradictory asserted target only after `N` independent outside supports persist through the target release dwell. Count never directly releases it.
+11. **Soft count:** Count may health-degrade a contradictory asserted target only after `N` independent outside supports persist through the target release dwell. Count never directly releases it, and the later asserted-stay authority repair prevents that conflict from making the same raw-current stay episode publicly release-eligible.
 12. **Fresh target wins immediately:** A new independent target episode or compatible target authorization cancels an unmatured conflict and restores existing conflict-recovery semantics.
 13. **Zero count clears:** `N=0` atomically removes supports, mappings, fronts, conflicts, traversal, belief occupancy, and public active state under existing zero-count behavior.
 14. **Deterministic:** Equal-timestamp ordering, support selection, coalescing, transfer, expiry, and conflict IDs are deterministic and restart-equivalent.

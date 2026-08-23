@@ -160,13 +160,16 @@ class PhysicalEpisodes:
                     state.hold_until is not None
                     and event.event_at < state.hold_until
                 )
+                count_degraded = state.degradation_reason == "count_conflict"
                 state = replace(
                     state,
-                    status="asserted",
+                    status="degraded" if count_degraded else "asserted",
                     clear_started_at=None,
                     clear_deadline=None,
                     traversal_valid_until=(
-                        None if impossible else state.traversal_valid_until
+                        None
+                        if impossible or count_degraded
+                        else state.traversal_valid_until
                     ),
                     cadence_warning=state.cadence_warning or impossible,
                 )

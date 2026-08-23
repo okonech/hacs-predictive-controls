@@ -850,11 +850,26 @@ class ZoneModelEngine:
 
         decisions: list[PolicyDecision] = []
         events: list[PolicyEvent] = []
+        asserted_stay_holds = self._asserted_stay_hold_zones()
         for zone in sorted(self._policies):
             policy = self._policies[zone]
             if not policy.state.active or policy.state.phase != "active":
                 continue
             belief_after = self._filters[zone].state
+            if zone in asserted_stay_holds:
+                if policy.state.pending_release_since is not None:
+                    update = policy.evaluate(
+                        at,
+                        belief_before_by_zone[zone],
+                        belief_after,
+                        local_state=None,
+                        local_effect=None,
+                        authorization=None,
+                        processing_at=processing_at,
+                        asserted_stay_hold=True,
+                    )
+                    decisions.append(update.decision)
+                continue
             calibration = POLICY_CALIBRATIONS[belief_after.profile_name]
             if belief_after.probability > calibration.off_threshold:
                 continue
@@ -916,6 +931,7 @@ class ZoneModelEngine:
                 ),
             )
         }
+        asserted_stay_holds = self._asserted_stay_hold_zones()
         priority_zones = set(prediction_by_zone)
         if local_state is not None:
             priority_zones.add(local_state.zone)
@@ -985,6 +1001,7 @@ class ZoneModelEngine:
                 emit_event=emit_events,
                 below_threshold_since=below_since,
                 pending_candidate=pending_by_zone.get(zone),
+                asserted_stay_hold=zone in asserted_stay_holds,
                 before_audit=decision_callback,
             )
             decisions.append(update.decision)
@@ -1004,6 +1021,16 @@ class ZoneModelEngine:
                     if prediction.event is not None:
                         events.append(prediction.event)
         return tuple(decisions), tuple(events)
+
+    def _asserted_stay_hold_zones(self) -> frozenset[str]:
+        return frozenset(
+            state.zone
+            for state in self._episodes.states
+            if SHARED_PROFILES[state.profile_name].role == "stay"
+            and state.status in {"degraded", "clearing"}
+            and state.health_warning
+            and state.degradation_reason == "count_conflict"
+        )
 
     def _validate_operation_time(
         self,
