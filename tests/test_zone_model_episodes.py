@@ -7,6 +7,7 @@ import pytest
 
 from custom_components.predictive_controls.zone_model.episodes import PhysicalEpisodes
 from custom_components.predictive_controls.zone_model.types import (
+    EpisodeEffect,
     PhysicalNode,
     SensorInput,
 )
@@ -33,6 +34,16 @@ def episodes(*, profile: str = "transition_fast") -> PhysicalEpisodes:
             ),
         )
     )
+
+
+def long_linked_cadence_run() -> PhysicalEpisodes:
+    model = episodes(profile="stay_presence")
+    model.observe(sensor("binary_sensor.a", "on", 0))
+    for minute in range(9, 180, 9):
+        model.observe(sensor("binary_sensor.a", "off", minute * 60 - 20))
+        model.observe(sensor("binary_sensor.a", "on", minute * 60))
+    model.observe(sensor("binary_sensor.a", "off", 3 * 60 * 60 - 10))
+    return model
 
 
 def test_aliases_and_same_state_callbacks_emit_one_positive() -> None:
@@ -118,6 +129,167 @@ def test_reassertion_after_hardware_hold_but_inside_burst_is_not_impossible() ->
     ]
 
 
+def test_stay_presence_completed_cycles_link_at_half_open_boundary() -> None:
+    linked = episodes(profile="stay_presence")
+    first = linked.observe(sensor("binary_sensor.a", "on", 0))
+    alias = linked.observe(sensor("binary_sensor.b", "on", 1))
+    partial_clear = linked.observe(sensor("binary_sensor.a", "off", 2))
+    clear = linked.observe(sensor("binary_sensor.b", "off", 60))
+    linked.advance(NOW + timedelta(seconds=70))
+    correlated = linked.observe(
+        sensor("binary_sensor.a", "on", 660 - 0.000001)
+    )
+
+    assert first.state.cadence_run_started_at == NOW
+    assert first.state.cadence_last_transition_at == NOW
+    assert alias.state.cadence_last_transition_at == NOW
+    assert partial_clear.state.cadence_last_transition_at == NOW
+    assert clear.state.cadence_last_transition_at == NOW + timedelta(seconds=60)
+    assert correlated.disposition == "accepted_correlated_positive"
+    assert correlated.state.generation == 2
+    assert correlated.state.cadence_cycle_count == 1
+    assert correlated.state.cadence_correlated
+    assert [effect.kind for effect in correlated.effects] == [
+        "correlated_positive"
+    ]
+
+    exact = episodes(profile="stay_presence")
+    exact.observe(sensor("binary_sensor.a", "on", 0))
+    exact.observe(sensor("binary_sensor.a", "off", 60))
+    exact.advance(NOW + timedelta(seconds=70))
+    independent = exact.observe(sensor("binary_sensor.a", "on", 660))
+
+    assert independent.disposition == "accepted_positive"
+    assert independent.state.cadence_run_started_at == NOW + timedelta(seconds=660)
+    assert independent.state.cadence_cycle_count == 0
+    assert not independent.state.cadence_correlated
+    assert [effect.kind for effect in independent.effects] == ["positive"]
+
+
+def test_sustained_cadence_warning_requires_a_linked_cycle() -> None:
+    held = episodes(profile="stay_presence")
+    held.observe(sensor("binary_sensor.a", "on", 0))
+
+    uninterrupted = held.advance(NOW + timedelta(hours=3))[0]
+
+    assert uninterrupted.state.status == "asserted"
+    assert not uninterrupted.state.cadence_warning
+    assert uninterrupted.effects == ()
+
+    warned = long_linked_cadence_run()
+    before = warned.advance(
+        NOW + timedelta(hours=3) - timedelta(microseconds=1)
+    )[0]
+    at_deadline = warned.advance(NOW + timedelta(hours=3))[0]
+
+    assert not before.state.cadence_warning
+    assert at_deadline.state.cadence_warning
+    assert at_deadline.state.cadence_warning_reason == "sustained_flapping"
+    assert [effect.kind for effect in at_deadline.effects] == [
+        "stable_clear",
+        "sustained_flapping",
+    ]
+    assert at_deadline.effects[-1].at == NOW + timedelta(hours=3)
+
+
+def test_late_advance_records_warning_before_later_quiet_clear() -> None:
+    model = long_linked_cadence_run()
+
+    advanced = model.advance(NOW + timedelta(minutes=190))[0]
+
+    assert [effect.kind for effect in advanced.effects] == [
+        "stable_clear",
+        "sustained_flapping",
+        "cadence_warning_cleared",
+    ]
+    assert advanced.effects[1].at == NOW + timedelta(hours=3)
+    assert advanced.effects[2].at == NOW + timedelta(minutes=189, seconds=50)
+    assert advanced.state.cadence_run_started_at is None
+    assert not advanced.state.cadence_warning
+
+
+def test_cadence_reset_clears_warning_and_rejects_backward_time() -> None:
+    model = long_linked_cadence_run()
+    model.advance(NOW + timedelta(hours=3))
+
+    reset = model.reset_cadence(NOW + timedelta(hours=3))[0]
+
+    assert [effect.kind for effect in reset.effects] == [
+        "cadence_warning_cleared"
+    ]
+    assert not reset.state.cadence_warning
+    with pytest.raises(ValueError, match="cannot move backward"):
+        model.reset_cadence(NOW + timedelta(hours=3) - timedelta(microseconds=1))
+
+
+def test_stable_clear_recovers_degraded_health_at_the_same_frontier() -> None:
+    model = episodes(profile="stay_pir")
+    asserted = model.observe(sensor("binary_sensor.a", "on", 0)).state
+    assert asserted.episode_id is not None
+    model.apply_count_conflict(
+        "node",
+        asserted.episode_id,
+        NOW + timedelta(seconds=1),
+    )
+    model.observe(sensor("binary_sensor.a", "off", 2))
+
+    cleared = model.advance(NOW + timedelta(seconds=7))[0]
+
+    assert [effect.kind for effect in cleared.effects] == [
+        "stable_clear",
+        "health_recovered",
+    ]
+    assert not cleared.state.health_warning
+
+
+def test_late_advance_discards_obsolete_health_and_cadence_deadlines() -> None:
+    transient = episodes()
+    transient.observe(sensor("binary_sensor.a", "on", 0))
+    transient.observe(sensor("binary_sensor.a", "off", 10))
+    advanced = transient.advance(NOW + timedelta(seconds=45))[0]
+    assert [effect.kind for effect in advanced.effects] == ["stable_clear"]
+
+    presence = episodes(profile="stay_presence")
+    presence.observe(sensor("binary_sensor.a", "on", 0))
+    presence.observe(sensor("binary_sensor.a", "off", 60))
+    presence.advance(NOW + timedelta(seconds=70))
+    presence.observe(sensor("binary_sensor.a", "on", 600))
+    quiet = presence.advance(NOW + timedelta(hours=3))[0]
+    assert quiet.state.cadence_run_started_at is None
+    assert not quiet.state.cadence_warning
+
+
+def test_new_episode_emits_recovery_for_preexisting_health_warning() -> None:
+    model = episodes(profile="stay_pir")
+    state = replace(
+        model.states[0],
+        health_warning=True,
+        degradation_reason="count_conflict",
+    )
+
+    _started, effects = model._start_episode(state, NOW, 1.0)  # noqa: SLF001
+
+    assert effects == (
+        EpisodeEffect(
+            "node",
+            "zone",
+            f"node:1:{NOW.isoformat()}",
+            "health_recovered",
+            NOW,
+            1.0,
+            "count_conflict",
+        ),
+        EpisodeEffect(
+            "node",
+            "zone",
+            f"node:1:{NOW.isoformat()}",
+            "positive",
+            NOW,
+            1.0,
+        ),
+    )
+
+
 def test_unavailable_is_neutral_and_closes_traversal_authority() -> None:
     model = episodes()
     model.observe(sensor("binary_sensor.a", "on", 0))
@@ -186,21 +358,25 @@ def test_held_stay_assertion_remains_current_local_evidence(profile: str) -> Non
     assert held.effects == ()
 
 
-def test_new_episode_recovers_health_after_stuck_assertion() -> None:
+def test_stable_clear_recovers_health_after_stuck_assertion() -> None:
     model = episodes()
     first = model.observe(sensor("binary_sensor.a", "on", 0))
     assert first.state.assertion_trust_until is not None
     model.advance(first.state.assertion_trust_until)
     model.observe(sensor("binary_sensor.a", "off", 61))
-    model.advance(NOW + timedelta(seconds=66))
+    cleared = model.advance(NOW + timedelta(seconds=66))[0]
+
+    assert not cleared.state.health_warning
+    assert [effect.kind for effect in cleared.effects] == [
+        "stable_clear",
+        "health_recovered",
+    ]
 
     recovered = model.observe(sensor("binary_sensor.a", "on", 70))
 
     assert recovered.state.status == "asserted"
-    assert [effect.kind for effect in recovered.effects] == [
-        "health_recovered",
-        "positive",
-    ]
+    assert [effect.kind for effect in recovered.effects] == ["positive"]
+    assert not recovered.state.health_warning
 
 
 def test_stale_duplicate_and_invalid_inputs_are_model_neutral() -> None:

@@ -72,6 +72,11 @@ def test_shared_profiles_have_independent_finite_timing() -> None:
     assert STAY_PRESENCE.track_bootstrap_window == timedelta(seconds=120)
     assert TRANSITION_FAST.track_bootstrap_window == timedelta(seconds=45)
     assert ENTRY_BOUNDARY.track_bootstrap_window == timedelta(seconds=30)
+    assert STAY_PRESENCE.cycle_correlation_window == timedelta(minutes=10)
+    assert STAY_PRESENCE.sustained_cadence_warning_window == timedelta(hours=3)
+    for profile in (ENTRY_BOUNDARY, STAY_PIR, TRANSITION_FAST):
+        assert profile.cycle_correlation_window == timedelta(0)
+        assert profile.sustained_cadence_warning_window == timedelta(0)
     with pytest.raises(ValueError, match="must be positive"):
         replace(STAY_PIR, track_bootstrap_window=timedelta(0))
 
@@ -180,6 +185,16 @@ def test_profile_validation_is_strict() -> None:
         replace(TRANSITION_FAST, post_clear_residual=1.1)
     with pytest.raises(ValueError, match="identifiers must be non-empty"):
         replace(TRANSITION_FAST, profile_id="")
+    with pytest.raises(ValueError, match="requires cycle correlation"):
+        replace(
+            TRANSITION_FAST,
+            sustained_cadence_warning_window=timedelta(hours=3),
+        )
+    with pytest.raises(ValueError, match="must exceed cycle correlation"):
+        replace(
+            STAY_PRESENCE,
+            sustained_cadence_warning_window=timedelta(minutes=10),
+        )
 
 
 def test_physical_node_and_input_validation_is_strict() -> None:

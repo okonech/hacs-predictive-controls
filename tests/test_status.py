@@ -3,11 +3,18 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+import pytest
+
 from custom_components.predictive_controls.confidence import ZoneConfidenceEngine
 from custom_components.predictive_controls.events import OccupancyEvent
 from custom_components.predictive_controls.status import (
+    project_reliability_warnings,
+    reliability_warning_summary,
     runtime_status_payload,
     tracker_diagnostics_payload,
+)
+from custom_components.predictive_controls.zone_model.types import (
+    ReliabilityWarningOccurrence,
 )
 from tests.test_confidence import event
 from tests.test_zone_model_count import conflict_map
@@ -61,6 +68,109 @@ def test_runtime_status_payload_serializes_bounded_audit_and_prediction() -> Non
     assert diagnostics["processing"]["zone_count"] == 2
     assert diagnostics["prediction"] == {"probabilities": {}, "leases": []}
     assert payload["latency"]["sample_count"] == 2
+
+
+def test_reliability_warning_projection_groups_reasons_at_exact_cutoff() -> None:
+    occurrences = (
+        ReliabilityWarningOccurrence(
+            "office",
+            "office",
+            "suspected_stuck",
+            "assertion_timeout",
+            NOW - timedelta(hours=23, minutes=30),
+            NOW - timedelta(hours=23),
+            NOW - timedelta(hours=23),
+        ),
+        ReliabilityWarningOccurrence(
+            "room",
+            "room",
+            "flapping",
+            "impossible_cadence",
+            NOW - timedelta(hours=30),
+            NOW - timedelta(hours=25),
+        ),
+        ReliabilityWarningOccurrence(
+            "room",
+            "room",
+            "flapping",
+            "sustained_flapping",
+            NOW - timedelta(hours=4),
+            NOW - timedelta(hours=2),
+            NOW - timedelta(hours=2),
+        ),
+        ReliabilityWarningOccurrence(
+            "room",
+            "room",
+            "suspected_stuck",
+            "count_conflict",
+            NOW - timedelta(hours=25),
+            NOW - timedelta(hours=24),
+            NOW - timedelta(hours=24),
+        ),
+    )
+
+    rows = project_reliability_warnings(occurrences, NOW)
+
+    assert [(row["node_id"], row["kind"]) for row in rows] == [
+        ("office", "suspected_stuck"),
+        ("room", "flapping"),
+    ]
+    room = rows[1]
+    assert room["reasons"] == ["impossible_cadence", "sustained_flapping"]
+    assert room["active_reasons"] == ["impossible_cadence"]
+    assert room["active"] is True
+    assert room["cleared_at"] is None
+    assert reliability_warning_summary(rows) == (
+        "office: suspected stuck [assertion_timeout]; "
+        "room: flapping [impossible_cadence, sustained_flapping] (active)"
+    )
+
+
+def test_reliability_warning_projection_rejects_malformed_groups() -> None:
+    first = ReliabilityWarningOccurrence(
+        "node",
+        "first",
+        "flapping",
+        "impossible_cadence",
+        NOW,
+        NOW,
+    )
+    second = ReliabilityWarningOccurrence(
+        "node",
+        "second",
+        "flapping",
+        "sustained_flapping",
+        NOW,
+        NOW,
+    )
+
+    with pytest.raises(ValueError, match="inconsistent zones"):
+        project_reliability_warnings((first, second), NOW)
+    with pytest.raises(ValueError, match="reasons are invalid"):
+        reliability_warning_summary(
+            ({"zone": "first", "kind": "flapping", "reasons": (), "active": True},)
+        )
+
+
+def test_status_exposes_current_warning_and_bounded_occurrence() -> None:
+    runtime = runtime_with_target_state()
+    runtime.confidence.observe(
+        event("room", "room", "off", NOW + timedelta(seconds=10))
+    )
+    runtime.confidence.observe(
+        event("room", "room", "on", NOW + timedelta(seconds=12))
+    )
+
+    diagnostics = runtime_status_payload(runtime)["occupancy_diagnostics"]
+
+    room = next(
+        item for item in diagnostics["episodes"] if item["node_id"] == "room"
+    )
+    assert room["cadence_warning"] is True
+    assert room["cadence_warning_reason"] == "impossible_cadence"
+    assert diagnostics["health_warnings"] == ["room"]
+    assert diagnostics["reliability_warnings"][0]["kind"] == "flapping"
+    assert diagnostics["reliability_warning_occurrences"][0]["active"] is True
 
 
 def test_runtime_status_omits_unavailable_latency() -> None:

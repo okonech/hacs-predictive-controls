@@ -37,6 +37,7 @@ from .types import (
     PendingAcquisitionCandidate,
     PolicyDecision,
     RefreshDedupEntry,
+    ReliabilityWarningOccurrence,
     SensorInput,
     SupportTokenBinding,
     TraversalToken,
@@ -98,10 +99,20 @@ def legacy_target_map_fingerprint(predictive_map: PredictiveMap) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def target_map_fingerprint(predictive_map: PredictiveMap) -> str:
-    """Fingerprint all map and profile inputs that can change v3 inference."""
-
-    payload = {
+def _target_map_fingerprint_payload(
+    predictive_map: PredictiveMap,
+    *,
+    pre_feature: bool = False,
+) -> dict[str, object]:
+    profiles = {
+        name: cast(dict[str, object], _json_value(asdict(profile)))
+        for name, profile in sorted(SHARED_PROFILES.items())
+    }
+    if pre_feature:
+        for profile in profiles.values():
+            profile.pop("cycle_correlation_window")
+            profile.pop("sustained_cadence_warning_window")
+    return {
         "nodes": {
             node_id: {
                 "zone": node.occupancy_zone,
@@ -120,10 +131,7 @@ def target_map_fingerprint(predictive_map: PredictiveMap) -> str:
             }
             for node_id, node in sorted(predictive_map.nodes.items())
         },
-        "profiles": {
-            name: _json_value(asdict(profile))
-            for name, profile in sorted(SHARED_PROFILES.items())
-        },
+        "profiles": profiles,
         "belief_profiles": {
             name: _json_value(asdict(profile))
             for name, profile in sorted(BELIEF_PROFILES.items())
@@ -142,8 +150,25 @@ def target_map_fingerprint(predictive_map: PredictiveMap) -> str:
             "lease_seconds": LEASE_DURATION.total_seconds(),
         },
     }
+
+
+def _fingerprint(payload: object) -> str:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
+
+
+def target_map_fingerprint(predictive_map: PredictiveMap) -> str:
+    """Fingerprint all map and profile inputs that can change v4 inference."""
+
+    return _fingerprint(_target_map_fingerprint_payload(predictive_map))
+
+
+def pre_feature_target_map_fingerprint(predictive_map: PredictiveMap) -> str:
+    """Return the one accepted fingerprint from before cadence calibration."""
+
+    return _fingerprint(
+        _target_map_fingerprint_payload(predictive_map, pre_feature=True)
+    )
 
 
 def serialize_target_state(
@@ -170,10 +195,20 @@ def restore_target_state(
     schema = root.get("schema")
     if schema not in {TARGET_SCHEMA, LEGACY_V3_SCHEMA}:
         raise ValueError("Target schema is incompatible")
-    if root.get("map_fingerprint") != target_map_fingerprint(predictive_map):
+    fingerprint = root.get("map_fingerprint")
+    pre_feature_v4 = bool(
+        schema == TARGET_SCHEMA
+        and fingerprint == pre_feature_target_map_fingerprint(predictive_map)
+        and _is_pre_feature_v4_snapshot(root.get("snapshot"))
+    )
+    if fingerprint != target_map_fingerprint(predictive_map) and not pre_feature_v4:
         raise ValueError("Target map fingerprint is incompatible")
     legacy_v3 = schema == LEGACY_V3_SCHEMA
-    snapshot = _decode_snapshot(root.get("snapshot"), legacy_v3=legacy_v3)
+    snapshot = _decode_snapshot(
+        root.get("snapshot"),
+        legacy_v3=legacy_v3,
+        pre_feature_v4=pre_feature_v4,
+    )
     audit_payload = root.get("audit")
     if not isinstance(audit_payload, list):
         raise ValueError("Target audit must be a list")
@@ -371,7 +406,32 @@ def _validated_active_seed(
     return dict(active_seed)
 
 
-def _decode_snapshot(value: object, *, legacy_v3: bool = False) -> ZoneModelSnapshot:
+def _is_pre_feature_v4_snapshot(value: object) -> bool:
+    if not isinstance(value, Mapping) or "reliability_warning_occurrences" in value:
+        return False
+    episodes = value.get("episode_states")
+    new_keys = {
+        "cadence_run_started_at",
+        "cadence_last_transition_at",
+        "cadence_cycle_count",
+        "cadence_correlated",
+        "cadence_warning_reason",
+    }
+    return bool(
+        isinstance(episodes, list)
+        and all(
+            isinstance(item, Mapping) and not new_keys.intersection(item)
+            for item in episodes
+        )
+    )
+
+
+def _decode_snapshot(
+    value: object,
+    *,
+    legacy_v3: bool = False,
+    pre_feature_v4: bool = False,
+) -> ZoneModelSnapshot:
     data = _mapping(value, "Target snapshot")
     retained_raw = data.get("retained_traversal_tokens", [])
     if not isinstance(retained_raw, list):
@@ -395,11 +455,21 @@ def _decode_snapshot(value: object, *, legacy_v3: bool = False) -> ZoneModelSnap
             _decode_support_binding(item)
             for item in _list(data, "support_token_bindings")
         )
+    episodes = tuple(
+        _decode_episode(item, pre_feature_v4=pre_feature_v4)
+        for item in _list(data, "episode_states")
+    )
+    occurrences = (
+        _migrate_pre_feature_warning_occurrences(episodes)
+        if pre_feature_v4
+        else tuple(
+            _decode_warning_occurrence(item)
+            for item in _list(data, "reliability_warning_occurrences")
+        )
+    )
     return ZoneModelSnapshot(
         updated_at=_datetime(data.get("updated_at"), "snapshot updated_at"),
-        episode_states=tuple(
-            _decode_episode(item) for item in _list(data, "episode_states")
-        ),
+        episode_states=episodes,
         belief_states=tuple(
             _decode_belief(item) for item in _list(data, "belief_states")
         ),
@@ -426,10 +496,62 @@ def _decode_snapshot(value: object, *, legacy_v3: bool = False) -> ZoneModelSnap
         ),
         anonymous_supports=supports,
         support_token_bindings=bindings,
+        reliability_warning_occurrences=occurrences,
     )
 
 
-def _decode_episode(value: object) -> EpisodeState:
+def _migrate_pre_feature_warning_occurrences(
+    episodes: tuple[EpisodeState, ...],
+) -> tuple[ReliabilityWarningOccurrence, ...]:
+    occurrences: list[ReliabilityWarningOccurrence] = []
+    for state in episodes:
+        if state.cadence_warning:
+            if state.last_event_at is None:
+                raise ValueError("Persisted cadence warning has no source timestamp")
+            occurrences.append(
+                ReliabilityWarningOccurrence(
+                    state.node_id,
+                    state.zone,
+                    "flapping",
+                    "impossible_cadence",
+                    state.last_event_at,
+                    state.last_event_at,
+                )
+            )
+        if state.health_warning:
+            if state.degradation_reason is None or state.degraded_at is None:
+                raise ValueError("Persisted health warning has no source timestamp")
+            occurrences.append(
+                ReliabilityWarningOccurrence(
+                    state.node_id,
+                    state.zone,
+                    "suspected_stuck",
+                    state.degradation_reason,
+                    state.degraded_at,
+                    state.degraded_at,
+                )
+            )
+    return tuple(sorted(occurrences, key=lambda item: (item.node_id, item.reason)))
+
+
+def _decode_warning_occurrence(value: object) -> ReliabilityWarningOccurrence:
+    data = _mapping(value, "Reliability warning occurrence")
+    return ReliabilityWarningOccurrence(
+        _string(data, "node_id"),
+        _string(data, "zone"),
+        _string(data, "kind"),
+        _string(data, "reason"),
+        _datetime(data.get("first_observed_at"), "warning first observation"),
+        _datetime(data.get("last_observed_at"), "warning last observation"),
+        _optional_datetime(data.get("cleared_at"), "warning clear"),
+    )
+
+
+def _decode_episode(
+    value: object,
+    *,
+    pre_feature_v4: bool = False,
+) -> EpisodeState:
     data = _mapping(value, "Target episode")
     aliases = data.get("alias_states")
     if not isinstance(aliases, list) or any(
@@ -439,6 +561,7 @@ def _decode_episode(value: object) -> EpisodeState:
         for item in aliases
     ):
         raise ValueError("Target episode aliases are invalid")
+    cadence_warning = _boolean(data, "cadence_warning")
     return EpisodeState(
         _string(data, "node_id"),
         _string(data, "zone"),
@@ -467,7 +590,31 @@ def _decode_episode(value: object) -> EpisodeState:
         ),
         clear_emitted=_boolean(data, "clear_emitted"),
         health_warning=_boolean(data, "health_warning"),
-        cadence_warning=_boolean(data, "cadence_warning"),
+        cadence_warning=cadence_warning,
+        cadence_run_started_at=_optional_datetime(
+            None if pre_feature_v4 else data.get("cadence_run_started_at"),
+            "cadence run start",
+        ),
+        cadence_last_transition_at=_optional_datetime(
+            None if pre_feature_v4 else data.get("cadence_last_transition_at"),
+            "cadence last transition",
+        ),
+        cadence_cycle_count=(
+            0 if pre_feature_v4 else _integer(data, "cadence_cycle_count")
+        ),
+        cadence_correlated=(
+            False if pre_feature_v4 else _boolean(data, "cadence_correlated")
+        ),
+        cadence_warning_reason=(
+            "impossible_cadence"
+            if pre_feature_v4 and cadence_warning
+            else None
+            if pre_feature_v4
+            else _optional_string(
+                data.get("cadence_warning_reason"),
+                "cadence warning reason",
+            )
+        ),
     )
 
 
@@ -820,6 +967,7 @@ __all__ = [
     "decode_v2_seed",
     "migrate_schema6_seed",
     "migrate_v2_seed",
+    "pre_feature_target_map_fingerprint",
     "restore_target_state",
     "serialize_target_state",
     "target_map_fingerprint",

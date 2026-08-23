@@ -23,7 +23,8 @@ from custom_components.predictive_controls.zone_model.types import (
 NOW = datetime(2026, 7, 18, 12, tzinfo=UTC)
 
 
-def make_map() -> PredictiveMap:
+def make_map(*, living_presence: bool = False) -> PredictiveMap:
+    living_signal = "mmwave" if living_presence else "motion"
     return PredictiveMap.from_mapping(
         {
             "nodes": {
@@ -46,7 +47,7 @@ def make_map() -> PredictiveMap:
                 },
                 "living": {
                     "zone": "living",
-                    "entities": {"motion": "binary_sensor.living"},
+                    "entities": {living_signal: "binary_sensor.living"},
                     "adjacent": ["kitchen"],
                 },
             }
@@ -240,6 +241,54 @@ def test_prediction_confirmation_emits_no_second_edge_or_refresh() -> None:
     assert policy.prediction_expires_at is None
     assert decision.reason == "prediction_confirmed"
     assert not [event for event in result.policy_events if event.zone == "living"]
+    engine.commit_prediction_learning()
+    assert engine.prediction_manager.chain.counts["kitchen"]["living"] == 5.0
+
+
+def test_correlated_target_confirms_mature_prediction_without_learning() -> None:
+    engine = ZoneModelEngine(make_map(living_presence=True), 1, NOW)
+    seed_mature_route(engine.prediction_manager)
+    engine.observe(SensorInput("binary_sensor.living", "on", NOW))
+    engine.observe(
+        SensorInput("binary_sensor.living", "off", NOW + timedelta(seconds=20))
+    )
+    engine.advance(NOW + timedelta(seconds=30))
+    engine.observe(
+        SensorInput("binary_sensor.office", "on", NOW + timedelta(seconds=40))
+    )
+    engine.observe(
+        SensorInput("binary_sensor.hall", "on", NOW + timedelta(seconds=41))
+    )
+    predicted = engine.observe(
+        SensorInput("binary_sensor.kitchen", "on", NOW + timedelta(seconds=42))
+    )
+    predicted_policy = next(
+        state for state in predicted.snapshot.policy_states if state.zone == "living"
+    )
+    assert predicted_policy.phase == "predicted"
+
+    result = engine.observe(
+        SensorInput("binary_sensor.living", "on", NOW + timedelta(seconds=45))
+    )
+
+    living = next(
+        state for state in result.snapshot.episode_states if state.node_id == "living"
+    )
+    policy = next(
+        state for state in result.snapshot.policy_states if state.zone == "living"
+    )
+    decision = next(
+        row for row in result.policy_decisions if row.zone == "living"
+    )
+    assert living.cadence_correlated
+    assert policy.active
+    assert policy.phase == "active"
+    assert decision.reason == "prediction_confirmed"
+    assert not [event for event in result.policy_events if event.zone == "living"]
+    assert all(
+        token.episode_id != living.episode_id
+        for token in result.snapshot.traversal_tokens
+    )
     engine.commit_prediction_learning()
     assert engine.prediction_manager.chain.counts["kitchen"]["living"] == 5.0
 

@@ -146,6 +146,48 @@ def test_positive_and_stable_clear_are_one_time_bayes_updates() -> None:
     assert contribution_count(filter_, "stable_clear") == 1
 
 
+def test_correlated_positive_cancels_paired_stable_clear_likelihood() -> None:
+    filter_ = belief_filter("stay_presence")
+    reliability = 0.75
+    filter_.apply_positive("episode-1", NOW, reliability)
+    filter_.apply_stable_clear("episode-1", NOW, reliability)
+    clear_contribution = filter_.state.contributions[-1]
+
+    correlated = filter_.apply_correlated_positive(
+        "episode-2",
+        NOW,
+        reliability,
+    )
+    correlated_contribution = correlated.contributions[-1]
+    profile = BELIEF_PROFILES["stay_presence"]
+    expected_scale = math.log(
+        profile.clear_empty_likelihood / profile.clear_occupied_likelihood
+    ) / math.log(
+        profile.positive_occupied_likelihood / profile.positive_empty_likelihood
+    )
+
+    assert expected_scale == pytest.approx(0.040879518931593604)
+    assert abs(
+        clear_contribution.log_odds_delta
+        + correlated_contribution.log_odds_delta
+    ) <= 1e-12
+    assert correlated_contribution.kind == "correlated_positive"
+    assert correlated.generation_episode_id == "episode-2"
+    assert correlated.asserted_episode_id == "episode-2"
+    assert correlated.context == "asserted"
+    assert filter_.apply_correlated_positive("episode-2", NOW) == correlated
+
+
+def test_correlated_positive_rejects_invalid_likelihood_scale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    filter_ = belief_filter("stay_presence")
+    monkeypatch.setattr(math, "isfinite", lambda _value: False)
+
+    with pytest.raises(ValueError, match="likelihood scale"):
+        filter_.apply_correlated_positive("episode", NOW)
+
+
 def test_outward_context_is_or_composed_strict_and_generation_scoped() -> None:
     filter_ = belief_filter()
     filter_.apply_positive("episode-1", NOW + timedelta(seconds=1))

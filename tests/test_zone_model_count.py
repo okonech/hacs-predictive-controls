@@ -23,6 +23,7 @@ from custom_components.predictive_controls.zone_model.profiles import BELIEF_PRO
 from custom_components.predictive_controls.zone_model.traversal import TraversalFrontier
 from custom_components.predictive_controls.zone_model.types import (
     CountSupport,
+    EpisodeEffect,
     SensorInput,
 )
 from tests.test_zone_model_engine import engine_before_stale_transfer
@@ -327,6 +328,14 @@ def test_two_settled_supports_degrade_stuck_assertion_only_after_full_dwell() ->
     assert target.health_warning
     assert target.traversal_valid_until is None
     assert target_policy.active  # Count diagnoses health; it never writes active off.
+    occurrence = next(
+        item
+        for item in crossed.snapshot.reliability_warning_occurrences
+        if item.node_id == "target" and item.reason == "count_conflict"
+    )
+    assert occurrence.kind == "suspected_stuck"
+    assert occurrence.first_observed_at == conflict.deadline
+    assert occurrence.cleared_at is None
     conflict_row = next(
         row for row in engine.audit_rows if row.reason == "stuck_count_conflict"
     )
@@ -346,9 +355,26 @@ def test_two_settled_supports_degrade_stuck_assertion_only_after_full_dwell() ->
     engine.observe(SensorInput("binary_sensor.target", "off", clear_at))
     stable_clear_at = clear_at + timedelta(seconds=5)
     cleared = engine.advance(stable_clear_at)
+    cleared_target = next(
+        state for state in cleared.snapshot.episode_states if state.node_id == "target"
+    )
+    cleared_belief = next(
+        state for state in cleared.snapshot.belief_states if state.zone == "target"
+    )
     cleared_policy = next(
         state for state in cleared.snapshot.policy_states if state.zone == "target"
     )
+    assert not cleared_target.health_warning
+    assert cleared_target.degradation_reason is None
+    assert not cleared_belief.health_warning
+    assert cleared.snapshot.count_conflicts == ()
+    occurrence = next(
+        item
+        for item in cleared.snapshot.reliability_warning_occurrences
+        if item.node_id == "target" and item.reason == "count_conflict"
+    )
+    assert occurrence.last_observed_at == stable_clear_at
+    assert occurrence.cleared_at == stable_clear_at
     assert cleared_policy.active
     assert cleared_policy.pending_release_since == stable_clear_at
 
@@ -441,6 +467,79 @@ def test_count_zero_bypasses_asserted_stay_hold() -> None:
         and event.policy_reason == "count_zero"
         for event in result.policy_events
     )
+
+
+def test_count_zero_resets_cadence_without_a_synthetic_sensor_edge() -> None:
+    engine = ZoneModelEngine(conflict_map(target_presence=True), 1, NOW)
+    engine.observe(SensorInput("binary_sensor.target", "on", NOW))
+    engine.observe(
+        SensorInput("binary_sensor.target", "off", NOW + timedelta(seconds=20))
+    )
+    engine.advance(NOW + timedelta(seconds=30))
+    engine.observe(
+        SensorInput("binary_sensor.target", "on", NOW + timedelta(seconds=60))
+    )
+
+    before = next(
+        state for state in engine.snapshot.episode_states if state.node_id == "target"
+    )
+    assert before.cadence_correlated
+    generation = before.generation
+
+    engine.observe_count(CountInput("zero", 0, True, NOW + timedelta(seconds=61)))
+
+    after = next(
+        state for state in engine.snapshot.episode_states if state.node_id == "target"
+    )
+    assert after.generation == generation
+    assert after.cadence_run_started_at is None
+    assert after.cadence_last_transition_at is None
+    assert after.cadence_cycle_count == 0
+    assert not after.cadence_correlated
+    assert not after.cadence_warning
+
+
+def test_count_zero_clears_active_cadence_warning_occurrence() -> None:
+    engine = ZoneModelEngine(conflict_map(), 1, NOW)
+    engine.observe(SensorInput("binary_sensor.target", "on", NOW))
+    engine.observe(
+        SensorInput("binary_sensor.target", "off", NOW + timedelta(seconds=10))
+    )
+    engine.observe(
+        SensorInput("binary_sensor.target", "on", NOW + timedelta(seconds=12))
+    )
+
+    result = engine.observe_count(
+        CountInput("zero", 0, True, NOW + timedelta(seconds=13))
+    )
+
+    occurrence = result.snapshot.reliability_warning_occurrences[0]
+    assert occurrence.reason == "impossible_cadence"
+    assert occurrence.cleared_at == NOW + timedelta(seconds=13)
+
+
+def test_warning_clear_requires_one_active_occurrence() -> None:
+    engine = ZoneModelEngine(conflict_map(), 1, NOW)
+    warning = EpisodeEffect(
+        "target",
+        "target",
+        "target:1",
+        "impossible_cadence",
+        NOW,
+        warning_reason="impossible_cadence",
+    )
+    cleared = replace(
+        warning,
+        kind="cadence_warning_cleared",
+        at=NOW + timedelta(seconds=1),
+    )
+
+    with pytest.raises(ValueError, match="no active occurrence"):
+        engine._apply_warning_effect(cleared)  # noqa: SLF001
+    engine._apply_warning_effect(warning)  # noqa: SLF001
+    engine._apply_warning_effect(cleared)  # noqa: SLF001
+    with pytest.raises(ValueError, match="no active occurrence"):
+        engine._apply_warning_effect(cleared)  # noqa: SLF001
 
 
 def test_retained_support_prevents_count_conflict_on_its_asserted_endpoint() -> None:
@@ -539,7 +638,7 @@ def test_outward_movement_moves_support_and_return_settles_it() -> None:
                 "room": {
                     "role": "room_occupancy",
                     "occupancy_behavior": "sustained",
-                    "entities": {"mmwave": "binary_sensor.room"},
+                    "entities": {"motion": "binary_sensor.room"},
                     "adjacent": ["hall"],
                 },
             }
@@ -871,7 +970,17 @@ def test_stuck_conflict_recovers_after_stable_clear_and_fresh_episode() -> None:
     engine.observe(
         SensorInput("binary_sensor.target", "off", deadline + timedelta(seconds=1))
     )
-    engine.advance(deadline + timedelta(seconds=6))
+    cleared = engine.advance(deadline + timedelta(seconds=6))
+    cleared_target = next(
+        state for state in cleared.snapshot.episode_states if state.node_id == "target"
+    )
+    assert not cleared_target.health_warning
+    recovery_row = next(
+        row for row in engine.audit_rows if row.reason == "stuck_conflict_cleared"
+    )
+    assert recovery_row.count_conflict_support_ids
+    assert recovery_row.reliability_result == "recovered"
+
     engine.observe(
         SensorInput("binary_sensor.target", "on", deadline + timedelta(seconds=7))
     )
@@ -884,11 +993,6 @@ def test_stuck_conflict_recovers_after_stable_clear_and_fresh_episode() -> None:
     assert not target.health_warning
     assert target.degradation_reason is None
     assert engine.snapshot.count_conflicts == ()
-    recovery_row = next(
-        row for row in engine.audit_rows if row.reason == "stuck_conflict_cleared"
-    )
-    assert recovery_row.count_conflict_support_ids
-    assert recovery_row.reliability_result == "recovered"
 
 
 def test_count_change_cancels_unmatured_conflict_without_releasing_target() -> None:

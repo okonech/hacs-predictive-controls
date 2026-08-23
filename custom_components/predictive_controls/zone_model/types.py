@@ -36,6 +36,28 @@ BELIEF_CONTRIBUTION_KINDS = frozenset(
         "outward_superseded",
         "stable_clear",
         "unavailable",
+        "correlated_positive",
+    }
+)
+CADENCE_WARNING_REASONS = frozenset(
+    {"impossible_cadence", "sustained_flapping"}
+)
+HEALTH_WARNING_REASONS = frozenset({"assertion_timeout", "count_conflict"})
+RELIABILITY_WARNING_KINDS = frozenset({"flapping", "suspected_stuck"})
+RELIABILITY_WARNING_REASONS = CADENCE_WARNING_REASONS | HEALTH_WARNING_REASONS
+EPISODE_EFFECT_KINDS = frozenset(
+    {
+        "cadence_warning_cleared",
+        "correlated_continuity_authorized",
+        "correlated_flap_ignored",
+        "correlated_positive",
+        "health_degraded",
+        "health_recovered",
+        "impossible_cadence",
+        "interaction",
+        "positive",
+        "stable_clear",
+        "sustained_flapping",
     }
 )
 TRACK_CONFIDENCES = frozenset({"provisional", "confirmed"})
@@ -224,6 +246,8 @@ class SensorProfile:
     post_clear_residual: float
     traversal_context_window: timedelta
     track_bootstrap_window: timedelta
+    cycle_correlation_window: timedelta = timedelta(0)
+    sustained_cadence_warning_window: timedelta = timedelta(0)
 
     def __post_init__(self) -> None:
         if not self.profile_id or not self.role:
@@ -235,6 +259,8 @@ class SensorProfile:
             self.assertion_trust_horizon,
             self.traversal_context_window,
             self.track_bootstrap_window,
+            self.cycle_correlation_window,
+            self.sustained_cadence_warning_window,
         )
         if any(not _finite_duration(value) for value in durations):
             raise ValueError("Profile durations must be finite and non-negative")
@@ -252,6 +278,17 @@ class SensorProfile:
             raise ValueError("Profile post-clear residual must be finite and in [0, 1]")
         if self.track_bootstrap_window == timedelta(0):
             raise ValueError("Track-bootstrap window must be positive")
+        if (
+            self.sustained_cadence_warning_window > timedelta(0)
+            and self.cycle_correlation_window == timedelta(0)
+        ):
+            raise ValueError("Cadence warning requires cycle correlation")
+        if (
+            self.sustained_cadence_warning_window > timedelta(0)
+            and self.sustained_cadence_warning_window
+            <= self.cycle_correlation_window
+        ):
+            raise ValueError("Cadence warning must exceed cycle correlation")
 
     @property
     def single_node_reacquisition(self) -> bool:
@@ -323,22 +360,27 @@ class EpisodeEffect:
     kind: str
     at: datetime
     reliability: float = 1.0
+    warning_reason: str | None = None
 
     def __post_init__(self) -> None:
-        if self.kind not in {
-            "correlated_continuity_authorized",
-            "correlated_flap_ignored",
-            "impossible_cadence",
-            "health_degraded",
-            "health_recovered",
-            "interaction",
-            "positive",
-            "stable_clear",
-        }:
+        if not self.node_id or not self.zone or not self.episode_id:
+            raise ValueError("Episode effect identifiers must be non-empty")
+        if self.kind not in EPISODE_EFFECT_KINDS:
             raise ValueError(f"Unknown episode effect: {self.kind}")
         require_utc(self.at, "Episode effect time")
         if not math.isfinite(self.reliability) or not 0 < self.reliability <= 1:
             raise ValueError("Episode reliability must be finite and in (0, 1]")
+        if self.kind in CADENCE_WARNING_REASONS:
+            if self.warning_reason != self.kind:
+                raise ValueError("Cadence warning effect requires its warning reason")
+        elif self.kind == "cadence_warning_cleared":
+            if self.warning_reason not in CADENCE_WARNING_REASONS:
+                raise ValueError("Cadence warning clear requires a cadence reason")
+        elif self.kind in {"health_degraded", "health_recovered"}:
+            if self.warning_reason not in HEALTH_WARNING_REASONS:
+                raise ValueError("Health effect requires a health warning reason")
+        elif self.warning_reason is not None:
+            raise ValueError("Non-warning episode effect cannot carry a warning reason")
 
 
 @dataclass(frozen=True)
@@ -365,10 +407,104 @@ class EpisodeState:
     clear_emitted: bool = False
     health_warning: bool = False
     cadence_warning: bool = False
+    cadence_run_started_at: datetime | None = None
+    cadence_last_transition_at: datetime | None = None
+    cadence_cycle_count: int = 0
+    cadence_correlated: bool = False
+    cadence_warning_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        run_started = self.cadence_run_started_at
+        last_transition = self.cadence_last_transition_at
+        if (run_started is None) != (last_transition is None):
+            raise ValueError("Cadence run timestamps must be both present or absent")
+        if run_started is not None and last_transition is not None:
+            require_utc(run_started, "Cadence run start")
+            require_utc(last_transition, "Cadence last transition")
+            if run_started > last_transition:
+                raise ValueError("Cadence run start cannot follow its last transition")
+            frontiers = tuple(
+                value
+                for value in (self.last_event_at, self.advanced_at)
+                if value is not None
+            )
+            if not frontiers or last_transition > max(frontiers):
+                raise ValueError("Cadence transition cannot follow episode frontier")
+        if (
+            not isinstance(self.cadence_cycle_count, int)
+            or isinstance(self.cadence_cycle_count, bool)
+            or not 0 <= self.cadence_cycle_count <= 65535
+        ):
+            raise ValueError("Cadence cycle count must be an integer in [0, 65535]")
+        if run_started is None and self.cadence_cycle_count != 0:
+            raise ValueError("Cadence cycle count requires an open run")
+        if self.cadence_warning != (self.cadence_warning_reason is not None):
+            raise ValueError("Cadence warning and reason must agree")
+        if (
+            self.cadence_warning_reason is not None
+            and self.cadence_warning_reason not in CADENCE_WARNING_REASONS
+        ):
+            raise ValueError("Cadence warning reason is invalid")
+        if self.cadence_correlated and (
+            self.episode_id is None or self.generation <= 0
+        ):
+            raise ValueError("Cadence-correlated state requires a current generation")
+        if self.profile_name != "stay_presence" and any(
+            (
+                run_started is not None,
+                self.cadence_cycle_count != 0,
+                self.cadence_correlated,
+                self.cadence_warning_reason == "sustained_flapping",
+            )
+        ):
+            raise ValueError("Profile does not enable cross-generation cadence")
+        if self.cadence_warning_reason == "sustained_flapping" and (
+            run_started is None or self.cadence_cycle_count == 0
+        ):
+            raise ValueError("Sustained cadence warning requires a completed cycle")
 
     @property
     def known_on(self) -> bool:
         return any(state == "on" for _, state in self.alias_states)
+
+
+@dataclass(frozen=True)
+class ReliabilityWarningOccurrence:
+    """One bounded latest warning occurrence for a physical node and reason."""
+
+    node_id: str
+    zone: str
+    kind: str
+    reason: str
+    first_observed_at: datetime
+    last_observed_at: datetime
+    cleared_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if not self.node_id or not self.zone:
+            raise ValueError("Reliability warning identifiers must be non-empty")
+        if self.kind not in RELIABILITY_WARNING_KINDS:
+            raise ValueError("Reliability warning kind is invalid")
+        expected_kind = (
+            "flapping"
+            if self.reason in CADENCE_WARNING_REASONS
+            else "suspected_stuck"
+        )
+        if (
+            self.reason not in RELIABILITY_WARNING_REASONS
+            or self.kind != expected_kind
+        ):
+            raise ValueError("Reliability warning kind and reason do not match")
+        require_utc(self.first_observed_at, "Reliability warning first observation")
+        require_utc(self.last_observed_at, "Reliability warning last observation")
+        if self.first_observed_at > self.last_observed_at:
+            raise ValueError("Reliability warning observations are out of order")
+        if self.cleared_at is not None:
+            require_utc(self.cleared_at, "Reliability warning clear")
+            if self.cleared_at != self.last_observed_at:
+                raise ValueError(
+                    "Reliability warning clear must be its last observation"
+                )
 
 
 @dataclass(frozen=True)
@@ -1057,14 +1193,17 @@ class PolicyDecision:
             raise ValueError("Policy decision flags must be boolean")
         if self.local_evidence_kind not in {
             None,
+            "cadence_warning_cleared",
             "correlated_continuity_authorized",
             "correlated_flap_ignored",
+            "correlated_positive",
             "health_degraded",
             "health_recovered",
             "impossible_cadence",
             "interaction",
             "positive",
             "stable_clear",
+            "sustained_flapping",
         }:
             raise ValueError("Policy decision local evidence kind is invalid")
         if self.traversal_reason == "":
@@ -1139,6 +1278,7 @@ class ZoneModelSnapshot:
     retained_traversal_tokens: tuple[TraversalToken, ...] = ()
     anonymous_supports: tuple[AnonymousOccupancySupport, ...] = ()
     support_token_bindings: tuple[SupportTokenBinding, ...] = ()
+    reliability_warning_occurrences: tuple[ReliabilityWarningOccurrence, ...] = ()
 
     def __post_init__(self) -> None:
         require_utc(self.updated_at, "Zone-model snapshot time")
@@ -1169,6 +1309,14 @@ class ZoneModelSnapshot:
         conflict_nodes = tuple(item.target_node_id for item in self.count_conflicts)
         if conflict_nodes != tuple(sorted(set(conflict_nodes))):
             raise ValueError("Count conflicts must be unique and sorted")
+        occurrence_ids = tuple(
+            (item.node_id, item.reason)
+            for item in self.reliability_warning_occurrences
+        )
+        if occurrence_ids != tuple(sorted(set(occurrence_ids))):
+            raise ValueError(
+                "Reliability warning occurrences must be unique and sorted"
+            )
 
 
 @dataclass(frozen=True)

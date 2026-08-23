@@ -135,6 +135,30 @@ class PhysicalEpisodes:
         effects = list(frontier_effects)
 
         if event.state in {"unknown", "unavailable"}:
+            if state.cadence_warning and state.episode_id is not None:
+                effects.append(
+                    EpisodeEffect(
+                        state.node_id,
+                        state.zone,
+                        state.episode_id,
+                        "cadence_warning_cleared",
+                        event.event_at,
+                        event.reliability,
+                        state.cadence_warning_reason,
+                    )
+                )
+            if state.health_warning and state.episode_id is not None:
+                effects.append(
+                    EpisodeEffect(
+                        state.node_id,
+                        state.zone,
+                        state.episode_id,
+                        "health_recovered",
+                        event.event_at,
+                        event.reliability,
+                        state.degradation_reason,
+                    )
+                )
             all_unavailable = all(
                 value in {"unknown", "unavailable"}
                 for value in alias_states.values()
@@ -150,7 +174,24 @@ class PhysicalEpisodes:
                     clear_started_at=None,
                     clear_deadline=None,
                 )
-            state = replace(state, traversal_valid_until=None)
+            state = replace(
+                state,
+                status=(
+                    "asserted"
+                    if state.health_warning and is_known_on
+                    else state.status
+                ),
+                traversal_valid_until=None,
+                degraded_at=None,
+                degradation_reason=None,
+                health_warning=False,
+                cadence_run_started_at=None,
+                cadence_last_transition_at=None,
+                cadence_cycle_count=0,
+                cadence_correlated=False,
+                cadence_warning=False,
+                cadence_warning_reason=None,
+            )
             disposition = "neutral_availability"
         elif is_known_on:
             if was_known_on:
@@ -172,6 +213,16 @@ class PhysicalEpisodes:
                         else state.traversal_valid_until
                     ),
                     cadence_warning=state.cadence_warning or impossible,
+                    cadence_last_transition_at=(
+                        event.event_at
+                        if state.cadence_run_started_at is not None
+                        else None
+                    ),
+                    cadence_warning_reason=(
+                        "impossible_cadence"
+                        if impossible
+                        else state.cadence_warning_reason
+                    ),
                 )
                 assert state.episode_id is not None
                 if impossible:
@@ -183,6 +234,7 @@ class PhysicalEpisodes:
                             "impossible_cadence",
                             event.event_at,
                             event.reliability,
+                            "impossible_cadence",
                         )
                     )
                 else:
@@ -198,11 +250,22 @@ class PhysicalEpisodes:
                     )
                 disposition = "correlated_reassertion"
             else:
+                correlated = bool(
+                    state.status == "clear"
+                    and state.cadence_run_started_at is not None
+                )
                 state, start_effects = self._start_episode(
-                    state, event.event_at, event.reliability
+                    state,
+                    event.event_at,
+                    event.reliability,
+                    correlated=correlated,
                 )
                 effects.extend(start_effects)
-                disposition = "accepted_positive"
+                disposition = (
+                    "accepted_correlated_positive"
+                    if correlated
+                    else "accepted_positive"
+                )
         elif was_known_on:
             profile = self._profile(state)
             state = replace(
@@ -210,6 +273,11 @@ class PhysicalEpisodes:
                 status="clearing",
                 clear_started_at=event.event_at,
                 clear_deadline=event.event_at + profile.stable_clear_window,
+                cadence_last_transition_at=(
+                    event.event_at
+                    if state.cadence_run_started_at is not None
+                    else None
+                ),
             )
             disposition = "clear_pending"
         else:
@@ -235,6 +303,43 @@ class PhysicalEpisodes:
             state = replace(state, advanced_at=now)
             self._states[node_id] = state
             updates.append(EpisodeUpdate("advanced", state, effects))
+        return tuple(updates)
+
+    def reset_cadence(self, at: datetime) -> tuple[EpisodeUpdate, ...]:
+        """Clear bounded cadence state without synthesizing a sensor edge."""
+
+        require_utc(at, "Cadence reset time")
+        updates: list[EpisodeUpdate] = []
+        for node_id in sorted(self._states):
+            state = self._states[node_id]
+            if self._is_stale(state, at):
+                raise ValueError("Cadence reset cannot move backward")
+            effects: tuple[EpisodeEffect, ...] = ()
+            if state.cadence_warning:
+                assert state.episode_id is not None
+                effects = (
+                    EpisodeEffect(
+                        state.node_id,
+                        state.zone,
+                        state.episode_id,
+                        "cadence_warning_cleared",
+                        at,
+                        self._nodes[node_id].reliability,
+                        state.cadence_warning_reason,
+                    ),
+                )
+            state = replace(
+                state,
+                advanced_at=at,
+                cadence_run_started_at=None,
+                cadence_last_transition_at=None,
+                cadence_cycle_count=0,
+                cadence_correlated=False,
+                cadence_warning=False,
+                cadence_warning_reason=None,
+            )
+            self._states[node_id] = state
+            updates.append(EpisodeUpdate("cadence_reset", state, effects))
         return tuple(updates)
 
     def apply_count_conflict(
@@ -278,6 +383,7 @@ class PhysicalEpisodes:
                     "health_degraded",
                     at,
                     self._nodes[node_id].reliability,
+                    "count_conflict",
                 ),
             ),
         )
@@ -321,6 +427,7 @@ class PhysicalEpisodes:
                     "health_recovered",
                     at,
                     self._nodes[node_id].reliability,
+                    "count_conflict",
                 ),
             ),
         )
@@ -477,6 +584,8 @@ class PhysicalEpisodes:
         state: EpisodeState,
         at: datetime,
         reliability: float,
+        *,
+        correlated: bool = False,
     ) -> tuple[EpisodeState, tuple[EpisodeEffect, ...]]:
         profile = self._profile(state)
         generation = state.generation + 1
@@ -491,14 +600,23 @@ class PhysicalEpisodes:
                     "health_recovered",
                     at,
                     reliability,
+                    state.degradation_reason,
                 )
             )
+        cadence_enabled = profile.cycle_correlation_window.total_seconds() > 0
+        run_started_at = state.cadence_run_started_at
+        cycle_count = state.cadence_cycle_count
+        if cadence_enabled and run_started_at is None:
+            run_started_at = at
+            cycle_count = 0
+        elif correlated:
+            cycle_count = min(cycle_count + 1, 65535)
         effects.append(
             EpisodeEffect(
                 state.node_id,
                 state.zone,
                 episode_id,
-                "positive",
+                "correlated_positive" if correlated else "positive",
                 at,
                 reliability,
             )
@@ -524,7 +642,14 @@ class PhysicalEpisodes:
                 degradation_reason=None,
                 clear_emitted=False,
                 health_warning=False,
-                cadence_warning=False,
+                cadence_warning=(state.cadence_warning if cadence_enabled else False),
+                cadence_run_started_at=run_started_at,
+                cadence_last_transition_at=at if cadence_enabled else None,
+                cadence_cycle_count=cycle_count if cadence_enabled else 0,
+                cadence_correlated=correlated,
+                cadence_warning_reason=(
+                    state.cadence_warning_reason if cadence_enabled else None
+                ),
             ),
             tuple(effects),
         )
@@ -559,6 +684,11 @@ class PhysicalEpisodes:
                 clear_emitted=False,
                 health_warning=False,
                 cadence_warning=False,
+                cadence_run_started_at=None,
+                cadence_last_transition_at=None,
+                cadence_cycle_count=0,
+                cadence_correlated=False,
+                cadence_warning_reason=None,
             ),
             (
                 EpisodeEffect(
@@ -578,55 +708,169 @@ class PhysicalEpisodes:
         now: datetime,
     ) -> tuple[EpisodeState, tuple[EpisodeEffect, ...]]:
         effects: list[EpisodeEffect] = []
+        profile = self._profile(state)
+        deadlines: list[tuple[datetime, int, str]] = []
+        if (
+            state.cadence_last_transition_at is not None
+            and profile.cycle_correlation_window.total_seconds() > 0
+        ):
+            quiet_deadline = (
+                state.cadence_last_transition_at + profile.cycle_correlation_window
+            )
+            deadlines.append((quiet_deadline, 0, "cadence_quiet"))
+        if (
+            state.cadence_run_started_at is not None
+            and state.cadence_cycle_count > 0
+            and state.cadence_warning_reason is None
+            and profile.sustained_cadence_warning_window.total_seconds() > 0
+        ):
+            deadlines.append(
+                (
+                    state.cadence_run_started_at
+                    + profile.sustained_cadence_warning_window,
+                    2,
+                    "sustained_flapping",
+                )
+            )
         if (
             state.status == "clearing"
             and state.clear_deadline is not None
-            and now >= state.clear_deadline
             and not state.clear_emitted
             and state.episode_id is not None
         ):
-            effects.append(
-                EpisodeEffect(
-                    state.node_id,
-                    state.zone,
-                    state.episode_id,
-                    "stable_clear",
-                    state.clear_deadline,
-                    self._nodes[state.node_id].reliability,
-                )
-            )
-            state = replace(
-                state,
-                status="clear",
-                clear_started_at=None,
-                clear_deadline=None,
-                traversal_valid_until=None,
-                clear_emitted=True,
-            )
+            deadlines.append((state.clear_deadline, 1, "stable_clear"))
         if (
             state.status == "asserted"
-            and self._profile(state).role != "stay"
+            and profile.role != "stay"
             and state.assertion_trust_until is not None
-            and now >= state.assertion_trust_until
             and not state.health_warning
             and state.episode_id is not None
         ):
+            deadlines.append(
+                (state.assertion_trust_until, 1, "assertion_timeout")
+            )
+
+        for deadline, _, deadline_kind in sorted(deadlines):
+            if deadline > now:
+                continue
+            if deadline_kind == "cadence_quiet":
+                assert state.cadence_last_transition_at is not None
+                current_quiet_deadline = (
+                    state.cadence_last_transition_at
+                    + profile.cycle_correlation_window
+                )
+                assert deadline == current_quiet_deadline
+                if state.cadence_warning and state.episode_id is not None:
+                    effects.append(
+                        EpisodeEffect(
+                            state.node_id,
+                            state.zone,
+                            state.episode_id,
+                            "cadence_warning_cleared",
+                            quiet_deadline,
+                            self._nodes[state.node_id].reliability,
+                            state.cadence_warning_reason,
+                        )
+                    )
+                state = replace(
+                    state,
+                    cadence_run_started_at=None,
+                    cadence_last_transition_at=None,
+                    cadence_cycle_count=0,
+                    cadence_warning=False,
+                    cadence_warning_reason=None,
+                )
+                continue
+            if deadline_kind == "stable_clear":
+                assert state.status == "clearing"
+                assert state.clear_deadline == deadline
+                assert not state.clear_emitted
+                assert state.episode_id is not None
+                effects.append(
+                    EpisodeEffect(
+                        state.node_id,
+                        state.zone,
+                        state.episode_id,
+                        "stable_clear",
+                        deadline,
+                        self._nodes[state.node_id].reliability,
+                    )
+                )
+                recovery_reason = state.degradation_reason
+                if state.health_warning:
+                    assert recovery_reason is not None
+                    effects.append(
+                        EpisodeEffect(
+                            state.node_id,
+                            state.zone,
+                            state.episode_id,
+                            "health_recovered",
+                            deadline,
+                            self._nodes[state.node_id].reliability,
+                            recovery_reason,
+                        )
+                    )
+                state = replace(
+                    state,
+                    status="clear",
+                    clear_started_at=None,
+                    clear_deadline=None,
+                    traversal_valid_until=None,
+                    clear_emitted=True,
+                    degraded_at=None,
+                    degradation_reason=None,
+                    health_warning=False,
+                )
+                continue
+            if deadline_kind == "assertion_timeout":
+                assert state.status == "asserted"
+                assert state.assertion_trust_until == deadline
+                assert not state.health_warning
+                assert state.episode_id is not None
+                effects.append(
+                    EpisodeEffect(
+                        state.node_id,
+                        state.zone,
+                        state.episode_id,
+                        "health_degraded",
+                        deadline,
+                        self._nodes[state.node_id].reliability,
+                        "assertion_timeout",
+                    )
+                )
+                state = replace(
+                    state,
+                    status="degraded",
+                    traversal_valid_until=None,
+                    degraded_at=deadline,
+                    degradation_reason="assertion_timeout",
+                    health_warning=True,
+                )
+                continue
+            if (
+                state.cadence_run_started_at is None
+                or state.cadence_cycle_count == 0
+                or state.cadence_warning_reason is not None
+                or state.episode_id is None
+                or deadline
+                != state.cadence_run_started_at
+                + profile.sustained_cadence_warning_window
+            ):
+                continue
             effects.append(
                 EpisodeEffect(
                     state.node_id,
                     state.zone,
                     state.episode_id,
-                    "health_degraded",
-                    state.assertion_trust_until,
+                    "sustained_flapping",
+                    deadline,
                     self._nodes[state.node_id].reliability,
+                    "sustained_flapping",
                 )
             )
             state = replace(
                 state,
-                status="degraded",
-                traversal_valid_until=None,
-                degraded_at=state.assertion_trust_until,
-                degradation_reason="assertion_timeout",
-                health_warning=True,
+                cadence_warning=True,
+                cadence_warning_reason="sustained_flapping",
             )
         return state, tuple(effects)

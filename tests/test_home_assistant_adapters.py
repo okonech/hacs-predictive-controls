@@ -119,6 +119,7 @@ def install_homeassistant(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
             "homeassistant.core",
             "homeassistant.helpers",
             "homeassistant.helpers.dispatcher",
+            "homeassistant.helpers.entity",
             "homeassistant.helpers.entity_registry",
             "homeassistant.helpers.entity_platform",
             "homeassistant.helpers.event",
@@ -167,6 +168,11 @@ def install_homeassistant(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         modules["homeassistant.helpers.dispatcher"],
         "async_dispatcher_send",
         lambda *_: None,
+    )
+    set_attr(
+        modules["homeassistant.helpers.entity"],
+        "EntityCategory",
+        SimpleNamespace(DIAGNOSTIC="diagnostic"),
     )
     registry = SimpleNamespace(entities={}, async_remove=lambda _entity_id: None)
     set_attr(
@@ -245,6 +251,7 @@ def install_homeassistant(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         ),
         "homeassistant.helpers": (
             "dispatcher",
+            "entity",
             "entity_platform",
             "event",
             "selector",

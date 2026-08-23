@@ -364,7 +364,8 @@ class ZonePolicy:
         active_after = active_before
         pending = self._state.pending_release_since
         event: PolicyEvent | None = None
-        trustworthy = self._trustworthy(at, local_state, local_effect)
+        trustworthy = self._confirming_evidence(at, local_state, local_effect)
+        refresh_eligible = self._refresh_eligible(at, local_state, local_effect)
         episode_id = None if local_state is None else local_state.episode_id
         authorization_valid = self._authorization_valid(at, local_state, authorization)
         reason = "inactive_below_on" if not active_before else "active_hold"
@@ -507,7 +508,7 @@ class ZonePolicy:
                 reason = "release_canceled"
             if (
                 active_after
-                and trustworthy
+                and refresh_eligible
                 and episode_id is not None
                 and episode_id not in {item.episode_id for item in dedup}
             ):
@@ -768,7 +769,7 @@ class ZonePolicy:
             raise ValueError("Policy processing time cannot precede event time")
 
     @staticmethod
-    def _trustworthy(
+    def _confirming_evidence(
         at: datetime,
         state: EpisodeState | None,
         effect: EpisodeEffect | None,
@@ -776,7 +777,7 @@ class ZonePolicy:
         return bool(
             state is not None
             and effect is not None
-            and effect.kind in {"interaction", "positive"}
+            and effect.kind in {"correlated_positive", "interaction", "positive"}
             and effect.at == at
             and effect.node_id == state.node_id
             and effect.zone == state.zone
@@ -786,10 +787,25 @@ class ZonePolicy:
                 or (effect.kind == "interaction" and state.status == "clearing")
             )
             and not state.health_warning
-            and not state.cadence_warning
+            and (
+                effect.kind == "correlated_positive" or not state.cadence_warning
+            )
             and state.started_at is not None
             and state.traversal_valid_until is not None
             and state.started_at <= at < state.traversal_valid_until
+        )
+
+    @classmethod
+    def _refresh_eligible(
+        cls,
+        at: datetime,
+        state: EpisodeState | None,
+        effect: EpisodeEffect | None,
+    ) -> bool:
+        return bool(
+            effect is not None
+            and effect.kind in {"interaction", "positive"}
+            and cls._confirming_evidence(at, state, effect)
         )
 
     def _authorization_valid(

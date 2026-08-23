@@ -42,6 +42,8 @@ STAY_PRESENCE = SensorProfile(
     post_clear_residual=0.8,
     traversal_context_window=timedelta(seconds=120),
     track_bootstrap_window=timedelta(seconds=120),
+    cycle_correlation_window=timedelta(minutes=10),
+    sustained_cadence_warning_window=timedelta(hours=3),
 )
 ENTRY_BOUNDARY = SensorProfile(
     "entry_boundary",

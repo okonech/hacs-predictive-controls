@@ -772,7 +772,9 @@ class PredictiveControlsPanel extends HTMLElement {
   renderReliability() {
     const diagnostics = this._status?.occupancy_diagnostics || {};
     const episodes = diagnostics.episodes || [];
-    const warnings = episodes.filter((item) => item.health_warning);
+    const warnings = Array.isArray(diagnostics.reliability_warnings)
+      ? diagnostics.reliability_warnings.filter((item) => item.active)
+      : [];
     return `
       <main class="reliability-layout">
         <section class="occupancy-toolbar">
@@ -799,8 +801,8 @@ class PredictiveControlsPanel extends HTMLElement {
             ${warnings.length ? warnings.map((item) => `
               <article class="reliability-row">
                 <div class="reliability-row-head"><strong>${escapeHtml(item.node_id)}</strong><span>${escapeHtml(this.zoneLabel(item.zone))}</span></div>
-                <p>${escapeHtml(labelFromValue(item.status))} &middot; ${escapeHtml(item.profile)}</p>
-                <small>Last event ${escapeHtml(formatTimestamp(item.last_event_at))}</small>
+                <p>${escapeHtml(labelFromValue(item.kind))} &middot; ${(item.reasons || []).map((reason) => escapeHtml(labelFromValue(reason))).join(" · ")}</p>
+                <small>Last observed ${escapeHtml(formatTimestamp(item.last_observed_at))}</small>
               </article>
             `).join("") : `<p class="empty-state">No sensor health warnings.</p>`}
           </div>
@@ -1042,6 +1044,7 @@ class PredictiveControlsPanel extends HTMLElement {
         <div class="graph-legend">
           <span><i class="legend-line frontier"></i>Possible next path</span>
           <span><i class="legend-line authorized"></i>Recently authorized path</span>
+          <span><i class="legend-zone warning"></i>Sensor warning</span>
         </div>
         <div class="occupancy-board occupancy-graph" style="height:${height}px;width:${width}px">
           ${this.renderFloorBands(layoutZones, minY, width)}
@@ -1145,12 +1148,15 @@ class PredictiveControlsPanel extends HTMLElement {
     const confidence = Math.round(Number(belief || 0) * 100);
     const active = Boolean(policy?.active);
     const frontier = this.occupancyPathContext().frontierTokens.find((token) => token.zone === zone.zoneId);
+    const warning = (model?.reliability_warnings || []).find(
+      (item) => item.active && item.zone === zone.zoneId,
+    );
     const left = Number(zone.position.x ?? 80) - minX + 24;
     const top = Number(zone.position.y ?? 80) - minY + 24;
     const width = Number(zone.size.width ?? 210);
     const height = Number(zone.size.height ?? 112);
     return `
-      <article class="zone-card status-${state.status}${active ? " is-active" : ""}${frontier ? " has-frontier" : ""}" style="left:${left}px;top:${top}px;width:${width}px;min-height:${height}px" title="${escapeHtml(state.reason || "no evidence")}">
+      <article class="zone-card status-${state.status}${active ? " is-active" : ""}${frontier ? " has-frontier" : ""}${warning ? " has-warning" : ""}" style="left:${left}px;top:${top}px;width:${width}px;min-height:${height}px" title="${escapeHtml(state.reason || "no evidence")}">
         <div class="zone-card-head">
           <strong>${escapeHtml(zone.label)}</strong>
           <span>${confidence}% belief</span>
@@ -1159,6 +1165,7 @@ class PredictiveControlsPanel extends HTMLElement {
         <div class="zone-belief-state"><strong>${active ? "Active" : "Inactive"}</strong><span>${escapeHtml(policy?.profile || "unprofiled")}</span></div>
         <small>${escapeHtml(labelFromValue(state.status || "rejected"))} · ${escapeHtml(labelFromValue(state.occupancy_behavior || zone.occupancyBehavior))} · ${escapeHtml(labelFromValue(zone.role))}</small>
         <small>${zone.nodeIds.length} ${zone.nodeIds.length === 1 ? "sensor" : "sensors"}${state.last_node_id ? ` · ${escapeHtml(state.last_node_id)}` : ""}</small>
+        ${warning ? `<small class="zone-warning-label">${escapeHtml(labelFromValue(warning.kind))} warning · ${escapeHtml(warning.node_id)}</small>` : ""}
         ${frontier ? `<small class="path-frontier-label">Anonymous path frontier · until ${escapeHtml(formatTimestamp(frontier.valid_until))}</small>` : ""}
       </article>
     `;
@@ -1642,6 +1649,8 @@ class PredictiveControlsPanel extends HTMLElement {
       .legend-line { display:inline-block; width:28px; height:0; border-top:3px solid var(--primary-color); }
       .legend-line.frontier { border-top-style:dashed; opacity:.8; }
       .legend-line.authorized { border-top-color:var(--success-color, #43a047); border-top-width:5px; }
+      .legend-zone { display:inline-block; width:18px; height:12px; border:2px solid var(--divider-color); border-radius:2px; }
+      .legend-zone.warning { border-color:#d32f2f; background:color-mix(in srgb, #d32f2f 12%, var(--card-background-color)); }
       .occupancy-board { position:relative; overflow:auto; background:var(--secondary-background-color); border:1px solid var(--divider-color); border-radius:8px; }
       .occupancy-graph { background:var(--secondary-background-color); }
       .floor-band { position:absolute; left:12px; box-sizing:border-box; border:1px solid color-mix(in srgb, var(--divider-color) 78%, transparent); border-radius:8px; background:color-mix(in srgb, var(--card-background-color) 10%, transparent); pointer-events:none; }
@@ -1654,12 +1663,14 @@ class PredictiveControlsPanel extends HTMLElement {
       .zone-card { position:absolute; box-sizing:border-box; border:1px solid var(--divider-color); border-left-width:6px; border-radius:8px; padding:12px; background:var(--card-background-color); box-shadow:var(--ha-card-box-shadow, none); z-index:1; }
       .zone-card.is-active { box-shadow:0 0 0 2px color-mix(in srgb, var(--success-color, #43a047) 42%, transparent), var(--ha-card-box-shadow, none); }
       .zone-card.has-frontier { outline:2px dashed var(--primary-color); outline-offset:3px; }
+      .zone-card.has-warning { border-color:#d32f2f; box-shadow:0 0 0 2px color-mix(in srgb, #d32f2f 52%, transparent), var(--ha-card-box-shadow, none); background:color-mix(in srgb, #d32f2f 9%, var(--card-background-color)); }
       .zone-card-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
       .zone-card-head strong, .zone-card small { overflow:hidden; text-overflow:ellipsis; }
       .zone-card small { display:block; margin-top:6px; color:var(--secondary-text-color); }
       .zone-belief-state { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:8px; }
       .zone-belief-state span { color:var(--secondary-text-color); font-size:12px; }
       .path-frontier-label { color:var(--primary-color) !important; }
+      .zone-warning-label { color:#d32f2f !important; font-weight:700; }
       .confidence-bar { height:8px; margin-top:10px; border-radius:999px; background:var(--divider-color); overflow:hidden; }
       .confidence-bar span { display:block; height:100%; background:var(--primary-color); }
       .status-rejected { border-left-color:var(--disabled-text-color); }
@@ -1667,6 +1678,7 @@ class PredictiveControlsPanel extends HTMLElement {
       .status-possible { border-left-color:var(--info-color, #4797ff); }
       .status-probable { border-left-color:var(--success-color, #43a047); }
       .status-confirmed { border-left-color:var(--primary-color); }
+      .zone-card.has-warning .confidence-bar span { background:#d32f2f; }
       .transition-table { width:100%; border-collapse:collapse; margin-top:12px; }
       .transition-table th, .transition-table td { text-align:left; border-top:1px solid var(--divider-color); padding:10px 8px; vertical-align:top; }
       .transition-table th { color:var(--secondary-text-color); font-weight:600; }

@@ -10,11 +10,14 @@ from custom_components.predictive_controls.zone_model.engine import ZoneModelEng
 from custom_components.predictive_controls.zone_model.profiles import SHARED_PROFILES
 from custom_components.predictive_controls.zone_model.types import (
     AnonymousOccupancySupport,
+    BeliefContribution,
     CountConflictState,
     CountSupport,
     EpisodeEffect,
+    EpisodeState,
     PendingAcquisitionCandidate,
     PhysicalNode,
+    ReliabilityWarningOccurrence,
     SensorInput,
     SupportTokenBinding,
     SupportTransition,
@@ -48,6 +51,132 @@ def test_v3_profile_and_physical_input_validation_boundaries() -> None:
         SensorInput("binary_sensor.node", "on", NOW, 0.0)
     with pytest.raises(ValueError, match="Episode reliability"):
         EpisodeEffect("node", "zone", "episode", "positive", NOW, 0.0)
+
+
+def test_v4_cadence_effect_and_episode_validation_boundaries() -> None:
+    effect = EpisodeEffect(
+        "node",
+        "zone",
+        "episode",
+        "sustained_flapping",
+        NOW,
+        0.8,
+        "sustained_flapping",
+    )
+    contribution = BeliefContribution(
+        NOW,
+        "correlated_positive",
+        "cleared_without_outward",
+        "asserted",
+        0.1,
+        "episode",
+    )
+    frontier = NOW + timedelta(minutes=1)
+    episode = EpisodeState(
+        "node",
+        "zone",
+        "stay_presence",
+        (("binary_sensor.node", "on"),),
+        generation=2,
+        episode_id="episode",
+        status="asserted",
+        started_at=frontier,
+        last_event_at=frontier,
+        advanced_at=frontier,
+        cadence_warning=True,
+        cadence_run_started_at=NOW,
+        cadence_last_transition_at=frontier,
+        cadence_cycle_count=1,
+        cadence_correlated=True,
+        cadence_warning_reason="sustained_flapping",
+    )
+
+    assert effect.warning_reason == "sustained_flapping"
+    assert contribution.kind == "correlated_positive"
+    assert episode.cadence_cycle_count == 1
+
+    with pytest.raises(ValueError, match="identifiers"):
+        replace(effect, node_id="")
+    with pytest.raises(ValueError):
+        replace(effect, warning_reason=None)
+    with pytest.raises(ValueError, match="Cadence warning clear"):
+        replace(effect, kind="cadence_warning_cleared", warning_reason=None)
+    with pytest.raises(ValueError, match="Health effect"):
+        replace(effect, kind="health_degraded", warning_reason=None)
+    with pytest.raises(ValueError):
+        EpisodeEffect(
+            "node",
+            "zone",
+            "episode",
+            "positive",
+            NOW,
+            warning_reason="sustained_flapping",
+        )
+
+    invalid_episodes: tuple[dict[str, object], ...] = (
+        {"cadence_last_transition_at": None},
+        {"cadence_cycle_count": 65536},
+        {"profile_name": "stay_pir"},
+        {"cadence_warning": False},
+        {"cadence_warning_reason": "invalid"},
+    )
+    for changes in invalid_episodes:
+        with pytest.raises(ValueError):
+            changed(episode, changes)
+
+    invalid_cadence_states: tuple[dict[str, object], ...] = (
+        {"cadence_run_started_at": frontier + timedelta(seconds=1)},
+        {
+            "cadence_last_transition_at": frontier + timedelta(seconds=1),
+        },
+        {"cadence_cycle_count": True},
+        {
+            "cadence_run_started_at": None,
+            "cadence_last_transition_at": None,
+        },
+        {"cadence_warning_reason": None},
+        {"episode_id": None},
+        {
+            "cadence_run_started_at": None,
+            "cadence_last_transition_at": None,
+            "cadence_cycle_count": 0,
+            "cadence_correlated": False,
+        },
+    )
+    for changes in invalid_cadence_states:
+        with pytest.raises(ValueError):
+            changed(episode, changes)
+
+
+def test_v4_reliability_warning_occurrence_validation_boundaries() -> None:
+    cleared = ReliabilityWarningOccurrence(
+        "node",
+        "zone",
+        "suspected_stuck",
+        "count_conflict",
+        NOW,
+        NOW + timedelta(minutes=1),
+        NOW + timedelta(minutes=1),
+    )
+    assert cleared.cleared_at == cleared.last_observed_at
+
+    invalid_occurrences: tuple[dict[str, object], ...] = (
+        {"node_id": ""},
+        {"kind": "invalid"},
+        {"kind": "flapping"},
+        {"last_observed_at": NOW - timedelta(seconds=1)},
+        {"cleared_at": NOW},
+    )
+    for changes in invalid_occurrences:
+        with pytest.raises(ValueError):
+            changed(cleared, changes)
+
+    snapshot = ZoneModelEngine(target_map(), 1, NOW).snapshot
+    with pytest.raises(ValueError, match="unique and sorted"):
+        replace(
+            snapshot,
+            reliability_warning_occurrences=(cleared, cleared),
+        )
 
 
 def test_v3_traversal_token_and_pending_validation_boundaries() -> None:

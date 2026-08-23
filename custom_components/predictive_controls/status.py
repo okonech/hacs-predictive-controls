@@ -1,6 +1,83 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+from datetime import datetime, timedelta
 from typing import Any
+
+from .zone_model.types import ReliabilityWarningOccurrence, require_utc
+
+
+def project_reliability_warnings(
+    occurrences: Sequence[ReliabilityWarningOccurrence],
+    at: datetime,
+) -> tuple[dict[str, object], ...]:
+    """Project bounded warning occurrences over an exact trailing day."""
+
+    require_utc(at, "Reliability warning projection time")
+    cutoff = at - timedelta(hours=24)
+    reportable = tuple(
+        occurrence
+        for occurrence in occurrences
+        if occurrence.cleared_at is None or occurrence.last_observed_at > cutoff
+    )
+    return _group_reliability_warnings(reportable)
+
+
+def reliability_warning_summary(rows: Sequence[dict[str, object]]) -> str:
+    """Render deterministic compact text from projected warning rows."""
+
+    return "; ".join(
+        f"{row['zone']}: {str(row['kind']).replace('_', ' ')} "
+        f"[{', '.join(_reasons(row['reasons']))}]"
+        f"{' (active)' if row['active'] else ''}"
+        for row in rows
+    )
+
+
+def _reasons(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise ValueError("Reliability warning reasons are invalid")
+    return tuple(value)
+
+
+def _group_reliability_warnings(
+    occurrences: Sequence[ReliabilityWarningOccurrence],
+) -> tuple[dict[str, object], ...]:
+    grouped: dict[tuple[str, str], list[ReliabilityWarningOccurrence]] = {}
+    for occurrence in occurrences:
+        grouped.setdefault((occurrence.node_id, occurrence.kind), []).append(occurrence)
+    rows: list[dict[str, object]] = []
+    for key in sorted(grouped):
+        records = grouped[key]
+        zones = {record.zone for record in records}
+        if len(zones) != 1:
+            raise ValueError("Reliability warning group has inconsistent zones")
+        active_reasons = sorted(
+            record.reason for record in records if record.cleared_at is None
+        )
+        cleared = tuple(
+            record.cleared_at
+            for record in records
+            if record.cleared_at is not None
+        )
+        rows.append(
+            {
+                "node_id": key[0],
+                "zone": next(iter(zones)),
+                "kind": key[1],
+                "reasons": sorted(record.reason for record in records),
+                "active_reasons": active_reasons,
+                "first_observed_at": min(
+                    record.first_observed_at for record in records
+                ).isoformat(),
+                "last_observed_at": max(
+                    record.last_observed_at for record in records
+                ).isoformat(),
+                "cleared_at": None if active_reasons else max(cleared).isoformat(),
+                "active": bool(active_reasons),
+            }
+        )
+    return tuple(rows)
 
 
 def runtime_status_payload(runtime: Any) -> dict[str, Any]:
@@ -57,6 +134,13 @@ def zone_state_payload(state: Any) -> dict[str, Any]:
 
 
 def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
+    current_warnings = _group_reliability_warnings(
+        tuple(
+            occurrence
+            for occurrence in diagnostics.reliability_warning_occurrences
+            if occurrence.cleared_at is None
+        )
+    )
     return {
         "model": "zone_belief",
         "expected_occupants": diagnostics.expected_occupants,
@@ -88,6 +172,13 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
                 "last_event_at": _iso(state.last_event_at),
                 "health_warning": state.health_warning,
                 "cadence_warning": state.cadence_warning,
+                "cadence_warning_reason": state.cadence_warning_reason,
+                "cadence_run_started_at": _iso(state.cadence_run_started_at),
+                "cadence_last_transition_at": _iso(
+                    state.cadence_last_transition_at
+                ),
+                "cadence_cycle_count": state.cadence_cycle_count,
+                "cadence_correlated": state.cadence_correlated,
                 "degradation_reason": state.degradation_reason,
                 "reliability": diagnostics.sensor_reliability[state.node_id],
             }
@@ -256,7 +347,21 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
         "health_warnings": [
             state.node_id
             for state in diagnostics.episode_states
-            if state.health_warning
+            if state.health_warning or state.cadence_warning
+        ],
+        "reliability_warnings": list(current_warnings),
+        "reliability_warning_occurrences": [
+            {
+                "node_id": occurrence.node_id,
+                "zone": occurrence.zone,
+                "kind": occurrence.kind,
+                "reason": occurrence.reason,
+                "first_observed_at": occurrence.first_observed_at.isoformat(),
+                "last_observed_at": occurrence.last_observed_at.isoformat(),
+                "cleared_at": _iso(occurrence.cleared_at),
+                "active": occurrence.cleared_at is None,
+            }
+            for occurrence in diagnostics.reliability_warning_occurrences
         ],
         "active_without_current_evidence": [
             zone

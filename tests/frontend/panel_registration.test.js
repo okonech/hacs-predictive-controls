@@ -408,6 +408,24 @@ test("panel renders target sensor health warnings", async () => {
           last_event_at: "2026-07-13T12:00:14Z",
         },
       ],
+      reliability_warnings: [
+        {
+          node_id: "office_motion",
+          zone: "office",
+          kind: "flapping",
+          reasons: ["impossible_cadence"],
+          active: true,
+          last_observed_at: "2026-07-13T12:00:14Z",
+        },
+        {
+          node_id: "office_presence",
+          zone: "office",
+          kind: "suspected_stuck",
+          reasons: ["count_conflict"],
+          active: true,
+          last_observed_at: "2026-07-13T11:59:00Z",
+        },
+      ],
     },
   };
   panel._tab = "reliability";
@@ -416,11 +434,63 @@ test("panel renders target sensor health warnings", async () => {
 
   assert.match(panel.innerHTML, /<main class="reliability-layout">/);
   assert.match(panel.innerHTML, /Sensor Health/);
-  assert.match(panel.innerHTML, /<strong>1<\/strong><span>Health warnings<\/span>/);
+  assert.match(panel.innerHTML, /<strong>2<\/strong><span>Health warnings<\/span>/);
   assert.match(panel.innerHTML, /office_motion/);
+  assert.match(panel.innerHTML, /office_presence/);
   assert.match(panel.innerHTML, /Office/);
-  assert.match(panel.innerHTML, /Degraded/);
-  assert.match(panel.innerHTML, /stay_pir/);
+  assert.match(panel.innerHTML, /Flapping/);
+  assert.match(panel.innerHTML, /Suspected Stuck/);
+  assert.match(panel.innerHTML, /Impossible Cadence/);
+  assert.match(panel.innerHTML, /Count Conflict/);
+});
+
+test("occupancy graph gives active warning zones red precedence", async () => {
+  const Panel = await panelConstructor();
+  const panel = new Panel();
+  panel._hass = {};
+  panel._config = {
+    map: {
+      zones: {
+        office: {
+          label: "Office",
+          floor: "second_floor",
+          position: { x: 120, y: 120 },
+        },
+      },
+      nodes: {
+        office_presence: { zone: "office", adjacent: [] },
+      },
+    },
+  };
+  panel._status = {
+    zone_states: {
+      office: { confidence: 0.96, status: "confirmed", reason: "active" },
+    },
+    occupancy_diagnostics: {
+      model: "zone_belief",
+      beliefs: { office: 0.96 },
+      policy: { office: { active: true, profile: "stay_presence" } },
+      reliability_warnings: [
+        {
+          node_id: "office_presence",
+          zone: "office",
+          kind: "suspected_stuck",
+          reasons: ["assertion_timeout"],
+          active: true,
+        },
+      ],
+    },
+  };
+  panel._tab = "occupancy";
+
+  panel.render();
+
+  assert.match(
+    panel.innerHTML,
+    /class="zone-card status-confirmed is-active has-warning"/,
+  );
+  assert.match(panel.innerHTML, /Suspected Stuck warning/);
+  assert.match(panel.innerHTML, /\.zone-card\.has-warning[^}]+#d32f2f/);
 });
 
 test("panel renders cross-floor zone adjacency as a graph edge", async () => {

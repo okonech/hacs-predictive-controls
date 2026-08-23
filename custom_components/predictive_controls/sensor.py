@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from homeassistant.components.sensor import SensorEntity, SensorEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .automation_summary import runtime_automation_summary
 from .const import DISPATCH_DIAGNOSTIC_UPDATE, DISPATCH_UPDATE, DOMAIN
 from .runtime import PredictiveControlsRuntime
+from .status import project_reliability_warnings, reliability_warning_summary
 
 
 async def async_setup_entry(
@@ -21,6 +25,7 @@ async def async_setup_entry(
         AuthoritativeOccupantCountSensor(runtime, entry.entry_id),
         DiagnosticPredictedNextZoneSensor(runtime, entry.entry_id),
         DiagnosticEntryPathPlausibleZonesSensor(runtime, entry.entry_id),
+        PredictiveControlsReliabilityWarningsSensor(runtime, entry.entry_id),
     ]
     entities.extend(
         ZoneDiagnosticConfidenceSensor(runtime, entry.entry_id, zone)
@@ -128,6 +133,39 @@ class DiagnosticPredictedNextZoneSensor(RuntimeSensor):
                 for zone, state in summary.zones.items()
                 if state.prediction_probability > 0
             },
+        }
+
+
+class PredictiveControlsReliabilityWarningsSensor(RuntimeSensor):
+    _attr_name = "Predictive Controls Reliability Warnings"
+    _attr_icon = "mdi:alert-circle-outline"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = True
+
+    def __init__(self, runtime: PredictiveControlsRuntime, entry_id: str) -> None:
+        super().__init__(runtime, entry_id)
+        self._attr_unique_id = (
+            f"{entry_id}_predictive_controls_reliability_warnings"
+        )
+
+    def _rows(self) -> tuple[dict[str, object], ...]:
+        return project_reliability_warnings(
+            self.runtime.confidence.diagnostics.reliability_warning_occurrences,
+            datetime.now(UTC),
+        )
+
+    @property
+    def native_value(self) -> int:
+        return len(self._rows())
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        rows = self._rows()
+        return {
+            "window_hours": 24,
+            "active_count": sum(bool(row["active"]) for row in rows),
+            "warnings": list(rows),
+            "summary": reliability_warning_summary(rows),
         }
 
 

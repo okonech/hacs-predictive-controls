@@ -101,6 +101,44 @@ class ZoneBeliefFilter:
         self._record("local_positive", before, episode_id)
         return self._state
 
+    def apply_correlated_positive(
+        self,
+        episode_id: str,
+        at: datetime,
+        reliability: float = 1.0,
+    ) -> ZoneBeliefState:
+        """Apply one fresh generation with paired-clear-neutral likelihood."""
+
+        self._require_episode_id(episode_id)
+        self._advance_to(at)
+        if self._state.generation_episode_id == episode_id:
+            return self._state
+        positive_log_likelihood = math.log(
+            self._profile.positive_occupied_likelihood
+        ) - math.log(self._profile.positive_empty_likelihood)
+        clear_inverse_log_likelihood = math.log(
+            self._profile.clear_empty_likelihood
+        ) - math.log(self._profile.clear_occupied_likelihood)
+        scale = clear_inverse_log_likelihood / positive_log_likelihood
+        if not math.isfinite(scale) or not 0.0 < scale <= 1.0:
+            raise ValueError("Correlated-positive likelihood scale is invalid")
+        before = self._state
+        self._state = replace(
+            before,
+            log_odds=self._apply_likelihood(
+                self._profile.positive_empty_likelihood,
+                self._profile.positive_occupied_likelihood,
+                reliability * scale,
+            ),
+            context="asserted",
+            generation_episode_id=episode_id,
+            asserted_episode_id=episode_id,
+            outward_context=None,
+            health_warning=False,
+        )
+        self._record("correlated_positive", before, episode_id)
+        return self._state
+
     def apply_interaction(
         self,
         episode_id: str,

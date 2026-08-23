@@ -38,6 +38,7 @@ from .types import (
     EpisodeState,
     PolicyDecision,
     PolicyEvent,
+    ReliabilityWarningOccurrence,
     SensorInput,
     SupportTransitionEvent,
     TraversalAuthorization,
@@ -95,6 +96,9 @@ class ZoneModelEngine:
         self._pending_prediction_learning: list[TraversalAuthorization] = []
         self._count = CountContext(initial_count)
         self._count_conflicts = CountConflictTracker()
+        self._reliability_warning_occurrences: dict[
+            tuple[str, str], ReliabilityWarningOccurrence
+        ] = {}
         active_seed = {} if active_seed is None else dict(active_seed)
         if not set(active_seed) <= set(self._filters) or any(
             not isinstance(active, bool) for active in active_seed.values()
@@ -137,6 +141,10 @@ class ZoneModelEngine:
         ):
             raise ValueError("Zone-model snapshot zones are incompatible")
         candidate._validate_snapshot_integrity(snapshot)
+        candidate._reliability_warning_occurrences = {
+            (item.node_id, item.reason): item
+            for item in snapshot.reliability_warning_occurrences
+        }
         if snapshot.count_state.expected_count == 0 and any(
             state.active for state in policy_by_zone.values()
         ):
@@ -213,6 +221,10 @@ class ZoneModelEngine:
             self._frontier.retained_tokens,
             self._supports.supports,
             self._supports.bindings,
+            tuple(
+                self._reliability_warning_occurrences[key]
+                for key in sorted(self._reliability_warning_occurrences)
+            ),
         )
 
     @property
@@ -406,6 +418,7 @@ class ZoneModelEngine:
         final_token: TraversalToken | None = None
         belief_before: ZoneBeliefState | None = None
         authorizations: list[TraversalAuthorization] = []
+        source_authorizations: list[TraversalAuthorization] = []
         for effect in effects:
             self._advance_components(effect.at)
             current_before = self._filters[effect.zone].state
@@ -414,6 +427,11 @@ class ZoneModelEngine:
             )
             if authorization is not None:
                 authorizations.append(authorization)
+                if (
+                    authorization.authorized
+                    and effect.kind in {"interaction", "positive"}
+                ):
+                    source_authorizations.append(authorization)
             final_effect = applied_effect
             final_authorization = authorization
             final_token = issued_token
@@ -431,7 +449,7 @@ class ZoneModelEngine:
             )
         self._frontier.sync(update.state, event.event_at)
         prediction_leases = self._prepare_predictions(
-            event.event_at, tuple(authorizations)
+            event.event_at, tuple(source_authorizations)
         )
         decisions, policy_events = self._evaluate_policies(
             event.event_at,
@@ -443,11 +461,21 @@ class ZoneModelEngine:
             prediction_leases=prediction_leases,
             decision_callback=decision_callback,
         )
+        support_effect = (
+            None
+            if final_effect is not None
+            and final_effect.kind == "correlated_positive"
+            else final_effect
+        )
+        support_authorization = (
+            None if support_effect is None else final_authorization
+        )
+        support_token = None if support_effect is None else final_token
         self._supports.apply(
             event.event_at,
-            final_effect,
-            final_authorization,
-            final_token,
+            support_effect,
+            support_authorization,
+            support_token,
             self._episodes.states,
             tuple(self._filters[zone].state for zone in sorted(self._filters)),
             self._frontier.tokens,
@@ -556,6 +584,10 @@ class ZoneModelEngine:
                 (*pending_expiry_decisions, *deadline_decisions),
             )
         if update.categorical_zero:
+            cadence_resets = self._episodes.reset_cadence(event.event_at)
+            for reset in cadence_resets:
+                for effect in reset.effects:
+                    self._apply_effect(reset.state, effect)
             apply_count_update(update, self._filters, self._frontier)
             self._count_conflicts.clear()
             self._supports.clear(event.event_at)
@@ -680,6 +712,17 @@ class ZoneModelEngine:
                 state.traversal_valid_until,
             )
             return authorization, effect, token
+        if effect.kind == "correlated_positive":
+            filter_.apply_correlated_positive(
+                effect.episode_id,
+                effect.at,
+                effect.reliability,
+            )
+            authorization = self._frontier.authorize_correlated_target(
+                state,
+                effect.at,
+            )
+            return authorization, effect, None
         if effect.kind == "correlated_flap_ignored":
             if self._frontier.reopen_authorized_continuity(state, effect):
                 effect = replace(effect, kind="correlated_continuity_authorized")
@@ -687,7 +730,12 @@ class ZoneModelEngine:
             else:
                 self._frontier.sync(state, effect.at)
             return None, effect, None
-        if effect.kind == "impossible_cadence":
+        if effect.kind in {
+            "cadence_warning_cleared",
+            "impossible_cadence",
+            "sustained_flapping",
+        }:
+            self._apply_warning_effect(effect)
             self._frontier.sync(state, effect.at)
             return None, effect, None
         if effect.kind == "stable_clear":
@@ -697,11 +745,53 @@ class ZoneModelEngine:
                 )
         elif effect.kind == "health_degraded":
             filter_.apply_health_degraded(effect.episode_id, effect.at)
+            self._apply_warning_effect(effect)
         else:
             assert effect.kind == "health_recovered"
             filter_.apply_health_recovered(effect.episode_id, effect.at)
+            self._apply_warning_effect(effect)
         self._frontier.sync(state, effect.at)
         return None, effect, None
+
+    def _apply_warning_effect(self, effect: EpisodeEffect) -> None:
+        reason = effect.warning_reason
+        assert reason is not None
+        key = (effect.node_id, reason)
+        current = self._reliability_warning_occurrences.get(key)
+        if effect.kind in {
+            "health_degraded",
+            "impossible_cadence",
+            "sustained_flapping",
+        }:
+            kind = (
+                "flapping"
+                if reason in {"impossible_cadence", "sustained_flapping"}
+                else "suspected_stuck"
+            )
+            first_observed_at = (
+                current.first_observed_at
+                if current is not None and current.cleared_at is None
+                else effect.at
+            )
+            self._reliability_warning_occurrences[key] = (
+                ReliabilityWarningOccurrence(
+                    effect.node_id,
+                    effect.zone,
+                    kind,
+                    reason,
+                    first_observed_at,
+                    effect.at,
+                )
+            )
+            return
+        assert effect.kind in {"cadence_warning_cleared", "health_recovered"}
+        if current is None or current.cleared_at is not None:
+            raise ValueError("Reliability warning clear has no active occurrence")
+        self._reliability_warning_occurrences[key] = replace(
+            current,
+            last_observed_at=effect.at,
+            cleared_at=effect.at,
+        )
 
     def _advance_components(self, at: datetime) -> None:
         for filter_ in self._filters.values():
@@ -797,6 +887,21 @@ class ZoneModelEngine:
                 continue
             state = episode_by_node[node_id]
             if (
+                state.episode_id == conflict.target_episode_id
+                and state.status == "clear"
+                and not state.health_warning
+                and state.degradation_reason is None
+            ):
+                self._policies[state.zone].record_count_conflict(
+                    conflict,
+                    state,
+                    self._filters[state.zone].state,
+                    result="recovered",
+                    at=at,
+                    processing_at=at,
+                )
+                continue
+            if (
                 state.episode_id != conflict.target_episode_id
                 or state.status != "degraded"
                 or state.degradation_reason != "count_conflict"
@@ -811,6 +916,7 @@ class ZoneModelEngine:
             self._filters[effect.zone].apply_health_recovered(
                 effect.episode_id, effect.at
             )
+            self._apply_warning_effect(effect)
             self._frontier.sync(update.state, at)
             self._policies[update.state.zone].record_count_conflict(
                 conflict,
@@ -830,6 +936,7 @@ class ZoneModelEngine:
             self._filters[effect.zone].apply_health_degraded(
                 effect.episode_id, effect.at
             )
+            self._apply_warning_effect(effect)
             self._frontier.sync(update.state, at)
             self._policies[update.state.zone].record_count_conflict(
                 conflict,
@@ -1027,9 +1134,17 @@ class ZoneModelEngine:
             state.zone
             for state in self._episodes.states
             if SHARED_PROFILES[state.profile_name].role == "stay"
-            and state.status in {"degraded", "clearing"}
-            and state.health_warning
-            and state.degradation_reason == "count_conflict"
+            and (
+                (
+                    state.status in {"degraded", "clearing"}
+                    and state.health_warning
+                    and state.degradation_reason == "count_conflict"
+                )
+                or (
+                    state.status in {"asserted", "clearing"}
+                    and state.cadence_correlated
+                )
+            )
         )
 
     def _validate_operation_time(
@@ -1081,6 +1196,34 @@ class ZoneModelEngine:
         at = snapshot.updated_at
         episodes = {state.node_id: state for state in snapshot.episode_states}
         physical_nodes = {node.node_id: node for node in self._nodes}
+        active_occurrences: set[tuple[str, str]] = set()
+        for occurrence in snapshot.reliability_warning_occurrences:
+            physical_node = physical_nodes.get(occurrence.node_id)
+            if (
+                physical_node is None
+                or physical_node.zone != occurrence.zone
+                or occurrence.last_observed_at > at
+            ):
+                raise ValueError("Reliability warning occurrence is incompatible")
+            if occurrence.cleared_at is not None:
+                continue
+            state = episodes[occurrence.node_id]
+            if occurrence.reason in {
+                "impossible_cadence",
+                "sustained_flapping",
+            }:
+                agrees = (
+                    state.cadence_warning
+                    and state.cadence_warning_reason == occurrence.reason
+                )
+            else:
+                agrees = (
+                    state.health_warning
+                    and state.degradation_reason == occurrence.reason
+                )
+            if not agrees:
+                raise ValueError("Active reliability warning occurrence is stale")
+            active_occurrences.add((occurrence.node_id, occurrence.reason))
         for state in snapshot.episode_states:
             historical_frontiers = (
                 state.started_at,
@@ -1091,6 +1234,19 @@ class ZoneModelEngine:
             )
             if any(value is not None and value > at for value in historical_frontiers):
                 raise ValueError("Episode snapshot is newer than its model frontier")
+            current_reasons = tuple(
+                reason
+                for reason in (
+                    state.cadence_warning_reason,
+                    state.degradation_reason if state.health_warning else None,
+                )
+                if reason is not None
+            )
+            if any(
+                (state.node_id, reason) not in active_occurrences
+                for reason in current_reasons
+            ):
+                raise ValueError("Current reliability warning occurrence is missing")
 
         for belief in snapshot.belief_states:
             if belief.last_updated_at > at:
@@ -1763,8 +1919,18 @@ class ZoneModelEngine:
                 raise ValueError("Zero-count snapshot contains policy authority")
 
     @staticmethod
-    def _effect_order(effect: EpisodeEffect) -> tuple[datetime, str, str]:
-        return effect.at, effect.node_id, effect.kind
+    def _effect_order(effect: EpisodeEffect) -> tuple[datetime, str, int, str]:
+        priority = {
+            "cadence_warning_cleared": 0,
+            "stable_clear": 1,
+            "health_degraded": 2,
+            "health_recovered": 2,
+            "correlated_positive": 3,
+            "interaction": 3,
+            "positive": 3,
+            "sustained_flapping": 3,
+        }.get(effect.kind, 1)
+        return effect.at, effect.node_id, priority, effect.kind
 
 
 __all__ = ["ZoneModelEngine"]

@@ -357,10 +357,68 @@ class TraversalFrontier:
                 False,
                 "untracked_rejected",
             )
-        candidates = tuple(
-            token for token in self.tokens if token.episode_id != target.episode_id
+        return self._authorize_from_context(
+            target,
+            target_node,
+            at,
+            count=count,
+            remember_pending=True,
+            fallback_reason="track_bootstrap_pending",
         )
-        reason = "track_bootstrap_pending"
+
+    def authorize_correlated_target(
+        self,
+        target: EpisodeState,
+        at: datetime,
+    ) -> TraversalAuthorization:
+        """Authorize correlated target evidence without creating source authority."""
+
+        self.advance(at)
+        target_node = self._validated_episode(target)
+        if (
+            target.status != "asserted"
+            or target.episode_id is None
+            or not target.cadence_correlated
+        ):
+            raise ValueError("Correlated traversal target must be a current episode")
+        if not self._target_trustworthy(
+            target,
+            at,
+            allow_cadence_warning=True,
+        ):
+            return TraversalAuthorization(
+                target.node_id,
+                target.zone,
+                target.episode_id,
+                at,
+                False,
+                "untracked_rejected",
+            )
+        return self._authorize_from_context(
+            target,
+            target_node,
+            at,
+            count=None,
+            remember_pending=False,
+            fallback_reason="untracked_rejected",
+        )
+
+    def _authorize_from_context(
+        self,
+        target: EpisodeState,
+        target_node: PhysicalNode,
+        at: datetime,
+        *,
+        count: CountState | None,
+        remember_pending: bool,
+        fallback_reason: str,
+    ) -> TraversalAuthorization:
+        assert target.episode_id is not None
+        target_episode_id = target.episode_id
+        candidates = tuple(
+            token for token in self.tokens if token.episode_id != target_episode_id
+        )
+        reason = fallback_reason
         sources: tuple[TraversalToken, ...] = ()
         confidence: str | None = None
         path: tuple[str, ...] = ()
@@ -391,7 +449,7 @@ class TraversalFrontier:
             for use in self._uses.values()
             if use.token_id
             in {token.token_id for token in (*same_zone, *adjacent_current, *adjacent)}
-            and use.target_episode_id != target.episode_id
+            and use.target_episode_id != target_episode_id
         }
         linked = tuple(
             token for token in candidates if token.episode_id in linked_episode_ids
@@ -464,7 +522,7 @@ class TraversalFrontier:
                     (pending.node_id, target.node_id),
                     "adjacent_pair",
                 )
-        else:
+        elif remember_pending:
             self._remember_pending(target, at, target_node.reliability)
         authorized = confidence is not None
         if authorized:
@@ -472,17 +530,17 @@ class TraversalFrontier:
         new_uses: list[AuthorizationUse] = []
         if authorized:
             for token in sources:
-                key = (token.token_id, target.episode_id)
+                key = (token.token_id, target_episode_id)
                 if key in self._uses:
                     continue
-                use = AuthorizationUse(token.token_id, target.episode_id, reason, at)
+                use = AuthorizationUse(token.token_id, target_episode_id, reason, at)
                 self._uses[key] = use
                 new_uses.append(use)
             self._enforce_use_bound()
         return TraversalAuthorization(
             target.node_id,
             target.zone,
-            target.episode_id,
+            target_episode_id,
             at,
             authorized,
             reason,
@@ -515,11 +573,16 @@ class TraversalFrontier:
         )
 
     @staticmethod
-    def _target_trustworthy(target: EpisodeState, at: datetime) -> bool:
+    def _target_trustworthy(
+        target: EpisodeState,
+        at: datetime,
+        *,
+        allow_cadence_warning: bool = False,
+    ) -> bool:
         return bool(
             target.status == "asserted"
             and not target.health_warning
-            and not target.cadence_warning
+            and (allow_cadence_warning or not target.cadence_warning)
             and target.started_at is not None
             and target.traversal_valid_until is not None
             and target.started_at <= at < target.traversal_valid_until

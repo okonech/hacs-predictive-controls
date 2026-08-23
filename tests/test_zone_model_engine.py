@@ -37,6 +37,109 @@ def target_map() -> PredictiveMap:
     )
 
 
+def presence_target_map() -> PredictiveMap:
+    return PredictiveMap.from_mapping(
+        {
+            "nodes": {
+                "hall": {
+                    "role": "transition_gate",
+                    "occupancy_behavior": "transient",
+                    "entities": {"motion": "binary_sensor.hall"},
+                    "adjacent": ["room"],
+                },
+                "room": {
+                    "role": "room_occupancy",
+                    "occupancy_behavior": "sustained",
+                    "entities": {"mmwave": "binary_sensor.room"},
+                    "adjacent": ["hall"],
+                },
+            }
+        }
+    )
+
+
+def test_correlated_stay_holds_active_zone_until_stable_clear() -> None:
+    engine = ZoneModelEngine(presence_target_map(), 1, NOW)
+    engine.observe(SensorInput("binary_sensor.hall", "on", NOW))
+    engine.observe(
+        SensorInput("binary_sensor.room", "on", NOW + timedelta(seconds=1))
+    )
+    engine.observe(
+        SensorInput("binary_sensor.room", "off", NOW + timedelta(seconds=20))
+    )
+    engine.advance(NOW + timedelta(seconds=30))
+    correlated = engine.observe(
+        SensorInput("binary_sensor.room", "on", NOW + timedelta(seconds=60))
+    )
+
+    policy = next(
+        state for state in engine.snapshot.policy_states if state.zone == "room"
+    )
+    assert policy.active
+    assert engine._asserted_stay_hold_zones() == frozenset({"room"})
+    assert not any(event.kind == "refreshed" for event in correlated.policy_events)
+
+    engine.observe(
+        SensorInput("binary_sensor.room", "off", NOW + timedelta(seconds=80))
+    )
+    assert engine._asserted_stay_hold_zones() == frozenset({"room"})
+
+    engine.advance(NOW + timedelta(seconds=90))
+    assert engine._asserted_stay_hold_zones() == frozenset()
+
+
+def test_independent_source_authorizes_correlated_target_without_source_leak() -> None:
+    engine = ZoneModelEngine(presence_target_map(), 1, NOW)
+    first = engine.observe(SensorInput("binary_sensor.room", "on", NOW))
+    assert not next(
+        state for state in first.snapshot.policy_states if state.zone == "room"
+    ).active
+    engine.observe(
+        SensorInput("binary_sensor.room", "off", NOW + timedelta(seconds=20))
+    )
+    engine.advance(NOW + timedelta(seconds=30))
+    engine.observe(
+        SensorInput("binary_sensor.hall", "on", NOW + timedelta(seconds=40))
+    )
+    correlated_at = NOW + timedelta(seconds=60)
+    engine.advance(correlated_at)
+    supports_before = engine.snapshot.anonymous_supports
+
+    result = engine.observe(
+        SensorInput("binary_sensor.room", "on", correlated_at)
+    )
+
+    room = next(
+        state for state in result.snapshot.episode_states if state.node_id == "room"
+    )
+    authorization = next(
+        item
+        for item in result.authorizations
+        if item.target_episode_id == room.episode_id
+    )
+    policy = next(
+        state for state in result.snapshot.policy_states if state.zone == "room"
+    )
+    assert room.cadence_correlated
+    assert authorization.authorized
+    assert policy.active
+    assert any(
+        event.zone == "room" and event.kind == "acquired"
+        for event in result.policy_events
+    )
+    assert all(
+        token.episode_id != room.episode_id
+        for token in result.snapshot.traversal_tokens
+    )
+    assert all(
+        candidate.node_id != room.node_id
+        for candidate in result.snapshot.pending_candidates
+    )
+    assert result.snapshot.anonymous_supports == supports_before
+    assert engine.prediction_manager.leases == ()
+    assert not any(event.kind == "refreshed" for event in result.policy_events)
+
+
 def stale_transfer_map() -> PredictiveMap:
     return PredictiveMap.from_mapping(
         {
@@ -818,6 +921,70 @@ def test_correlated_flap_after_hardware_hold_is_ignored_and_audited() -> None:
         for decision in flap.policy_decisions
     )
     assert flap.snapshot.traversal_tokens == ()
+
+
+def test_inc_2026_08_23_shaila_office_sustained_flapping_stays_below_on_threshold(
+) -> None:
+    entity_id = "binary_sensor.target"
+    predictive_map = PredictiveMap.from_mapping(
+        {
+            "nodes": {
+                "target": {
+                    "role": "room_occupancy",
+                    "occupancy_behavior": "sticky",
+                    "entities": {"mmwave": entity_id},
+                    "initial_weight": 0.75,
+                }
+            }
+        }
+    )
+    engine = ZoneModelEngine(
+        predictive_map,
+        1,
+        datetime.fromisoformat("2026-08-22T12:12:00.312303+00:00"),
+    )
+    retained_history = (
+        ("2026-08-22T12:12:00.312303+00:00", "on"),
+        ("2026-08-22T12:13:21.696150+00:00", "off"),
+        ("2026-08-22T12:15:14.321496+00:00", "on"),
+        ("2026-08-22T12:15:47.199246+00:00", "off"),
+        ("2026-08-22T12:17:35.825838+00:00", "on"),
+        ("2026-08-22T12:18:32.255483+00:00", "off"),
+        ("2026-08-22T12:20:32.331074+00:00", "on"),
+        ("2026-08-22T12:21:36.262743+00:00", "off"),
+        ("2026-08-22T12:21:58.835773+00:00", "on"),
+        ("2026-08-22T12:22:40.214191+00:00", "off"),
+        ("2026-08-22T12:23:20.335658+00:00", "on"),
+        ("2026-08-22T12:23:55.716778+00:00", "off"),
+        ("2026-08-22T12:25:13.843043+00:00", "on"),
+        ("2026-08-22T12:26:04.772062+00:00", "off"),
+        ("2026-08-22T12:31:54.352277+00:00", "on"),
+        ("2026-08-22T12:32:29.233070+00:00", "off"),
+        ("2026-08-22T12:33:43.857402+00:00", "on"),
+        ("2026-08-22T12:34:34.286213+00:00", "off"),
+    )
+
+    result = None
+    for timestamp, state in retained_history:
+        result = engine.observe(
+            SensorInput(
+                entity_id,
+                state,
+                datetime.fromisoformat(timestamp),
+                reliability=0.75,
+            )
+        )
+
+    assert result is not None
+    target_belief = next(
+        belief for belief in result.snapshot.belief_states if belief.zone == "target"
+    )
+    target_policy = next(
+        policy for policy in result.snapshot.policy_states if policy.zone == "target"
+    )
+    assert target_belief.probability < 0.70
+    assert not target_policy.active
+    assert result.policy_events == ()
 
 
 def test_engine_rejects_ambiguous_behavior_or_mixed_profile_zones() -> None:

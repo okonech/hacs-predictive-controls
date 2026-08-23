@@ -9,6 +9,7 @@ AGGREGATE_SENSOR_SUFFIXES = (
     "authoritative_occupant_count",
     "diagnostic_predicted_next_zone",
     "diagnostic_entry_path_plausible_zones",
+    "predictive_controls_reliability_warnings",
 )
 
 AGGREGATE_BINARY_SENSOR_SUFFIXES = (

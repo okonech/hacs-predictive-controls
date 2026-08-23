@@ -495,7 +495,14 @@ def test_support_tracker_covers_atomic_validation_and_coalescence_boundaries() -
         ({"status": "unavailable"}, None, "unavailable"),
         ({"health_warning": True}, None, "health_warning"),
         ({}, {"health_warning": True}, "health_warning"),
-        ({"cadence_warning": True}, None, "cadence_warning"),
+        (
+            {
+                "cadence_warning": True,
+                "cadence_warning_reason": "impossible_cadence",
+            },
+            None,
+            "cadence_warning",
+        ),
         ({"status": "clear"}, None, "outward_clear"),
         ({"status": "clear"}, {"context": "cleared_with_outward"}, "outward_clear"),
         ({"status": "dormant"}, None, "belief_below_threshold"),

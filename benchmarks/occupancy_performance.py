@@ -362,6 +362,19 @@ def _measure_fast_paths(
     entities[interaction_node_id] = next(
         iter(interaction_map.nodes[interaction_node_id].entities.values())
     )
+    cadence_node_id = "guest_bedroom_sensor"
+    cadence_entity_key = "cadence_guest_bedroom_sensor"
+    cadence_map = _benchmark_map(
+        predictive_map,
+        entity_overrides={
+            cadence_node_id: {
+                "mmwave": "binary_sensor.benchmark_guest_bedroom_presence"
+            },
+        },
+    )
+    entities[cadence_entity_key] = next(
+        iter(cadence_map.nodes[cadence_node_id].entities.values())
+    )
 
     (
         runtime_type,
@@ -395,6 +408,7 @@ def _measure_fast_paths(
     samples: dict[str, list[float]] = {
         "adjacent_pair": [],
         "boundary": [],
+        "cadence_correlated_target": [],
         "confirmed_token": [],
         "correlated_continuity": [],
         "local_interaction": [],
@@ -449,6 +463,41 @@ def _measure_fast_paths(
         return runtime.confidence
 
     for _ in range(iterations):
+        cadence = make_runtime(cadence_map, 2)
+        observe(cadence, "living_left_sensor", 0)
+        observe(cadence, cadence_entity_key, 1)
+        cadence.observe_entity(
+            entities[cadence_entity_key],
+            "off",
+            started_at + timedelta(milliseconds=20_000),
+        )
+        cadence.confidence.ensure_state(
+            started_at + timedelta(milliseconds=30_000)
+        )
+        observe(cadence, "stairs_bottom_sensor", 40_000)
+        cadence_result = measured_observe(
+            "cadence_correlated_target",
+            cadence,
+            cadence_entity_key,
+            45_000,
+            "guest_bedroom",
+        )
+        activations["cadence_correlated_target"] += any(
+            policy.zone == "guest_bedroom" and policy.active
+            for policy in cadence_result.policy_states.values()
+        )
+        qualifications["cadence_correlated_target"] += (
+            any(
+                state.node_id == cadence_node_id and state.cadence_correlated
+                for state in cadence_result.episode_states
+            )
+            and any(
+                authorization.target_node_id == cadence_node_id
+                and authorization.authorized
+                for authorization in cadence_result.authorizations
+            )
+        )
+
         interaction = make_runtime(interaction_map, 2)
         interaction_result = measured_observe(
             "local_interaction",
@@ -669,12 +718,14 @@ def _benchmark_map(
     predictive_map: PredictiveMap,
     *,
     role_overrides: dict[str, tuple[str, str]] | None = None,
+    entity_overrides: dict[str, dict[str, str]] | None = None,
     transition_overrides: dict[str, dict[str, float]] | None = None,
     additional_nodes: dict[str, dict[str, object]] | None = None,
 ) -> PredictiveMap:
     """Clone the reference graph with one reviewed fast-path calibration."""
 
     role_overrides = {} if role_overrides is None else role_overrides
+    entity_overrides = {} if entity_overrides is None else entity_overrides
     transition_overrides = {} if transition_overrides is None else transition_overrides
     additional_nodes = {} if additional_nodes is None else additional_nodes
     nodes: dict[str, dict[str, object]] = {}
@@ -692,7 +743,7 @@ def _benchmark_map(
             "zone": node.occupancy_zone,
             "role": role,
             "occupancy_behavior": behavior,
-            "entities": dict(node.entities),
+            "entities": entity_overrides.get(node_id, dict(node.entities)),
             "adjacent": list(node.adjacent),
             "transition_seconds": transition_overrides.get(
                 node_id, node.transition_seconds

@@ -31,6 +31,7 @@ from .zone_model.types import (
     PendingAcquisitionCandidate,
     PolicyDecision,
     PolicyEvent,
+    ReliabilityWarningOccurrence,
     SensorInput,
     SupportTokenBinding,
     SupportTransitionEvent,
@@ -99,6 +100,7 @@ class TrackerDiagnostics:
     support_token_bindings: tuple[SupportTokenBinding, ...]
     latest_support_transition: SupportTransitionEvent | None
     count_conflicts: tuple[CountConflictState, ...]
+    reliability_warning_occurrences: tuple[ReliabilityWarningOccurrence, ...]
     sensor_reliability: dict[str, float]
     prediction_leases: tuple[PredictionLease, ...]
     prediction_probabilities: dict[str, float]
@@ -270,6 +272,11 @@ class OccupancyTracker:
                 else self._engine.latest_support_transition
             ),
             count_conflicts=() if snapshot is None else snapshot.count_conflicts,
+            reliability_warning_occurrences=(
+                ()
+                if snapshot is None
+                else snapshot.reliability_warning_occurrences
+            ),
             sensor_reliability={
                 node_id: node.reliability
                 for node_id, node in sorted(self._map.nodes.items())

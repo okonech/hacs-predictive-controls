@@ -189,7 +189,11 @@ Every sensor profile declares independently:
 6. `traversal_context_window`: how long the node may authorize a graph-neighbor
    arrival;
 7. `track_bootstrap_window`: how long an unsupported episode may pair with a
-   later distinct adjacent episode before the candidate is rejected.
+  later distinct adjacent episode before the candidate is rejected;
+8. `cycle_correlation_window`: how long a completed stable-clear/reassert cycle
+  remains linked to the same physical-node cadence run; and
+9. `sustained_cadence_warning_window`: how long a linked run with at least one
+  completed cycle may continue before a sustained-flapping warning starts.
 
 - **REQ-EVID-001:** A physical positive edge starts at most one episode and
   contributes one local likelihood update. It creates at most one traversal
@@ -258,6 +262,21 @@ Every sensor profile declares independently:
   their pulse lifecycle cannot overwrite a motion or presence sensor episode.
   The episode then uses the shared stable-clear, outward-conditioned decay,
   fallback decay, threshold, and release-dwell lifecycle.
+- **REQ-EVID-012:** A shared `stay_presence` profile links completed cycles across
+  fresh episode generations using only aggregate physical-node `known_on`
+  transitions. An alias callback that does not change that aggregate state,
+  duplicate, stale input, interaction pulse, and nonzero count change cannot
+  mutate cadence. The first positive after no open run is ordinary full evidence.
+  After stable clear, a fresh aggregate positive strictly before the last
+  transition plus `cycle_correlation_window` is a new generation but one
+  `correlated_positive`; at the exact half-open deadline it is ordinary full
+  evidence and starts a new run. Unknown/unavailable, authoritative count zero,
+  and quiet expiry reset bounded cadence state without synthesizing evidence,
+  traversal, support, policy, prediction, learning, or public edges. A sustained
+  cadence warning requires at least one completed linked cycle and begins exactly
+  at the run start plus `sustained_cadence_warning_window` only while the run is
+  still open. One continuously asserted stay sensor is never flapping from age
+  alone and retains the bounded local authority in `REQ-EVID-005`.
 
 ## 6. Per-Zone Belief Model
 
@@ -401,6 +420,16 @@ room-specific inactivity timers.
   positive likelihood or the supported-arrival matrix. It does not stack with
   repeated callbacks, bypass categorical count zero, alter thresholds or dwell,
   or create a permanent occupancy floor; ordinary clear and decay can release it.
+- **REQ-BELIEF-011:** The ordinary first positive in a cadence run applies the
+  configured positive likelihood under `REQ-BELIEF-009`. Each later
+  `correlated_positive` applies the same configured reliability multiplied by
+  $s=\ln(c_e/c_o)/\ln(p_o/p_e)$, derived from the shared stable-clear and positive
+  likelihoods and validated in `(0, 1]`. Its preceding stable-clear update and
+  this scaled positive have zero net sensor likelihood in log space within
+  absolute tolerance `1e-12`; ordinary elapsed-time decay still advances. The
+  effect retains unmodified physical reliability, creates a fresh generation,
+  and records the actual scaled belief contribution. Static node reliability is
+  not reduced to repair repeated completed cycles.
 
 ## 7. Traversal Frontier, Acquisition, and Reacquisition
 
@@ -538,6 +567,20 @@ candidate used as the first half of an adjacent pair is removed atomically.
   never received authorization has no lineage to reopen and remains
   `correlated_flap_ignored`. The reopened token can authorize only a fresh
   distinct compatible target episode under the normal graph rules.
+- **REQ-TRAV-014:** A fresh-generation `correlated_positive` is target evidence,
+  never source authority. A dedicated target-only path may authorize it from
+  distinct trustworthy same-zone, adjacent, boundary, bounded missed-edge, or
+  pending-pair physical context, consume an existing compatible pending source,
+  and record bounded source-token uses. It may not remember the target as
+  pending, issue or reopen a target token, apply outward source context, create,
+  move, rebind, or renew anonymous support from the target, or make the target a
+  later traversal, prediction, or learning source. An isolated correlated target
+  and positive count alone remain unauthorized. A current cadence warning blocks
+  source authority but not independently authorized target confirmation; health
+  degradation remains a block. Ordinary distinct graph evidence remains valid.
+  The path returns the existing `TraversalAuthorization`, which carries source
+  tokens and uses but no target-token field; the engine's separate issuable-token
+  result is always `None` for this path.
 
 ## 8. Authoritative Count
 
@@ -745,6 +788,15 @@ than replacing it with a separate proof system.
   probability-driven. A count-backed stuck-sensor diagnosis changes sensor health
   and allows ordinary decay; it does not directly release the zone. Only an
   unconfirmed prediction lease has the shorter mandatory expiry described above.
+- **REQ-POLICY-012:** Policy distinguishes confirming evidence from refresh-
+  eligible evidence. An independently authorized `correlated_positive` may
+  acquire an inactive zone or confirm an existing mature predicted phase, but it
+  cannot emit `refreshed`; only ordinary trustworthy positive or interaction
+  evidence is refresh eligible. While an already-active stay generation remains
+  cadence-correlated and `asserted` or inside stable-clear confirmation, it
+  cancels pending release dwell and vetoes release without creating a public
+  refresh. Stable clear removes this hold and starts ordinary full release dwell;
+  authoritative count zero remains immediate.
 
 Current shared policy calibration is:
 
@@ -800,6 +852,13 @@ must reflect actual hardware behavior.
 - **REQ-PROFILE-009:** Track-bootstrap retention never delays or vetoes compatible
   same-zone independent, adjacency, boundary, missed-edge, or mature prediction
   authorization. Its expiry only removes the candidate's ability to pair later.
+- **REQ-PROFILE-010:** Cross-generation cycle correlation is enabled only for the
+  shared `stay_presence` profile, with a ten-minute
+  `cycle_correlation_window` and three-hour
+  `sustained_cadence_warning_window`. Every other current profile sets both to
+  zero. A nonzero warning window requires a nonzero correlation window and must
+  be greater than it. Changes are shared calibration governed by
+  `REQ-POLICY-006`, not room-specific incident tuning.
 
 ## 11. Public Contract
 
@@ -832,6 +891,21 @@ activation was authorized by observed evidence or a mature prediction.
 - **REQ-PUBLIC-005:** `pending` is internal and publicly `off`; `predicted` and
   evidence-acquired phases both project through the same `active` entity. There
   is no separate prelight, authorized-on, or active-off control entity.
+- **REQ-PUBLIC-006:** One enabled-by-default diagnostic sensor named
+  `Predictive Controls Reliability Warnings` has unique ID
+  `<entry_id>_predictive_controls_reliability_warnings`. Its native value counts
+  distinct reportable `(node_id, kind)` rows from `REQ-DIAG-006`; bounded
+  attributes expose `window_hours: 24`, active count, deterministic warning rows,
+  and a summary without materializing policy audit. It is not an occupancy
+  control authority. Deployment verifies its actual entity-registry ID before
+  enabling any consumer.
+- **REQ-PUBLIC-007:** The companion Home Assistant warning automation has stable
+  top-level ID `predictive_controls_reliability_warning`, exactly one local
+  `20:00:00` time trigger, `mode: single`, and no model-side detection. It sends
+  `notify.notify` and one persistent notification with stable notification ID
+  only when `states('sensor.predictive_controls_reliability_warnings') | int(0)
+  > 0`; missing, unknown, unavailable, or zero state sends nothing. Its message
+  reports the sensor's deterministic preceding-24-hour summary.
 
 ## 12. Prediction and Learning
 
@@ -893,6 +967,12 @@ specification change.
 - **REQ-PRED-006:** Prediction evaluation and publication use the same zero-wait
   fast path as direct adjacency. Audit, persistence, and route-statistic updates
   cannot block that path.
+- **REQ-PRED-007:** A `correlated_positive`, its dedicated target-only
+  authorization, and any confirmation of a predicted phase are excluded from
+  prediction-source preparation, pending prediction learning, route-statistic
+  commit, and support application. The evidence may confirm a mature lease
+  already created by a distinct confirmed source, but that outcome teaches
+  nothing and creates no source authority.
 
 ## 13. Persistence and Restart
 
@@ -908,7 +988,9 @@ Persist only state needed to reproduce the next decision:
   leases;
 - anonymous occupancy supports and bounded token-to-support mappings needed to
   preserve moving/settled state, endpoint, lineage, and deadlines;
-- bounded route statistics, update sequence, and audit metadata.
+- bounded route statistics, update sequence, and audit metadata; and
+- one bounded latest reliability-warning occurrence per configured physical
+  node and warning reason.
 
 - **REQ-STATE-001:** Restore validates schema, map fingerprint, count, timestamps,
   finite probabilities, episode identity, token expiry, supports, bindings, and
@@ -983,6 +1065,20 @@ Persist only state needed to reproduce the next decision:
   primary write, an accepted v3 payload is copied once to a distinct immutable
   rollback store; downgrade restores that payload or cold-bootstraps inference
   without modifying map, entity, learned, or user configuration.
+- **REQ-STATE-011:** The Home Assistant Store version remains `7` and the current
+  inference schema remains `zone-belief-v4` while cadence run fields and bounded
+  reliability-warning occurrences are additive. The fingerprint includes both
+  new profile windows. For one compatibility release, restore may accept exactly
+  the otherwise-identical pre-feature v4 fingerprint computed by omitting only
+  those profile keys, and only when no new cadence or occurrence fields are
+  mixed into the payload. Missing cadence fields default to no open run, zero
+  cycles, and an uncorrelated generation. An existing current cadence warning
+  migrates to `impossible_cadence` at its exact last-event timestamp; existing
+  health degradation migrates at its exact degraded timestamp. Restore validates
+  UTC ordering, reason/kind mapping, configured node/zone identity, unique sorted
+  occurrence identities, and all half-open warning/quiet deadlines atomically.
+  Invalid or mixed state cold-bootstraps under `REQ-STATE-002` without synthetic
+  evidence or public edges.
 
 ## 14. Explainability and Diagnostics
 
@@ -1024,16 +1120,32 @@ assignment graph.
   support IDs, endpoint zones, and reliability result without claiming occupant
   identities. Runtime status retains legacy ID arrays only as exact one-release
   aliases; v4 persistence contains no legacy front field names.
+- **REQ-DIAG-006:** Current reliability warnings include both cadence flapping
+  and suspected-stuck health state. The model retains at most one latest
+  occurrence per `(node_id, reason)`, with exact UTC first, last, and optional
+  clear timestamps. Recurrence replaces the cleared record for that identity.
+  Status projects an occurrence when it is active or its last-observed time is
+  strictly newer than 24 elapsed hours before the projection frontier; a cleared
+  occurrence exactly 24 hours old is excluded. The ledger is diagnostics only
+  and never evidence, traversal, count, policy, or prediction authority.
+- **REQ-DIAG-007:** Reliability renders every current cadence or health warning,
+  deduplicated by physical node and labeled `Flapping` or `Suspected stuck on`.
+  The Occupancy Graph derives current warnings from the same episode projection,
+  labels affected nodes, and gives red warning color precedence over active,
+  frontier, border, shadow, and confidence-bar colors while preserving solid or
+  dashed shape semantics. Cleared retained history does not keep a zone red.
 
 ## 15. Performance and Determinism
 
 - **REQ-PERF-001:** An adjacent-token, reopened correlated-continuity,
-  adjacent-pair bootstrap, same-zone independent, boundary, bounded missed-edge,
-  local-interaction, or mature prediction authorization produces its in-memory
+  cadence-correlated target, adjacent-pair bootstrap, same-zone independent,
+  boundary, bounded missed-edge, local-interaction, or mature prediction
+  authorization produces its in-memory
   policy decision with p99 latency at or below 5 ms and hard latency below 10 ms
   on the 16-zone reference map at $N=2$. The retained 100-event benchmark must
   exercise and explicitly qualify each named fast path, including 100/100
-  local-interaction acquisitions and public writes. The integration schedules
+  local-interaction acquisitions, cadence-correlated target decisions, and
+  public writes. The integration schedules
   the corresponding `active` publication in the same Home Assistant event-loop
   update in which it receives the accepted evidence. No confirmation timer,
   blocking I/O, persistence, audit materialization, or learning update may
@@ -1112,7 +1224,28 @@ scenarios and adversarial tests demonstrate:
   $N=0$, deduplicates by current episode generation across eviction and restore,
   invalidates authority on either live alias health state, and releases through
   outward-accelerated or fallback ordinary decay; and
-17. all retained production incident regressions pass at the public contract.
+17. the exact retained Shaila Office cadence incident remains below target
+  belief `0.70`, inactive, and free of policy events without changing its
+  timestamps or assertions;
+18. one sustained stay assertion receives full evidence, retains an already-
+  active zone, and never raises flapping at the cadence or trust deadlines;
+19. a linked positive immediately before ten minutes is correlated, one exactly
+  at ten minutes is full, and a warning starts exactly at three hours only after
+  a completed linked cycle, with quiet winning an equal deadline;
+20. an isolated correlated target cannot activate, refresh, create pending,
+  token, support, prediction, or learning state, while distinct valid graph
+  context or an existing mature prediction may confirm genuine target reentry
+  without making it a source;
+21. count zero and unknown/unavailable reset cadence without synthetic effects,
+  nonzero count does not, and active correlated stay release remains vetoed
+  through stable-clear confirmation before ordinary full dwell;
+22. pre-feature v4 restore, exact warning/quiet deadline restart, bounded warning
+  recurrence, active inclusion, and cleared 24-hour cutoff are deterministic and
+  atomic;
+23. the diagnostic sensor, dual Reliability labels, warning-red graph precedence,
+  and single 20:00 automation satisfy `REQ-DIAG-006`, `REQ-DIAG-007`,
+  `REQ-PUBLIC-006`, and `REQ-PUBLIC-007`; and
+24. all retained production incident regressions pass at the public contract.
 
 ## 17. Change Governance
 

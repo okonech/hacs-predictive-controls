@@ -16,7 +16,10 @@ from custom_components.predictive_controls.entity_registry import (
     expected_entity_unique_ids,
 )
 from custom_components.predictive_controls.model import PredictiveMap
-from custom_components.predictive_controls.zone_model.types import PolicyEvent
+from custom_components.predictive_controls.zone_model.types import (
+    PolicyEvent,
+    ReliabilityWarningOccurrence,
+)
 
 
 @dataclass(frozen=True)
@@ -95,6 +98,7 @@ def test_sensor_platform_exports_only_automation_facing_entities(
         "entry123_authoritative_occupant_count",
         "entry123_diagnostic_predicted_next_zone",
         "entry123_diagnostic_entry_path_plausible_zones",
+        "entry123_predictive_controls_reliability_warnings",
         "entry123_living_room_diagnostic_confidence",
         "entry123_kitchen_diagnostic_confidence",
         "entry123_living_room_occupancy_probability",
@@ -193,6 +197,44 @@ def test_diagnostic_sensor_subscribes_to_sampled_updates(
     asyncio.run(entity.async_added_to_hass())
 
     assert signals == [sensor_module.DISPATCH_DIAGNOSTIC_UPDATE]
+
+
+def test_reliability_warning_sensor_is_enabled_diagnostic_with_bounded_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sensor_module, _, _ = load_platform_modules(monkeypatch)
+    at = datetime.now(UTC)
+    occurrence = ReliabilityWarningOccurrence(
+        "office",
+        "office",
+        "flapping",
+        "impossible_cadence",
+        at,
+        at,
+    )
+    runtime = SimpleNamespace(
+        confidence=SimpleNamespace(
+            diagnostics=SimpleNamespace(
+                reliability_warning_occurrences=(occurrence,)
+            )
+        )
+    )
+
+    entity = sensor_module.PredictiveControlsReliabilityWarningsSensor(
+        runtime,
+        "entry123",
+    )
+
+    assert entity.unique_id == (
+        "entry123_predictive_controls_reliability_warnings"
+    )
+    assert entity._attr_entity_registry_enabled_default is True  # noqa: SLF001
+    assert entity._attr_entity_category == "diagnostic"  # noqa: SLF001
+    assert entity.native_value == 1
+    assert entity.extra_state_attributes["window_hours"] == 24
+    assert entity.extra_state_attributes["active_count"] == 1
+    assert entity.extra_state_attributes["warnings"][0]["node_id"] == "office"
+    assert "office" in entity.extra_state_attributes["summary"]
 
 
 def test_authoritative_count_sensor_remains_immediate_and_edge_gated(
@@ -421,6 +463,7 @@ def install_fake_homeassistant(monkeypatch: pytest.MonkeyPatch) -> None:
     core = ModuleType("homeassistant.core")
     helpers = ModuleType("homeassistant.helpers")
     dispatcher = ModuleType("homeassistant.helpers.dispatcher")
+    entity = ModuleType("homeassistant.helpers.entity")
     entity_platform = ModuleType("homeassistant.helpers.entity_platform")
     event = ModuleType("homeassistant.helpers.event")
 
@@ -434,6 +477,11 @@ def install_fake_homeassistant(monkeypatch: pytest.MonkeyPatch) -> None:
     set_module_attr(core, "callback", callback)
     set_module_attr(dispatcher, "async_dispatcher_connect", unsubscribe_factory)
     set_module_attr(dispatcher, "async_dispatcher_send", dispatcher_send)
+    set_module_attr(
+        entity,
+        "EntityCategory",
+        SimpleNamespace(DIAGNOSTIC="diagnostic"),
+    )
     set_module_attr(
         entity_platform,
         "AddEntitiesCallback",
@@ -451,6 +499,7 @@ def install_fake_homeassistant(monkeypatch: pytest.MonkeyPatch) -> None:
     set_module_attr(components, "binary_sensor", binary_sensor)
     set_module_attr(components, "event", event_component)
     set_module_attr(helpers, "dispatcher", dispatcher)
+    set_module_attr(helpers, "entity", entity)
     set_module_attr(helpers, "entity_platform", entity_platform)
     set_module_attr(helpers, "event", event)
 
@@ -464,6 +513,7 @@ def install_fake_homeassistant(monkeypatch: pytest.MonkeyPatch) -> None:
         core,
         helpers,
         dispatcher,
+        entity,
         entity_platform,
         event,
     ):

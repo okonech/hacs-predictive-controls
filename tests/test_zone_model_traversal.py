@@ -196,6 +196,95 @@ def test_one_open_transition_authorizes_distinct_targets_once_each() -> None:
     assert len(frontier.tokens) == 1
 
 
+def test_isolated_correlated_target_is_rejected_without_pending_authority() -> None:
+    frontier = TraversalFrontier(graph(), NODES)
+    target = episode(
+        "isolated_presence",
+        "isolated",
+        "stay_presence",
+        NOW,
+    )
+    target = replace(
+        target,
+        cadence_run_started_at=NOW - timedelta(minutes=1),
+        cadence_last_transition_at=NOW,
+        cadence_cycle_count=2,
+        cadence_correlated=True,
+    )
+
+    authorization = frontier.authorize_correlated_target(target, NOW)
+
+    assert not authorization.authorized
+    assert authorization.reason == "untracked_rejected"
+    assert frontier.pending_candidates == ()
+    assert frontier.tokens == ()
+    assert frontier.uses == ()
+
+
+def test_correlated_target_requires_current_trustworthy_episode() -> None:
+    frontier = TraversalFrontier(graph(), NODES)
+    target = episode(
+        "isolated_presence",
+        "isolated",
+        "stay_presence",
+        NOW,
+    )
+    correlated = replace(
+        target,
+        cadence_run_started_at=NOW - timedelta(minutes=1),
+        cadence_last_transition_at=NOW,
+        cadence_cycle_count=1,
+        cadence_correlated=True,
+    )
+
+    with pytest.raises(ValueError, match="current episode"):
+        frontier.authorize_correlated_target(
+            replace(correlated, cadence_correlated=False),
+            NOW,
+        )
+    untrusted = replace(
+        correlated,
+        traversal_valid_until=NOW,
+    )
+    authorization = frontier.authorize_correlated_target(untrusted, NOW)
+    assert not authorization.authorized
+    assert authorization.reason == "untracked_rejected"
+
+
+def test_adjacent_source_authorizes_correlated_target_without_target_authority(
+) -> None:
+    frontier = TraversalFrontier(graph(), NODES)
+    hall = episode("hall", "hall", "transition_fast", NOW)
+    source = issue(frontier, hall)
+    frontier.sync(hall, NOW)
+    target_at = NOW + timedelta(seconds=2)
+    target = episode(
+        "room_a_presence",
+        "room_a",
+        "stay_presence",
+        target_at,
+    )
+    target = replace(
+        target,
+        cadence_run_started_at=NOW - timedelta(minutes=1),
+        cadence_last_transition_at=target_at,
+        cadence_cycle_count=2,
+        cadence_correlated=True,
+        cadence_warning=True,
+        cadence_warning_reason="sustained_flapping",
+    )
+
+    authorization = frontier.authorize_correlated_target(target, target_at)
+
+    assert authorization.authorized
+    assert authorization.reason == "adjacent_authorized"
+    assert authorization.source_tokens == (source,)
+    assert len(authorization.new_uses) == 1
+    assert frontier.pending_candidates == ()
+    assert frontier.tokens == (source,)
+    assert all(token.node_id != target.node_id for token in frontier.tokens)
+
+
 def test_recent_same_zone_missed_edge_and_disconnected_authorization() -> None:
     frontier = TraversalFrontier(graph(), NODES)
     hall = episode("hall", "hall", "transition_fast", NOW)
@@ -350,8 +439,16 @@ def test_correlated_reassertion_without_authorized_lineage_remains_ignored() -> 
     assert frontier.tokens == ()
     assert frontier.retained_tokens == ()
     assert not frontier.reopen_authorized_continuity(
-        replace(hall, cadence_warning=True),
-        replace(flap, kind="impossible_cadence"),
+        replace(
+            hall,
+            cadence_warning=True,
+            cadence_warning_reason="impossible_cadence",
+        ),
+        replace(
+            flap,
+            kind="impossible_cadence",
+            warning_reason="impossible_cadence",
+        ),
     )
 
 

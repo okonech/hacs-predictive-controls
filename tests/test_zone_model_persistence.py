@@ -15,6 +15,7 @@ from custom_components.predictive_controls.zone_model.persistence import (
     legacy_target_map_fingerprint,
     migrate_schema6_seed,
     migrate_v2_seed,
+    pre_feature_target_map_fingerprint,
     restore_target_state,
     serialize_target_state,
     target_map_fingerprint,
@@ -88,6 +89,30 @@ def as_legacy_v3(payload: dict[str, object]) -> dict[str, object]:
     return legacy
 
 
+def as_pre_feature_v4(
+    predictive_map: PredictiveMap,
+    payload: dict[str, object],
+) -> dict[str, object]:
+    legacy = deepcopy(payload)
+    legacy["map_fingerprint"] = pre_feature_target_map_fingerprint(predictive_map)
+    snapshot = legacy["snapshot"]
+    assert isinstance(snapshot, dict)
+    snapshot.pop("reliability_warning_occurrences")
+    episodes = snapshot["episode_states"]
+    assert isinstance(episodes, list)
+    for episode in episodes:
+        assert isinstance(episode, dict)
+        for key in (
+            "cadence_run_started_at",
+            "cadence_last_transition_at",
+            "cadence_cycle_count",
+            "cadence_correlated",
+            "cadence_warning_reason",
+        ):
+            episode.pop(key)
+    return legacy
+
+
 def predicted_payload() -> tuple[PredictiveMap, dict[str, object]]:
     predictive_map = prediction_map()
     engine = ZoneModelEngine(predictive_map, 1, PREDICTION_NOW)
@@ -140,6 +165,252 @@ def test_target_state_round_trips_deterministically() -> None:
     assert restored.snapshot == engine.snapshot
     assert restored.audit_rows == engine.audit_rows
     assert serialize_target_state(target_map(), restored) == payload
+
+
+def test_reliability_warning_occurrence_round_trips_and_clears_in_place() -> None:
+    predictive_map = target_map()
+    engine = ZoneModelEngine(predictive_map, 1, NOW)
+    engine.observe(SensorInput("binary_sensor.room", "on", NOW))
+    engine.observe(
+        SensorInput("binary_sensor.room", "off", NOW + timedelta(seconds=10))
+    )
+    warned = engine.observe(
+        SensorInput("binary_sensor.room", "on", NOW + timedelta(seconds=12))
+    )
+
+    assert len(warned.snapshot.reliability_warning_occurrences) == 1
+    occurrence = warned.snapshot.reliability_warning_occurrences[0]
+    assert occurrence.node_id == "room"
+    assert occurrence.kind == "flapping"
+    assert occurrence.reason == "impossible_cadence"
+    assert occurrence.first_observed_at == NOW + timedelta(seconds=12)
+    assert occurrence.last_observed_at == NOW + timedelta(seconds=12)
+    assert occurrence.cleared_at is None
+
+    payload = serialize_target_state(predictive_map, engine)
+    restored = restore_target_state(
+        predictive_map,
+        payload,
+        NOW + timedelta(seconds=12),
+    )
+    assert restored.snapshot == engine.snapshot
+
+    cleared = restored.observe(
+        SensorInput(
+            "binary_sensor.room",
+            "unavailable",
+            NOW + timedelta(seconds=13),
+        )
+    )
+    assert len(cleared.snapshot.reliability_warning_occurrences) == 1
+    occurrence = cleared.snapshot.reliability_warning_occurrences[0]
+    assert occurrence.first_observed_at == NOW + timedelta(seconds=12)
+    assert occurrence.last_observed_at == NOW + timedelta(seconds=13)
+    assert occurrence.cleared_at == NOW + timedelta(seconds=13)
+
+
+def test_pre_feature_v4_migrates_current_warning_from_exact_timestamp() -> None:
+    predictive_map = target_map()
+    engine = ZoneModelEngine(predictive_map, 1, NOW)
+    engine.observe(SensorInput("binary_sensor.room", "on", NOW))
+    engine.observe(
+        SensorInput("binary_sensor.room", "off", NOW + timedelta(seconds=10))
+    )
+    engine.observe(
+        SensorInput("binary_sensor.room", "on", NOW + timedelta(seconds=12))
+    )
+    legacy = as_pre_feature_v4(
+        predictive_map,
+        serialize_target_state(predictive_map, engine),
+    )
+
+    restored = restore_target_state(
+        predictive_map,
+        legacy,
+        NOW + timedelta(seconds=12),
+    )
+
+    room = next(
+        state for state in restored.snapshot.episode_states if state.node_id == "room"
+    )
+    occurrence = restored.snapshot.reliability_warning_occurrences[0]
+    assert room.cadence_warning_reason == "impossible_cadence"
+    assert occurrence.reason == "impossible_cadence"
+    assert occurrence.first_observed_at == room.last_event_at
+    assert occurrence.last_observed_at == room.last_event_at
+    assert occurrence.cleared_at is None
+    assert (
+        serialize_target_state(predictive_map, restored)["map_fingerprint"]
+        == target_map_fingerprint(predictive_map)
+    )
+
+
+def test_pre_feature_v4_migrates_current_health_warning() -> None:
+    predictive_map = target_map()
+    engine = ZoneModelEngine(predictive_map, 1, NOW)
+    result = engine.observe(SensorInput("binary_sensor.hall", "on", NOW))
+    hall = next(
+        state for state in result.snapshot.episode_states if state.node_id == "hall"
+    )
+    assert hall.assertion_trust_until is not None
+    engine.advance(hall.assertion_trust_until)
+    legacy = as_pre_feature_v4(
+        predictive_map,
+        serialize_target_state(predictive_map, engine),
+    )
+
+    restored = restore_target_state(
+        predictive_map,
+        legacy,
+        hall.assertion_trust_until,
+    )
+
+    occurrence = restored.snapshot.reliability_warning_occurrences[0]
+    assert occurrence.kind == "suspected_stuck"
+    assert occurrence.reason == "assertion_timeout"
+    assert occurrence.first_observed_at == hall.assertion_trust_until
+
+
+def test_pre_feature_v4_rejects_mixed_episode_shape() -> None:
+    predictive_map = target_map()
+    legacy = as_pre_feature_v4(
+        predictive_map,
+        serialize_target_state(predictive_map, occupied_engine()),
+    )
+    snapshot = legacy["snapshot"]
+    assert isinstance(snapshot, dict)
+    episodes = snapshot["episode_states"]
+    assert isinstance(episodes, list)
+    first = episodes[0]
+    assert isinstance(first, dict)
+    first["cadence_cycle_count"] = 0
+
+    with pytest.raises(ValueError, match="map fingerprint"):
+        restore_target_state(predictive_map, legacy, NOW + timedelta(seconds=2))
+
+
+def test_pre_feature_v4_rejects_current_snapshot_shape() -> None:
+    predictive_map = target_map()
+    payload = serialize_target_state(predictive_map, occupied_engine())
+    payload["map_fingerprint"] = pre_feature_target_map_fingerprint(predictive_map)
+
+    with pytest.raises(ValueError, match="map fingerprint"):
+        restore_target_state(predictive_map, payload, NOW + timedelta(seconds=2))
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        ("cadence_timestamp", "cadence warning has no source timestamp"),
+        ("health_timestamp", "health warning has no source timestamp"),
+    ),
+)
+def test_pre_feature_v4_rejects_warning_without_migration_timestamp(
+    mutation: str,
+    message: str,
+) -> None:
+    predictive_map = target_map()
+    legacy = as_pre_feature_v4(
+        predictive_map,
+        serialize_target_state(predictive_map, occupied_engine()),
+    )
+    snapshot = legacy["snapshot"]
+    assert isinstance(snapshot, dict)
+    episodes = snapshot["episode_states"]
+    assert isinstance(episodes, list)
+    room = next(
+        item
+        for item in episodes
+        if isinstance(item, dict) and item.get("node_id") == "room"
+    )
+    if mutation == "cadence_timestamp":
+        room["cadence_warning"] = True
+        room["last_event_at"] = None
+    else:
+        room["health_warning"] = True
+        room["degradation_reason"] = "count_conflict"
+        room["degraded_at"] = None
+
+    with pytest.raises(ValueError, match=message):
+        restore_target_state(predictive_map, legacy, NOW + timedelta(seconds=2))
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        ("unknown_node", "occurrence is incompatible"),
+        ("wrong_zone", "occurrence is incompatible"),
+        ("future", "occurrence is incompatible"),
+        ("stale", "occurrence is stale"),
+        ("missing", "occurrence is missing"),
+    ),
+)
+def test_restore_rejects_inconsistent_reliability_warning_ledger(
+    mutation: str,
+    message: str,
+) -> None:
+    predictive_map = target_map()
+    engine = ZoneModelEngine(predictive_map, 1, NOW)
+    engine.observe(SensorInput("binary_sensor.room", "on", NOW))
+    engine.observe(
+        SensorInput("binary_sensor.room", "off", NOW + timedelta(seconds=10))
+    )
+    engine.observe(
+        SensorInput("binary_sensor.room", "on", NOW + timedelta(seconds=12))
+    )
+    payload = serialize_target_state(predictive_map, engine)
+    snapshot = payload["snapshot"]
+    assert isinstance(snapshot, dict)
+    occurrences = snapshot["reliability_warning_occurrences"]
+    episodes = snapshot["episode_states"]
+    assert isinstance(occurrences, list) and isinstance(occurrences[0], dict)
+    assert isinstance(episodes, list)
+    occurrence = occurrences[0]
+    if mutation == "unknown_node":
+        occurrence["node_id"] = "missing"
+    elif mutation == "wrong_zone":
+        occurrence["zone"] = "hall"
+    elif mutation == "future":
+        occurrence["last_observed_at"] = (NOW + timedelta(seconds=13)).isoformat()
+    elif mutation == "stale":
+        room = next(
+            item
+            for item in episodes
+            if isinstance(item, dict) and item.get("node_id") == "room"
+        )
+        room["cadence_warning"] = False
+        room["cadence_warning_reason"] = None
+    else:
+        occurrences.clear()
+
+    with pytest.raises(ValueError, match=message):
+        restore_target_state(predictive_map, payload, NOW + timedelta(seconds=12))
+
+
+def test_restore_accepts_cleared_reliability_warning_history() -> None:
+    predictive_map = target_map()
+    engine = ZoneModelEngine(predictive_map, 1, NOW)
+    engine.observe(SensorInput("binary_sensor.room", "on", NOW))
+    engine.observe(
+        SensorInput("binary_sensor.room", "off", NOW + timedelta(seconds=10))
+    )
+    engine.observe(
+        SensorInput("binary_sensor.room", "on", NOW + timedelta(seconds=12))
+    )
+    engine.observe(
+        SensorInput("binary_sensor.room", "unavailable", NOW + timedelta(seconds=13))
+    )
+    payload = serialize_target_state(predictive_map, engine)
+
+    restored = restore_target_state(
+        predictive_map,
+        payload,
+        NOW + timedelta(seconds=13),
+    )
+
+    assert restored.snapshot.reliability_warning_occurrences[0].cleared_at == (
+        NOW + timedelta(seconds=13)
+    )
 
 
 def test_interaction_episode_round_trips_and_releases_on_the_same_frontier() -> None:
