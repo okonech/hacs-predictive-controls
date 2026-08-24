@@ -1,6 +1,6 @@
 # Sustained Sensor Cadence Reliability
 
-**Status:** Implementation and validation complete; deployment verification pending
+**Status:** Implementation, validation, and deployment verification complete
 
 **Affected layers:** shared sensor profiles, physical episodes, zone belief,
 traversal and acquisition, count support, policy, prediction learning,
@@ -38,9 +38,10 @@ The public and operational outcomes are:
    as genuine reentry without making that target a traversal or support source;
 5. current flapping and suspected-stuck nodes appear in Reliability and their
    zones are highlighted red on the Occupancy Graph; and
-6. at 20:00 local time, Home Assistant sends at most one daily summary when one
-   or more model-owned reliability warnings were current or cleared during the
-   preceding 24 hours.
+6. at 20:00 local time, Home Assistant sends at most one daily summary only when
+   one or more model-owned reliability warnings are current; cleared warnings
+   remain available in bounded 24-hour history without causing a current-fault
+   notification.
 
 ## 2. Retained Evidence And Verified Current State
 
@@ -559,8 +560,8 @@ Add one enabled-by-default sensor:
 - native value: count of distinct reportable `(node_id, kind)` pairs at the
   diagnostic publication frontier;
 - icon: `mdi:alert-circle-outline`; and
-- attributes: `window_hours: 24`, `active_count`, `warnings`, and deterministic
-  `summary`.
+- attributes: `window_hours: 24`, `active_count`, `warnings`, deterministic
+   24-hour `summary`, and deterministic `active_summary`.
 
 Implement it as a `sensor` platform entity with diagnostic entity category,
 `_attr_entity_registry_enabled_default = True`, and stable unique ID. The name
@@ -648,19 +649,18 @@ node/kind descriptor for that zone.
 Add one individual automation file under `home-assistant/automations/` with a
 stable top-level `id: predictive_controls_reliability_warning`. It has exactly
 one time trigger at `20:00:00`, so it runs at most once per local calendar day.
-It proceeds only when
-`sensor.predictive_controls_reliability_warnings` is numeric and greater than
-zero.
+It proceeds only when the sensor's `active_count` attribute is greater than zero.
 
-The action sends both `notify.notify` and `notify.persistent_notification` with a
+The action sends `notify.notify` and calls `persistent_notification.create` with
 stable `notification_id: predictive_controls_reliability_warning`. The message
-uses the sensor's deterministic summary and states that warnings were active or
-detected in the prior 24 hours. The
+uses the sensor's deterministic `active_summary` and states that the listed
+warnings are current. The
 automation does not inspect raw motion entities, calculate cadence, retain its
 own timestamps, or mutate Predictive Controls. An unavailable/missing diagnostic
 sensor produces no notification rather than a false all-clear. The condition is
-a defensive template using `states(...) | int(0) > 0`, so missing, `unknown`,
-and `unavailable` values are ordinary false conditions. The automation uses
+a defensive template using `state_attr(...) | int(0) > 0`, so missing, null,
+`unknown`, and `unavailable` values are ordinary false conditions. Cleared-only
+history never sends. The automation uses
 `mode: single` and has no state, event, startup, or second time trigger. The time
 trigger uses Home Assistant's configured system timezone.
 
@@ -694,10 +694,13 @@ the retained corpus.
 Rejected. It would duplicate model semantics, lose restart determinism, and let
 consumers disagree about health.
 
-### Use only current warning booleans for the daily report
+### Read raw current episode booleans in the automation
 
-Rejected. A warning that clears before 20:00 would disappear despite occurring
-inside the requested 24-hour window.
+Rejected. The model-owned entity already exposes a deterministic current
+projection through `active_count` and `active_summary`; duplicating episode
+interpretation in Home Assistant would couple the consumer to model internals.
+The bounded historical projection remains useful for inspection but does not
+authorize a current-fault notification.
 
 ## 14. Implementation Phases
 
@@ -809,9 +812,10 @@ The implementation is acceptable only when tests prove:
 18. Reliability shows cadence and health warning labels without duplicates;
 19. warning zones render red, including active/frontier zones, and red styling
     disappears when current warning clears while retained daily history remains;
-20. the 20:00 automation does nothing for zero/unavailable warnings, sends both
-   notification actions once for nonempty history, uses the stable persistent
-   notification ID, and has no second trigger;
+20. the 20:00 automation does nothing for missing/unavailable/zero active count
+   or cleared-only history, sends both notification actions once under normal
+   successful service execution for current warnings, uses `active_summary` and
+   the stable persistent notification ID, and has no second trigger;
 21. touched fast paths stay within `REQ-PERF-001`, routine publication remains
     bounded, and the 100-event benchmark passes; and
 22. every prior retained incident and full repository gate remains green.
@@ -904,11 +908,11 @@ Expected homelab file:
 
 ## 19. Tracking
 
-| Phase                               | Status                               | Completed evidence                                                                                                                                                                                                                                                                                                                                                                 | Next executable step                                                                                                                        |
-| ----------------------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1. Authority and shared types       | Complete                             | Authority amended and independently reviewed; 28 focused profile/type tests and touched-file Ruff pass.                                                                                                                                                                                                                                                                            | None.                                                                                                                                       |
-| 2. Episode and belief semantics     | Complete                             | Bounded cadence, correlated likelihood, warning ordering, stable-clear recovery, count-zero reset, and retention hold implemented; immutable Shaila regression and 136 focused tests pass; touched-file Ruff and editor diagnostics pass.                                                                                                                                          | None.                                                                                                                                       |
-| 3. Authority exclusions and reentry | Complete                             | Dedicated target-only authorization, no-source exclusions, no-refresh acquisition, mature-prediction confirmation, and ordinary support transfer validated by 129 focused plus 67 adjacent tests; touched-file Ruff and editor diagnostics pass.                                                                                                                                   | None.                                                                                                                                       |
-| 4. Persistence and diagnostics      | Complete                             | Bounded occurrence mutation, exact pre-feature v4 migration, status projection, and enabled diagnostic sensor validated by 163 focused tests; touched-file Ruff and editor diagnostics pass.                                                                                                                                                                                       | None.                                                                                                                                       |
-| 5. Frontend and automation          | Complete                             | Reliability renders explicit flapping/stuck rows; graph warning red overrides active/confirmed styling; 30 frontend tests pass and the versioned asset was rebuilt. Daily automation parses and its one-trigger/two-notification contract passes structured validation.                                                                                                            | Verify `sensor.predictive_controls_reliability_warnings` after deploying the integration; the pre-deployment read-only lookup returned 404. |
-| 6. Full validation and rollout      | Validation complete; rollout pending | 641 Python tests pass at 100% statement/branch coverage; repository Ruff and mypy pass; 30 frontend tests and generated-asset build pass; retained 100-sample benchmark passes every gate including cadence-correlated target p99/hard limits; automation parser/contract and both diff checks pass; final independent conformance review found no code or specification findings. | Deploy the integration, verify the actual warning sensor entity ID and numeric state, then enable the 20:00 automation.                     |
+| Phase                               | Status   | Completed evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Next executable step |
+| ----------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
+| 1. Authority and shared types       | Complete | Authority amended and independently reviewed; 28 focused profile/type tests and touched-file Ruff pass.                                                                                                                                                                                                                                                                                                                                                                      | None.                |
+| 2. Episode and belief semantics     | Complete | Bounded cadence, correlated likelihood, warning ordering, stable-clear recovery, count-zero reset, and retention hold implemented; immutable Shaila regression and 136 focused tests pass; touched-file Ruff and editor diagnostics pass.                                                                                                                                                                                                                                    | None.                |
+| 3. Authority exclusions and reentry | Complete | Dedicated target-only authorization, no-source exclusions, no-refresh acquisition, mature-prediction confirmation, and ordinary support transfer validated by 129 focused plus 67 adjacent tests; touched-file Ruff and editor diagnostics pass.                                                                                                                                                                                                                             | None.                |
+| 4. Persistence and diagnostics      | Complete | Bounded occurrence mutation, exact pre-feature v4 migration, status projection, and enabled diagnostic sensor validated by 163 focused tests; touched-file Ruff and editor diagnostics pass.                                                                                                                                                                                                                                                                                 | None.                |
+| 5. Frontend and automation          | Complete | Reliability renders explicit flapping/stuck rows; graph warning red overrides active/confirmed styling; 30 frontend tests pass and the versioned asset was rebuilt. Daily automation parses and its active-only one-trigger/two-notification contract passes structured validation. Live registry verification resolved `sensor.predictive_controls_reliability_warnings` and enabled stable-ID automation `automation.predictive_controls_reliability_warning_2`.           | None.                |
+| 6. Full validation and rollout      | Complete | 657 Python tests pass at 100% statement/branch coverage; repository Ruff and mypy pass; 30 frontend tests and generated-asset build pass; retained 100-sample benchmark passes every gate, with worst reported fast-path p99 approximately 2.99 ms below the 5 ms limit; automation parser/contract and both diff checks pass; final independent conformance review found no code or specification findings. Live status verified separate current and retained projections. | None.                |
