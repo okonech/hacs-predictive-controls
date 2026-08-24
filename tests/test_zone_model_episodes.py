@@ -111,7 +111,11 @@ def test_flap_reassertion_reuses_episode_but_later_positive_starts_another() -> 
     assert [effect.kind for effect in flap.effects] == ["impossible_cadence"]
     assert later.disposition == "accepted_positive"
     assert later.state.generation == 2
-    assert [effect.kind for effect in later.effects] == ["positive"]
+    assert not later.state.cadence_warning
+    assert [effect.kind for effect in later.effects] == [
+        "cadence_warning_cleared",
+        "positive",
+    ]
 
 
 def test_reassertion_after_hardware_hold_but_inside_burst_is_not_impossible() -> None:

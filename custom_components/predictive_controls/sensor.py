@@ -161,11 +161,13 @@ class PredictiveControlsReliabilityWarningsSensor(RuntimeSensor):
     @property
     def extra_state_attributes(self) -> dict[str, object]:
         rows = self._rows()
+        active_rows = tuple(row for row in rows if bool(row["active"]))
         return {
             "window_hours": 24,
-            "active_count": sum(bool(row["active"]) for row in rows),
+            "active_count": len(active_rows),
             "warnings": list(rows),
             "summary": reliability_warning_summary(rows),
+            "active_summary": reliability_warning_summary(active_rows),
         }
 
 

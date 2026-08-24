@@ -51,6 +51,11 @@ Match established repository conventions. Unless clearly inapplicable, include:
 11. implementation surfaces and expected files/modules; and
 12. a tracking table with every phase initially `Not started`, completed evidence empty, and one concrete next executable step per phase.
 
+For an incident-derived spec, the first executable phase must be `Regression
+proof`, before all production implementation phases. Its row defines the exact
+test command, expected failure signature, actual pre-fix result, post-fix result,
+and evidence provenance. The pre-fix and post-fix results remain empty until run.
+
 Requirements must be falsifiable. Prefer exact boundaries, state transitions, identities, limits, and executable gates over vague claims. Do not present unmeasured improvements as facts. Define baseline, comparison method, fixture identity, sample count, environment, and regression budget.
 
 ## 4. Adversarial Hardening Loop

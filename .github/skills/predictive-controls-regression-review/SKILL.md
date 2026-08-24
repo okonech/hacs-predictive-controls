@@ -1,6 +1,6 @@
 ---
 name: predictive-controls-regression-review
-description: "Use for a reported Predictive Controls production incident, false activation, false release, stale active state, missed activation, wrong probability, traversal defect, or incident-derived fix. Uses an exact public regression and a focused fix loop; independent review is reserved for unclear causes and specification/public-contract changes."
+description: "Use for any reported Predictive Controls bug, incorrect behavior, production incident, false activation, false release, stale active state, missed activation, wrong probability, traversal defect, warning defect, or incident-derived fix. Requires live evidence as available, root-cause diagnosis, a durable implementation spec hardened by exactly three adversarial passes, exact regression proof, tracked implementation, full validation, and final SPECIFICATION.md reconciliation."
 argument-hint: "Describe the incident, wrong public behavior, or proposed model/profile change"
 ---
 
@@ -10,31 +10,60 @@ argument-hint: "Describe the incident, wrong public behavior, or proposed model/
 
 Read `SPECIFICATION.md`. It is the only product and model authority.
 
-## Incident Fix Loop
+## Mandatory Incident Workflow
 
-For every reported production failure, use this loop.
+For every reported production failure, complete these gates in order. Do not edit
+production behavior before Gates 1-5 are complete.
 
-1. **Capture the failure as a public test.** Use retained production event times,
-   material order, physical map, sensor states/settings, count, pre/post zone
-   belief, traversal context, policy state, and expected public edge. Never invent
-   missing timestamps.
-2. **Prove the regression.** Run only the new test against unchanged controlling
-   behavior. It must fail on `active`, `prelight`, or `refresh`, or on target zone
-   belief when that is the reported contract. If it passes or fails for another
-   reason, repair the reproduction. Freeze factual inputs and public expectations.
-3. **Locate the controlling layer.** Form one falsifiable local cause from the
-   failing test and nearest owning code. Use one read-only subagent only if the
-   cause remains unclear after local inspection.
-4. **Implement the smallest generic fix.** State the governing `REQ-*` IDs and
-   avoid room-, entity-, person-, or incident-specific logic. A conflict with
-   `SPECIFICATION.md` requires user agreement before implementation.
-5. **Validate quickly.** Run the exact regression with `--no-cov`, plus the
-   nearest inverse or boundary tests that materially distinguish the fix. Lint
-   changed files before broad validation.
-6. **Escalate only when necessary.** Independent proposal review is required for
-   a specification/public-contract change or unresolved calibration choice.
-   Run exhaustive adversarial and repository gates before handing off a completed
-   model change.
+1. **Establish authority and evidence.** Read `SPECIFICATION.md`, the owning code,
+   nearby tests, and relevant retained incidents. Fetch current runtime data when
+   it can distinguish causes. Home Assistant access is read-only through approved
+   scripts in the homelab repository. Record provenance and never invent missing
+   timestamps or state.
+2. **Diagnose the root cause.** Locate the lowest controlling layer. State one
+   falsifiable diagnosis, its supporting evidence, contributing conditions, and
+   the cheapest check that could disprove it. Do not confuse deployment drift or
+   downstream automation behavior with a model cause.
+3. **Create a durable implementation specification.** Write or update
+   `docs/spec/<incident-or-change-name>.md`. Use
+   `.github/skills/spec-writer/SKILL.md`. Include the evidence record, diagnosis,
+   governing `REQ-*` IDs, objective, non-goals, invariants, exact event ordering,
+   alternatives, compatibility, persistence, rollout/rollback, implementation
+   phases, regression plan, acceptance gates, and a phase tracking table. The
+   first executable phase is `Regression proof`; it precedes all implementation
+   phases and records the exact test command, expected failure signature, actual
+   pre-fix result, post-fix result, and evidence provenance.
+4. **Harden the specification.** Complete exactly three full critique-and-rewrite
+   passes required by the spec-writer skill: factual/architectural,
+   failure/operations, and implementation/proof. Resolve grounded criticism in
+   the artifact itself. A public-contract or calibration change receives an
+   independent read-only review before implementation.
+5. **Capture and prove the failure.** Add the smallest public regression using
+   retained production event times, material order, physical map, sensor
+   states/settings, count, belief, traversal, policy state, and expected public
+   edge or diagnostic contract. Run it against unchanged controlling behavior;
+   it must fail for the diagnosed reason. Freeze its factual inputs and public
+   expectations after proof, and record the command and observed failure
+   signature in the implementation spec before production edits.
+6. **Implement the hardened specification.** Use
+   `.github/skills/spec-implementation-tracking/SKILL.md`; keep exactly one phase
+   in progress and update validated evidence and the next executable step. Make
+   the smallest generic fix and avoid room-, entity-, person-, or
+   incident-specific logic.
+7. **Validate from narrow to broad.** Immediately rerun the exact regression
+   after the first production edit, then the nearest inverse and boundary tests,
+   touched-file lint, complete retained incident corpus, full coverage, Ruff,
+   mypy, frontend, applicable benchmark, and diff/reference gates. Record each
+   completed gate in the implementation spec.
+8. **Reconcile authority and hand off.** Update the appropriate normative
+   requirements and Section 19 implementation-conformance snapshot in
+   `SPECIFICATION.md`, plus directly conflicting current-state documentation.
+   Mark the implementation spec complete only after its acceptance gates pass.
+   Record deployment or operational cleanup separately from code correctness.
+
+If the hardened design conflicts with `SPECIFICATION.md`, obtain explicit user
+agreement and amend the conflicting authority before Gate 6. Gate 8 still
+performs final reconciliation against the implementation and validated evidence.
 
 ## Evidence Record
 
@@ -143,4 +172,7 @@ Low raw sensor confidence or a timer alone is not an equivalent release model.
 Preserve the exact regression and run the nearest discriminating inverse or
 boundary cases while editing. Before handoff, run the complete retained incident
 corpus, adversarial matrix, full Python coverage, Ruff, mypy, frontend,
-applicable 100-event benchmarks, and diff/reference checks.
+applicable 100-event benchmarks, and diff/reference checks. The final report must
+name the evidence provenance, diagnosed cause, hardened spec path, red/green
+regression, validation results, canonical specification update, and remaining
+deployment work.

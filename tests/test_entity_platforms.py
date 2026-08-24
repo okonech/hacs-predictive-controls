@@ -212,10 +212,19 @@ def test_reliability_warning_sensor_is_enabled_diagnostic_with_bounded_rows(
         at,
         at,
     )
+    cleared_occurrence = ReliabilityWarningOccurrence(
+        "hall",
+        "hall",
+        "suspected_stuck",
+        "assertion_timeout",
+        at,
+        at,
+        at,
+    )
     runtime = SimpleNamespace(
         confidence=SimpleNamespace(
             diagnostics=SimpleNamespace(
-                reliability_warning_occurrences=(occurrence,)
+                reliability_warning_occurrences=(occurrence, cleared_occurrence)
             )
         )
     )
@@ -230,11 +239,17 @@ def test_reliability_warning_sensor_is_enabled_diagnostic_with_bounded_rows(
     )
     assert entity._attr_entity_registry_enabled_default is True  # noqa: SLF001
     assert entity._attr_entity_category == "diagnostic"  # noqa: SLF001
-    assert entity.native_value == 1
+    assert entity.native_value == 2
     assert entity.extra_state_attributes["window_hours"] == 24
     assert entity.extra_state_attributes["active_count"] == 1
-    assert entity.extra_state_attributes["warnings"][0]["node_id"] == "office"
+    assert [
+        row["node_id"] for row in entity.extra_state_attributes["warnings"]
+    ] == ["hall", "office"]
+    assert "hall" in entity.extra_state_attributes["summary"]
     assert "office" in entity.extra_state_attributes["summary"]
+    assert entity.extra_state_attributes["active_summary"] == (
+        "office: flapping [impossible_cadence] (active)"
+    )
 
 
 def test_authoritative_count_sensor_remains_immediate_and_edge_gated(

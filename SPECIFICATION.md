@@ -261,11 +261,14 @@ Every sensor profile declares independently:
   corroborate that node or bootstrap a track, even across multiple episodes.
   Clear/reassert cycles faster than the declared hardware can reliably re-arm are
   one correlated episode, add no likelihood or traversal authority, and emit a
-  sensor-health cadence warning. Later support from a distinct adjacent physical
-  node remains valid and is not delayed by the warning. A correlated reassertion
-  after hardware re-arm is not impossible cadence: it still adds no evidence,
-  but may preserve bounded continuity of an already-authorized path under
-  `REQ-TRAV-013`.
+  sensor-health cadence warning. For a profile without cross-generation cadence,
+  stable clear closes that current warning at its exact frontier; a fresh
+  independent episode that starts after the burst and hardware-hold windows but
+  before stable clear closes it at the positive timestamp. Both retain bounded
+  history. Later support from a distinct adjacent physical node remains valid
+  and is not delayed by the warning. A correlated reassertion after hardware
+  re-arm is not impossible cadence: it still adds no evidence, but may preserve
+  bounded continuity of an already-authorized path under `REQ-TRAV-013`.
 - **REQ-EVID-011:** A mapped local human-interaction event is a discrete physical
   pulse, never light, switch, fan, or other actuator output state. Each distinct
   live event-entity occurrence with a valid frontier under `REQ-EVID-006` starts
@@ -915,16 +918,17 @@ activation was authorized by observed evidence or a mature prediction.
   `<entry_id>_predictive_controls_reliability_warnings`. Its native value counts
   distinct reportable `(node_id, kind)` rows from `REQ-DIAG-006`; bounded
   attributes expose `window_hours: 24`, active count, deterministic warning rows,
-  and a summary without materializing policy audit. It is not an occupancy
-  control authority. Deployment verifies its actual entity-registry ID before
-  enabling any consumer.
+  a complete 24-hour summary, and an active-only summary without materializing
+  policy audit. It is not an occupancy control authority. Deployment verifies
+  its actual entity-registry ID before enabling any consumer.
 - **REQ-PUBLIC-007:** The companion Home Assistant warning automation has stable
   top-level ID `predictive_controls_reliability_warning`, exactly one local
   `20:00:00` time trigger, `mode: single`, and no model-side detection. It sends
-  `notify.notify` and one persistent notification with stable notification ID
-  only when `states('sensor.predictive_controls_reliability_warnings') | int(0)
-  > 0`; missing, unknown, unavailable, or zero state sends nothing. Its message
-  reports the sensor's deterministic preceding-24-hour summary.
+  `notify.notify` and one `persistent_notification.create` call with stable
+  notification ID only when the sensor's `active_count` attribute is greater
+  than zero; missing, unknown, unavailable, or zero active count sends nothing.
+  Its message reports the sensor's deterministic active-only summary. Cleared
+  retained history remains inspectable but never causes a notification.
 
 ## 12. Prediction and Learning
 
@@ -1321,27 +1325,27 @@ This section is the maintained current-state index for the implementation. It is
 descriptive evidence of conformance, not a second source of requirements. The
 numbered requirements above remain authoritative if a summary here is incomplete.
 
-**Last conformance review:** 2026-08-23, after the asserted-stay count-conflict
-release-authority repair
+**Last conformance review:** 2026-08-23, after the reliability-warning recovery
+and active-only notification repair
 **Repository version:** `0.2.6`
 **Home Assistant Store version:** `7`
 **Current inference schema:** `zone-belief-v4`
 **Known specification divergences:** none
 
-| Layer                     | Implemented contract                                                                                                                                                                          | Owning implementation                                                    |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| Map and profiles          | Physical aliases, reciprocal adjacency, directed timing overrides, reliability, capability-based shared profile assignment, and unit reliability for conclusive interaction nodes             | `model.py`, `yaml_config.py`, `zone_model/profiles.py`                   |
-| Physical evidence         | Bounded sensor and interaction-pulse episodes, alias/flap deduplication, stable clear, per-alias interaction health invalidation, hardware hold, trust horizons, and cadence health           | `zone_model/episodes.py`                                                 |
-| Zone belief               | Per-zone binary log-odds filtering, reliability-tempered likelihoods, generation-idempotent finite-ceiling interaction evidence, role/context decay, and supported-arrival transitions        | `zone_model/filter.py`, `zone_model/calibration.py`                      |
-| Traversal and acquisition | Pending bootstrap, immediate local-interaction acquisition, provisional and confirmed anonymous paths, adjacency, same-zone, boundary, missed-edge, and continuity reopening                  | `zone_model/traversal.py`, `zone_model/engine.py`                        |
-| Anonymous supports        | Bounded moving/settled support state, confirmed creation, causal-frontier and selected-path transfer authority, guarded binding, coalescence, same-zone settlement, and deterministic removal | `zone_model/supports.py`                                                 |
-| Count context             | Categorical count zero, positive-count validation, count-conflict dwell, health degradation, traversal closure, asserted-stay release veto, and recovery from immutable support projections   | `zone_model/count.py`, `zone_model/engine.py`                            |
-| Policy and public control | Shared 0.70/0.30 hysteresis, profile release dwell, asserted-stay pending-dwell cancellation, one `active` entity per zone, `home_active`, and optional deduplicated arrival events           | `zone_model/policy.py`, `binary_sensor.py`, `event.py`                   |
-| Prediction and learning   | Confirmed-route learning, fixed 0.85 maturity threshold, minimum five accepted transitions, and nonrenewing 10-second internal activation leases                                              | `zone_model/prediction.py`, `markov.py`                                  |
-| Persistence and migration | Atomic v4 persistence; strict restore; conservative v3 and v2 import; deferred schema-6 active seed; immutable accepted-v3 rollback backup                                                    | `zone_model/persistence.py`, `storage.py`, `occupancy_tracker.py`        |
-| Diagnostics and UI        | Bounded policy audit, beliefs, episodes, health, traversal, supports, conflicts, predictions, stale-binding and other lifecycle counters, WebSocket status, and Activity/map panel            | `zone_model/policy.py`, `status.py`, `websocket.py`, `frontend/panel.js` |
-| Runtime integration       | State and physical-interaction event normalization, authoritative count, deterministic timer advancement, edge-gated publication, delayed persistence, and final save                         | `runtime.py`, `occupancy_tracker.py`, `__init__.py`                      |
-| Validation                | Retained public incidents and target fixtures, 603 Python tests at 100% branch coverage, Ruff, strict mypy, 29 frontend tests/build, and passing bounded 100-event benchmark                  | `tests/`, `benchmarks/occupancy_performance.py`                          |
+| Layer                     | Implemented contract                                                                                                                                                                          | Owning implementation                                                                 |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Map and profiles          | Physical aliases, reciprocal adjacency, directed timing overrides, reliability, capability-based shared profile assignment, and unit reliability for conclusive interaction nodes             | `model.py`, `yaml_config.py`, `zone_model/profiles.py`                                |
+| Physical evidence         | Bounded sensor and interaction-pulse episodes, alias/flap deduplication, stable clear, per-alias interaction health invalidation, hardware hold, trust horizons, and cadence health           | `zone_model/episodes.py`                                                              |
+| Zone belief               | Per-zone binary log-odds filtering, reliability-tempered likelihoods, generation-idempotent finite-ceiling interaction evidence, role/context decay, and supported-arrival transitions        | `zone_model/filter.py`, `zone_model/calibration.py`                                   |
+| Traversal and acquisition | Pending bootstrap, immediate local-interaction acquisition, provisional and confirmed anonymous paths, adjacency, same-zone, boundary, missed-edge, and continuity reopening                  | `zone_model/traversal.py`, `zone_model/engine.py`                                     |
+| Anonymous supports        | Bounded moving/settled support state, confirmed creation, causal-frontier and selected-path transfer authority, guarded binding, coalescence, same-zone settlement, and deterministic removal | `zone_model/supports.py`                                                              |
+| Count context             | Categorical count zero, positive-count validation, count-conflict dwell, health degradation, traversal closure, asserted-stay release veto, and recovery from immutable support projections   | `zone_model/count.py`, `zone_model/engine.py`                                         |
+| Policy and public control | Shared 0.70/0.30 hysteresis, profile release dwell, asserted-stay pending-dwell cancellation, one `active` entity per zone, `home_active`, and optional deduplicated arrival events           | `zone_model/policy.py`, `binary_sensor.py`, `event.py`                                |
+| Prediction and learning   | Confirmed-route learning, fixed 0.85 maturity threshold, minimum five accepted transitions, and nonrenewing 10-second internal activation leases                                              | `zone_model/prediction.py`, `markov.py`                                               |
+| Persistence and migration | Atomic v4 persistence; strict restore; conservative v3 and v2 import; deferred schema-6 active seed; immutable accepted-v3 rollback backup                                                    | `zone_model/persistence.py`, `storage.py`, `occupancy_tracker.py`                     |
+| Diagnostics and UI        | Bounded policy audit, beliefs, episodes, health, traversal, supports, conflicts, predictions, warning occurrence history/current projection, lifecycle counters, WebSocket status, and panels | `zone_model/policy.py`, `status.py`, `sensor.py`, `websocket.py`, `frontend/panel.js` |
+| Runtime integration       | State and physical-interaction event normalization, authoritative count, deterministic timer advancement, edge-gated publication, delayed persistence, and final save                         | `runtime.py`, `occupancy_tracker.py`, `__init__.py`                                   |
+| Validation                | Retained public incidents and target fixtures, 657 Python tests at 100% branch coverage, Ruff, strict mypy, 30 frontend tests/build, and passing bounded 100-event benchmark                  | `tests/`, `benchmarks/occupancy_performance.py`                                       |
 
 The current implementation includes the retained 2026-08-20 office false-release
 repair: loss of a selected outside support clears an already-degraded count
@@ -1367,3 +1371,10 @@ full-dwell release eligibility; authoritative count zero remains immediate. The
 exact production timestamps, degraded and release-frontier beliefs, public edge,
 clear/reassert, pending-dwell, count-zero, neutral-availability, and restart
 boundaries are retained in the target-model regression suites.
+
+The retained 2026-08-23 reliability incident establishes that a
+same-generation impossible-cadence warning on a profile without cross-generation
+cadence becomes historical at stable clear, or at a fresh independent positive
+when that arrives first. The diagnostic sensor preserves bounded 24-hour history,
+while its active count and active-only summary drive the daily Home Assistant
+notification so recovered warnings do not produce a current-fault alert.

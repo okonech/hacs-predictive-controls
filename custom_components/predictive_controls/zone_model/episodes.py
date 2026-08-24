@@ -604,6 +604,19 @@ class PhysicalEpisodes:
                 )
             )
         cadence_enabled = profile.cycle_correlation_window.total_seconds() > 0
+        if state.cadence_warning and not cadence_enabled:
+            assert state.episode_id is not None
+            effects.append(
+                EpisodeEffect(
+                    state.node_id,
+                    state.zone,
+                    state.episode_id,
+                    "cadence_warning_cleared",
+                    at,
+                    reliability,
+                    state.cadence_warning_reason,
+                )
+            )
         run_started_at = state.cadence_run_started_at
         cycle_count = state.cadence_cycle_count
         if cadence_enabled and run_started_at is None:
@@ -810,6 +823,21 @@ class PhysicalEpisodes:
                             recovery_reason,
                         )
                     )
+                cadence_enabled = (
+                    profile.cycle_correlation_window.total_seconds() > 0
+                )
+                if state.cadence_warning and not cadence_enabled:
+                    effects.append(
+                        EpisodeEffect(
+                            state.node_id,
+                            state.zone,
+                            state.episode_id,
+                            "cadence_warning_cleared",
+                            deadline,
+                            self._nodes[state.node_id].reliability,
+                            state.cadence_warning_reason,
+                        )
+                    )
                 state = replace(
                     state,
                     status="clear",
@@ -820,6 +848,12 @@ class PhysicalEpisodes:
                     degraded_at=None,
                     degradation_reason=None,
                     health_warning=False,
+                    cadence_warning=(
+                        state.cadence_warning if cadence_enabled else False
+                    ),
+                    cadence_warning_reason=(
+                        state.cadence_warning_reason if cadence_enabled else None
+                    ),
                 )
                 continue
             if deadline_kind == "assertion_timeout":
