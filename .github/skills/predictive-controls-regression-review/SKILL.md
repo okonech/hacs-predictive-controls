@@ -1,6 +1,6 @@
 ---
 name: predictive-controls-regression-review
-description: "Use for any reported Predictive Controls bug, incorrect behavior, production incident, false activation, false release, stale active state, missed activation, wrong probability, traversal defect, warning defect, or incident-derived fix. Requires live evidence as available, root-cause diagnosis, a durable implementation spec hardened by exactly three adversarial passes, exact regression proof, tracked implementation, full validation, and final SPECIFICATION.md reconciliation."
+description: "Use for any reported Predictive Controls bug, incorrect behavior, production incident, false activation, false release, stale active state, missed activation, wrong probability, traversal defect, warning defect, or incident-derived fix. Requires live evidence as available, root-cause diagnosis, a temporary working spec hardened by exactly three adversarial passes, exact retained regression proof, tracked implementation, full validation, final SPECIFICATION.md reconciliation, and working-spec deletion."
 argument-hint: "Describe the incident, wrong public behavior, or proposed model/profile change"
 ---
 
@@ -16,7 +16,8 @@ For every reported production failure, complete these gates in order. Do not edi
 production behavior before Gates 1-5 are complete.
 
 1. **Establish authority and evidence.** Read `SPECIFICATION.md`, the owning code,
-   nearby tests, and relevant retained incidents. Fetch current runtime data when
+   nearby tests, and relevant retained incident regression tests and evidence.
+   Fetch current runtime data when
    it can distinguish causes. Home Assistant access is read-only through approved
    scripts in the homelab repository. Record provenance and never invent missing
    timestamps or state.
@@ -24,7 +25,7 @@ production behavior before Gates 1-5 are complete.
    falsifiable diagnosis, its supporting evidence, contributing conditions, and
    the cheapest check that could disprove it. Do not confuse deployment drift or
    downstream automation behavior with a model cause.
-3. **Create a durable implementation specification.** Write or update
+3. **Create a temporary working implementation specification.** Write or update
    `docs/spec/<incident-or-change-name>.md`. Use
    `.github/skills/spec-writer/SKILL.md`. Include the evidence record, diagnosis,
    governing `REQ-*` IDs, objective, non-goals, invariants, exact event ordering,
@@ -58,8 +59,10 @@ production behavior before Gates 1-5 are complete.
 8. **Reconcile authority and hand off.** Update the appropriate normative
    requirements and Section 19 implementation-conformance snapshot in
    `SPECIFICATION.md`, plus directly conflicting current-state documentation.
-   Mark the implementation spec complete only after its acceptance gates pass.
-   Record deployment or operational cleanup separately from code correctness.
+   After its acceptance gates pass, verify `SPECIFICATION.md` contains the final
+   contract and validated result, then delete the completed working spec. The
+   exact regression test is the permanent incident artifact. Record deployment
+   or operational cleanup separately from code correctness.
 
 If the hardened design conflicts with `SPECIFICATION.md`, obtain explicit user
 agreement and amend the conflicting authority before Gate 6. Gate 8 still
@@ -83,7 +86,9 @@ Before diagnosis, record:
    assumption; and
 10. the cheapest trace value or test that would disprove the leading hypothesis.
 
-Use `INC-YYYY-MM-DD-short-symptom` when a durable incident identity is useful.
+Use `INC-YYYY-MM-DD-short-symptom` for the temporary working spec when an
+incident identity helps implementation tracking. Preserve that identity in the
+retained regression test when useful.
 Live Home Assistant diagnosis is read-only through approved deployment scripts.
 
 ## Controlling Layers
@@ -169,10 +174,10 @@ Low raw sensor confidence or a timer alone is not an equivalent release model.
 
 ## Validation Expectations
 
-Preserve the exact regression and run the nearest discriminating inverse or
+Preserve the exact regression test and run the nearest discriminating inverse or
 boundary cases while editing. Before handoff, run the complete retained incident
 corpus, adversarial matrix, full Python coverage, Ruff, mypy, frontend,
 applicable 100-event benchmarks, and diff/reference checks. The final report must
-name the evidence provenance, diagnosed cause, hardened spec path, red/green
-regression, validation results, canonical specification update, and remaining
-deployment work.
+name the evidence provenance, diagnosed cause, working-spec deletion, retained
+regression-test path, red/green result, validation results, canonical
+specification update, and remaining deployment work.

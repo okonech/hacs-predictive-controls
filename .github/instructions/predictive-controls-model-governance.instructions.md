@@ -17,8 +17,8 @@ Before changing behavior in a matched file:
 2. Use `.github/skills/predictive-controls-regression-review/SKILL.md` for a
    reported production failure or incident.
 3. For an incident, do not edit production behavior until the mandatory workflow
-   has established real evidence and a falsifiable root cause, created a durable
-   `docs/spec/` implementation specification, completed exactly three
+   has established real evidence and a falsifiable root cause, created a temporary
+   `docs/spec/` working specification, completed exactly three
    adversarial hardening passes, and proved the exact regression fails for the
    diagnosed reason.
 4. Implement from the hardened specification using
@@ -30,8 +30,9 @@ Before changing behavior in a matched file:
 6. After the first production edit, immediately rerun the exact regression. Then
    run the nearest inverse/boundary tests and touched-file lint before broadening.
 7. Before handoff, run the complete applicable pytest/coverage, repository mypy,
-   frontend, benchmark, and diff gates; reconcile the implementation spec and
-   update the governing requirements plus Section 19 in `SPECIFICATION.md`.
+   frontend, benchmark, and diff gates; update the governing requirements plus
+   Section 19 in `SPECIFICATION.md`, retain the exact regression test as the
+   permanent incident artifact, and delete the completed working spec.
 
 Do not add room/entity/person-specific model logic, count timer callbacks as
 independent evidence, let prediction or policy feed zone belief, normalize

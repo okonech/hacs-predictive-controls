@@ -8,7 +8,8 @@ disable-model-invocation: false
 
 # Specification Implementation Tracking
 
-Use the specification itself as the durable source of truth for implementation progress.
+Use the working specification as the source of truth only while implementation
+is active or blocked. It is not the permanent incident artifact.
 
 ## Start Or Resume
 
@@ -46,3 +47,11 @@ Use the specification itself as the durable source of truth for implementation p
 - Reconcile every acceptance criterion with evidence or an explicit unresolved item.
 - Set the document status to implemented only when all required phases and acceptance criteria are complete.
 - Leave optional or deferred work labeled explicitly.
+- Update the governing requirements and implementation-conformance results in
+	`SPECIFICATION.md`, then verify the canonical specification contains the final
+	implemented contract and evidence.
+- For incident-derived work, retain the exact regression test as the permanent
+	incident artifact.
+- Delete the completed working specification after canonical reconciliation.
+	Keep it only if work remains incomplete or blocked, or if it is the sole record
+	of an unresolved requirement, failed gate, or rollback need.

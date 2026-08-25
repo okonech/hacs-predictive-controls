@@ -1,6 +1,6 @@
 ---
 name: spec-writer
-description: "Research, write, critique, and harden a Predictive Controls implementation specification grounded in the repository, retained incidents, and SPECIFICATION.md. Use when asked to make, create, draft, design, rewrite, or harden a spec, technical proposal, model change, implementation plan, architecture specification, performance specification, or migration specification. Produces an evidence-based draft, then performs exactly three adversarial critique-and-rewrite passes before delivering the final spec."
+description: "Research, write, critique, and harden a temporary Predictive Controls working specification grounded in the repository, retained regression tests, and SPECIFICATION.md. Use when asked to make, create, draft, design, rewrite, or harden a spec, technical proposal, model change, implementation plan, architecture specification, performance specification, or migration specification. Produces an evidence-based draft, performs exactly three adversarial critique-and-rewrite passes, and defines final merge-or-delete disposition after implementation."
 argument-hint: "Describe the specification to create and any required output path."
 user-invocable: true
 disable-model-invocation: false
@@ -8,13 +8,13 @@ disable-model-invocation: false
 
 # Spec Writer
 
-Create an implementation-ready specification whose claims, constraints, and acceptance gates are traceable to the current repository, retained production evidence, and `SPECIFICATION.md`. The final artifact is the result of one research/draft pass followed by exactly three adversarial critique-and-hardening passes.
+Create an implementation-ready working specification whose claims, constraints, and acceptance gates are traceable to the current repository, retained production evidence, and `SPECIFICATION.md`. The working artifact is the result of one research/draft pass followed by exactly three adversarial critique-and-hardening passes.
 
 ## 1. Establish Scope
 
 1. Identify the requested outcome, affected model layers, intended audience, output path, and whether the spec is a proposal, migration, repair, or replacement.
 2. Ask questions only when an unresolved product or authority decision would materially change the design. Resolve discoverable technical facts from the repository without asking the user.
-3. Locate applicable repository instructions, `SPECIFICATION.md`, architecture contracts, tests, production paths, schemas, metrics, retained incidents, and historical evidence.
+3. Locate applicable repository instructions, `SPECIFICATION.md`, architecture contracts, tests, production paths, schemas, metrics, retained incident regression tests, and historical evidence.
 4. Treat `SPECIFICATION.md` as the sole model authority. If the new design conflicts with it, name the conflict and require explicit agreement before amending authority or production behavior.
 5. For incident-derived model work, load `.github/skills/predictive-controls-regression-review/SKILL.md` and preserve exact public regressions.
 
@@ -65,7 +65,7 @@ Perform exactly three complete passes after the initial draft. In each pass, rer
 For each pass:
 
 1. **Critique:** Try to disprove the design. Find unsupported claims, incorrect code assumptions, missing failure modes, hidden tradeoffs, authority conflicts, ambiguous contracts, unsafe sequencing, non-idempotent behavior, unbounded work, weak tests, and acceptance gates that could pass while behavior remains wrong.
-2. **Ground:** Verify every material criticism against code, tests, schemas, metrics, retained incidents, or `SPECIFICATION.md`. Reject objections without a plausible failure or requirement.
+2. **Ground:** Verify every material criticism against code, tests, schemas, metrics, retained incident regression tests and evidence, or `SPECIFICATION.md`. Reject objections without a plausible failure or requirement.
 3. **Harden:** Rewrite the spec itself. Correct false claims, close omissions, sharpen contracts, split unsafe phases, add negative/failure tests, and replace vague gates with executable evidence.
 4. **Reconcile:** Reread the revised spec for contradictions, stale references, duplicated requirements, phase-order errors, and criteria no longer aligned with the design.
 
@@ -90,4 +90,29 @@ Before delivery:
 - include focused `pytest --no-cov`, Ruff, mypy, full coverage, frontend, and applicable benchmark gates; and
 - run the cheapest available Markdown, repository, or diff validation.
 
-The final output is the hardened spec file. Do not include intermediate drafts or critique transcripts unless requested. Briefly summarize final scope, major hardening decisions, and validation performed.
+## 6. Artifact Lifecycle
+
+- For a research or specification-only request, leave the hardened working spec
+  in place because implementation has not occurred. Do not merge proposed or
+  unvalidated behavior into `SPECIFICATION.md`.
+- After the specified changes are implemented and validated, update the
+  governing requirements and implementation-conformance results in the existing
+  `SPECIFICATION.md`. Verify it contains the final contract and evidence, then
+  delete the completed working spec.
+- For an incident-derived change, the exact regression test is the permanent
+  incident artifact. It preserves reproduced inputs, material timing and
+  ordering, and expected public behavior; the working spec is not incident
+  history.
+- If this workflow is reused in a package without a canonical specification,
+  reconcile the owning current-state or architecture documentation and delete
+  the completed working spec after validation.
+- Never delete a working spec while implementation is incomplete or blocked, or
+  while it is the sole record of an unresolved requirement, failed gate, or
+  rollback need.
+
+For a specification-only request, the output is the hardened working spec. For
+completed implementation, the output is the updated canonical specification,
+the retained regression test when incident-derived, and deletion of the working
+spec. Do not include intermediate drafts or critique transcripts unless
+requested. Briefly summarize final scope, major hardening decisions, validation,
+and artifact disposition.
