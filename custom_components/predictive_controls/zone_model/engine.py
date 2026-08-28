@@ -799,6 +799,8 @@ class ZoneModelEngine:
                 state,
                 effect.at,
             )
+            if authorization.authorized:
+                filter_.apply_arrival_transition(effect.episode_id, effect.at)
             return authorization, effect, None
         if effect.kind == "correlated_flap_ignored":
             if self._frontier.reopen_authorized_continuity(state, effect):
