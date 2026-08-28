@@ -313,6 +313,176 @@ def test_recent_same_zone_missed_edge_and_disconnected_authorization() -> None:
     assert rejected.reason == "track_bootstrap_pending"
 
 
+@pytest.mark.parametrize(
+    ("elapsed_after_clear", "expected_authorized"),
+    [
+        (timedelta(seconds=15, microseconds=999999), True),
+        (timedelta(seconds=16), True),
+        (timedelta(seconds=16, microseconds=1), False),
+    ],
+)
+def test_missed_edge_clear_anchor_obeys_directed_budget_boundary(
+    elapsed_after_clear: timedelta,
+    expected_authorized: bool,
+) -> None:
+    frontier = TraversalFrontier(graph(), NODES)
+    source = episode("hall", "hall", "transition_fast", NOW)
+    issue(frontier, source)
+    clear_at = NOW + timedelta(seconds=20)
+    cleared = replace(
+        source,
+        status="clear",
+        last_event_at=clear_at,
+        advanced_at=clear_at,
+    )
+    frontier.sync(cleared, clear_at)
+    target_at = clear_at + elapsed_after_clear
+    target = episode("remote", "remote", "stay_pir", target_at)
+
+    authorization = frontier.authorize(
+        target,
+        target_at,
+        count=None,
+        corroborating_states=(cleared,),
+    )
+
+    assert authorization.authorized is expected_authorized
+    assert authorization.reason == (
+        "missed_edge_authorized"
+        if expected_authorized
+        else "track_bootstrap_pending"
+    )
+
+
+@pytest.mark.parametrize(
+    "source_variant",
+    [
+        "missing",
+        "mismatched",
+        "asserted",
+        "degraded",
+        "unavailable",
+        "stale",
+        "future",
+    ],
+)
+def test_missed_edge_nonmatching_clear_state_preserves_acceptance_timing(
+    source_variant: str,
+) -> None:
+    frontier = TraversalFrontier(graph(), NODES)
+    source = episode("hall", "hall", "transition_fast", NOW)
+    issue(frontier, source)
+    clear_at = NOW + timedelta(seconds=20)
+    target_at = clear_at + timedelta(seconds=10)
+    cleared = replace(
+        source,
+        status="clear",
+        last_event_at=clear_at,
+        advanced_at=clear_at,
+    )
+    variants = {
+        "mismatched": replace(cleared, episode_id="other-episode"),
+        "asserted": replace(cleared, status="asserted"),
+        "degraded": replace(cleared, status="degraded"),
+        "unavailable": replace(cleared, status="unavailable"),
+        "stale": replace(cleared, last_event_at=NOW),
+        "future": replace(
+            cleared,
+            last_event_at=target_at + timedelta(microseconds=1),
+        ),
+    }
+    corroborating_states = (
+        () if source_variant == "missing" else (variants[source_variant],)
+    )
+    target = episode("remote", "remote", "stay_pir", target_at)
+
+    authorization = frontier.authorize(
+        target,
+        target_at,
+        count=None,
+        corroborating_states=corroborating_states,
+    )
+
+    assert not authorization.authorized
+    assert authorization.reason == "track_bootstrap_pending"
+
+
+def test_missed_edge_rejects_duplicate_source_identity() -> None:
+    frontier = TraversalFrontier(graph(), NODES)
+    source = episode("hall", "hall", "transition_fast", NOW)
+    issue(frontier, source)
+    target_at = NOW + timedelta(seconds=10)
+    target = episode("remote", "remote", "stay_pir", target_at)
+
+    with pytest.raises(ValueError, match="duplicate identity"):
+        frontier.authorize(
+            target,
+            target_at,
+            count=None,
+            corroborating_states=(source, source),
+        )
+
+
+def test_missed_edge_requires_timing_for_both_directed_hops() -> None:
+    predictive_map = PredictiveMap.from_mapping(
+        {
+            "nodes": {
+                "hall": {
+                    "zone": "hall",
+                    "role": "transition_gate",
+                    "occupancy_behavior": "transient",
+                    "entities": {"motion": "binary_sensor.hall"},
+                    "adjacent": ["middle"],
+                    "transition_seconds": {"middle": 8},
+                },
+                "middle": {
+                    "zone": "middle",
+                    "role": "transition_gate",
+                    "occupancy_behavior": "transient",
+                    "entities": {"motion": "binary_sensor.middle"},
+                    "adjacent": ["hall", "remote"],
+                },
+                "remote": {
+                    "zone": "remote",
+                    "role": "room_occupancy",
+                    "entities": {"motion": "binary_sensor.remote"},
+                    "adjacent": ["middle"],
+                },
+            }
+        }
+    )
+    frontier = TraversalFrontier(
+        predictive_map,
+        tuple(
+            physical_node
+            for physical_node in NODES
+            if physical_node.node_id in {"hall", "middle", "remote"}
+        ),
+    )
+    source = episode("hall", "hall", "transition_fast", NOW)
+    issue(frontier, source)
+    clear_at = NOW + timedelta(seconds=20)
+    cleared = replace(
+        source,
+        status="clear",
+        last_event_at=clear_at,
+        advanced_at=clear_at,
+    )
+    frontier.sync(cleared, clear_at)
+    target_at = clear_at + timedelta(seconds=10)
+    target = episode("remote", "remote", "stay_pir", target_at)
+
+    authorization = frontier.authorize(
+        target,
+        target_at,
+        count=None,
+        corroborating_states=(cleared,),
+    )
+
+    assert not authorization.authorized
+    assert authorization.reason == "track_bootstrap_pending"
+
+
 def test_expiry_degradation_unavailable_and_self_authorization_are_bounded() -> None:
     frontier = TraversalFrontier(graph(), NODES)
     hall = episode("hall", "hall", "transition_fast", NOW)

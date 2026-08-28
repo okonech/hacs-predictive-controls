@@ -224,12 +224,12 @@ def test_outward_context_is_or_composed_strict_and_generation_scoped() -> None:
     filter_.register_outward("episode-1", latest_expiry, NOW + timedelta(seconds=3))
     cleared = filter_.apply_stable_clear("episode-1", NOW + timedelta(seconds=4))
     assert cleared.context == "cleared_with_outward"
-    assert cleared.outward_context == OutwardContext("episode-1", latest_expiry)
+    assert cleared.outward_context is None
 
     before_expiry = filter_.advance(latest_expiry - timedelta(microseconds=1))
     assert before_expiry.context == "cleared_with_outward"
     expired = filter_.advance(latest_expiry)
-    assert expired.context == "cleared_without_outward"
+    assert expired.context == "cleared_with_outward"
     assert expired.outward_context is None
 
     renewed = filter_.register_outward(
@@ -264,8 +264,28 @@ def test_callback_cadence_does_not_change_decay_across_outward_expiry() -> None:
     for seconds in range(10, 91, 10):
         fine.advance(NOW + timedelta(seconds=seconds))
 
-    assert coarse.state.context == fine.state.context == "cleared_without_outward"
+    assert coarse.state.context == fine.state.context == "cleared_with_outward"
     assert coarse.state.probability == pytest.approx(fine.state.probability, abs=1e-12)
+
+
+def test_pending_outward_does_not_commit_after_flap_or_at_deadline() -> None:
+    expiry = NOW + timedelta(seconds=30)
+
+    flapped = belief_filter()
+    flapped.apply_positive("episode-1", NOW)
+    flapped.register_outward("episode-1", expiry, NOW)
+    flapped.reselect_asserted_context("episode-1", NOW + timedelta(seconds=10))
+    cleared_after_flap = flapped.apply_stable_clear(
+        "episode-1", NOW + timedelta(seconds=20)
+    )
+    assert cleared_after_flap.context == "cleared_without_outward"
+
+    at_deadline = belief_filter()
+    at_deadline.apply_positive("episode-1", NOW)
+    at_deadline.register_outward("episode-1", expiry, NOW)
+    cleared_at_deadline = at_deadline.apply_stable_clear("episode-1", expiry)
+    assert cleared_at_deadline.context == "cleared_without_outward"
+    assert cleared_at_deadline.outward_context is None
 
 
 def test_quiet_stay_persists_and_outward_departure_accelerates_decay() -> None:
@@ -488,11 +508,50 @@ def test_confirmed_return_supersedes_outward_without_changing_belief() -> None:
         NOW + timedelta(seconds=1),
     )
     cleared_filter.apply_stable_clear("episode-1", NOW + timedelta(seconds=2))
+    before_clear_return = cleared_filter.state.probability
     cleared = cleared_filter.supersede_outward(
         "episode-1",
-        NOW + timedelta(seconds=3),
+        NOW + timedelta(seconds=2),
     )
     assert cleared.context == "cleared_without_outward"
+    assert cleared.outward_context is None
+    assert cleared.probability == pytest.approx(before_clear_return)
+    assert contribution_count(cleared_filter, "outward_superseded") == 1
+
+
+def test_restore_normalizes_valid_legacy_committed_outward_shape() -> None:
+    profile = BELIEF_PROFILES["stay_pir"]
+    filter_ = belief_filter()
+    filter_.apply_positive("episode-1", NOW)
+    committed = filter_.apply_stable_clear(
+        "episode-1", NOW + timedelta(seconds=1)
+    )
+    legacy = replace(
+        committed,
+        context="cleared_with_outward",
+        outward_context=OutwardContext(
+            "episode-1", NOW + timedelta(seconds=30)
+        ),
+    )
+
+    restored = ZoneBeliefFilter.restore(
+        profile,
+        legacy,
+        restore_at=NOW + timedelta(minutes=1),
+    )
+
+    assert restored.state.context == "cleared_with_outward"
+    assert restored.state.outward_context is None
+    with pytest.raises(ValueError, match="committed outward context"):
+        ZoneBeliefFilter.restore(
+            profile,
+            replace(
+                legacy,
+                outward_context=OutwardContext(
+                    "other-episode", NOW + timedelta(seconds=30)
+                ),
+            ),
+        )
 
 
 def test_beliefs_remain_finite_and_contributions_are_bounded_fifo() -> None:
@@ -606,7 +665,6 @@ def test_restore_rejects_every_invalid_cross_field_state() -> None:
             replace(cleared, asserted_episode_id="episode-1"),
             "retains an assertion",
         ),
-        (replace(cleared, context="cleared_with_outward"), "context is missing"),
         (
             replace(
                 asserted,

@@ -65,6 +65,16 @@ class ZoneBeliefFilter:
         restore_at: datetime | None = None,
         contribution_limit: int = DEFAULT_CONTRIBUTION_LIMIT,
     ) -> ZoneBeliefFilter:
+        if (
+            state.context == "cleared_with_outward"
+            and state.outward_context is not None
+            and state.generation_episode_id is not None
+            and state.asserted_episode_id is None
+            and state.outward_context.source_episode_id
+            == state.generation_episode_id
+            and state.outward_context.valid_until > state.last_updated_at
+        ):
+            state = replace(state, outward_context=None)
         filter_ = cls(
             state.zone,
             profile,
@@ -191,7 +201,7 @@ class ZoneBeliefFilter:
                 "cleared_with_outward" if has_outward else "cleared_without_outward"
             ),
             asserted_episode_id=None,
-            outward_context=before.outward_context if has_outward else None,
+            outward_context=None,
         )
         self._record("stable_clear", before, episode_id)
         return self._state
@@ -356,15 +366,20 @@ class ZoneBeliefFilter:
             )
         if self._state.context == "unavailable" or valid_until <= at:
             return self._state
+        if self._state.context == "cleared_with_outward":
+            return self._state
+        if self._state.context == "cleared_without_outward":
+            self._state = replace(
+                self._state,
+                context="cleared_with_outward",
+                outward_context=None,
+            )
+            return self._state
         current = self._state.outward_context
         if current is not None and current.valid_until >= valid_until:
             return self._state
-        context = self._state.context
-        if context == "cleared_without_outward":
-            context = "cleared_with_outward"
         self._state = replace(
             self._state,
-            context=context,
             outward_context=OutwardContext(source_episode_id, valid_until),
         )
         return self._state
@@ -378,7 +393,10 @@ class ZoneBeliefFilter:
         self._advance_to(at)
         if self._state.generation_episode_id != episode_id:
             raise ValueError("Superseded outward context must match current episode")
-        if self._state.outward_context is None:
+        if (
+            self._state.outward_context is None
+            and self._state.context != "cleared_with_outward"
+        ):
             return self._state
         before = self._state
         context = before.context
@@ -449,12 +467,8 @@ class ZoneBeliefFilter:
         if outward is not None and outward.valid_until <= at:
             self._decay_to(outward.valid_until)
             before = self._state
-            context = before.context
-            if context == "cleared_with_outward":
-                context = "cleared_without_outward"
             self._state = replace(
                 before,
-                context=context,
                 outward_context=None,
             )
             self._record("context_expired", before, outward.source_episode_id)
@@ -547,12 +561,15 @@ class ZoneBeliefFilter:
             and state.asserted_episode_id is not None
         ):
             raise ValueError("Stored non-asserted context retains an assertion")
-        if state.context == "cleared_with_outward" and state.outward_context is None:
-            raise ValueError("Stored outward context is missing")
+        if state.context == "cleared_with_outward" and (
+            state.generation_episode_id is None
+            or state.outward_context is not None
+        ):
+            raise ValueError("Stored committed outward context is inconsistent")
         if state.outward_context is not None and (
             state.outward_context.source_episode_id != state.generation_episode_id
             or state.outward_context.valid_until <= state.last_updated_at
-            or state.context in {"cleared_without_outward", "unavailable"}
+            or state.context not in {"asserted", "degraded_asserted"}
         ):
             raise ValueError("Stored outward context is inconsistent")
         if state.generation_episode_id is None:

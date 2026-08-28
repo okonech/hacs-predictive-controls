@@ -343,7 +343,6 @@ class TraversalFrontier:
         count: CountState | None,
         corroborating_states: Sequence[EpisodeState] = (),
     ) -> TraversalAuthorization:
-        del corroborating_states
         self.advance(at)
         target_node = self._validated_episode(target)
         if target.status != "asserted" or target.episode_id is None:
@@ -357,6 +356,16 @@ class TraversalFrontier:
                 False,
                 "untracked_rejected",
             )
+        source_states: dict[tuple[str, str], EpisodeState] = {}
+        for state in corroborating_states:
+            if state.episode_id is None:
+                continue
+            key = (state.node_id, state.episode_id)
+            if key in source_states:
+                raise ValueError(
+                    "Corroborating episode states contain duplicate identity"
+                )
+            source_states[key] = state
         return self._authorize_from_context(
             target,
             target_node,
@@ -364,6 +373,7 @@ class TraversalFrontier:
             count=count,
             remember_pending=True,
             fallback_reason="track_bootstrap_pending",
+            source_states=source_states,
         )
 
     def authorize_correlated_target(
@@ -401,6 +411,7 @@ class TraversalFrontier:
             count=None,
             remember_pending=False,
             fallback_reason="untracked_rejected",
+            source_states={},
         )
 
     def _authorize_from_context(
@@ -412,6 +423,7 @@ class TraversalFrontier:
         count: CountState | None,
         remember_pending: bool,
         fallback_reason: str,
+        source_states: Mapping[tuple[str, str], EpisodeState],
     ) -> TraversalAuthorization:
         assert target.episode_id is not None
         target_episode_id = target.episode_id
@@ -442,7 +454,13 @@ class TraversalFrontier:
         missed = tuple(
             token
             for token in candidates
-            if token not in adjacent and self._missed_edge(token, target.node_id, at)
+            if token not in adjacent
+            and self._missed_edge(
+                token,
+                target.node_id,
+                at,
+                source_states.get((token.node_id, token.episode_id)),
+            )
         )
         linked_episode_ids = {
             use.target_episode_id
@@ -755,9 +773,21 @@ class TraversalFrontier:
         )
 
     def _missed_edge(
-        self, token: TraversalToken, target_node_id: str, at: datetime
+        self,
+        token: TraversalToken,
+        target_node_id: str,
+        at: datetime,
+        source_state: EpisodeState | None,
     ) -> bool:
-        elapsed = (at - token.accepted_at).total_seconds()
+        departure_at = token.accepted_at
+        if (
+            source_state is not None
+            and source_state.status in {"clearing", "clear"}
+            and source_state.last_event_at is not None
+            and token.accepted_at < source_state.last_event_at <= at
+        ):
+            departure_at = source_state.last_event_at
+        elapsed = (at - departure_at).total_seconds()
         queue = deque(((token.node_id, 0, 0.0),))
         visited = {token.node_id}
         while queue:

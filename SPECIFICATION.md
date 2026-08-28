@@ -372,18 +372,22 @@ shared parameter family and is not itself a competing state:
    `degraded_asserted` while the same hardware assertion remains positive; stay
    assertions retain `asserted` locally while their traversal authority still
    expires;
-3. stable clear selects `cleared_with_outward` when at least one compatible
-  outward context for that source episode remains unexpired, otherwise
-  `cleared_without_outward`;
-4. a compatible adjacent target accepted while the source is clear selects
-  `cleared_with_outward`; if accepted while the source remains asserted, it is
-  retained and selects that context only if the same source episode later
-  stable-clears before the outward context expires;
-5. multiple compatible outward contexts compose by logical OR as one boolean
-  context through the latest valid expiry and never require selecting one
-  destination;
-6. expiry of every compatible outward context reverts a still-cleared source to
-  `cleared_without_outward`;
+3. stable clear selects and commits `cleared_with_outward` when at least one
+  compatible pending outward context for that source episode remains unexpired,
+  otherwise `cleared_without_outward`;
+4. a compatible adjacent target accepted while the source is already clear
+  immediately commits `cleared_with_outward`; if accepted while the source
+  remains asserted, it is pending and commits only if the same source episode
+  later stable-clears before the pending context expires;
+5. multiple compatible pending outward contexts compose by logical OR through
+  the latest valid expiry and never require selecting one destination. On
+  commitment, the filter consumes that pending authority into the boolean
+  `cleared_with_outward` decay context with no remaining outward object or
+  deadline;
+6. pending outward authority that expires before stable clear is discarded
+  without commitment. Committed `cleared_with_outward` decay does not revert at
+  the former authority deadline; a confirmed return or new accepted positive
+  supersedes it deterministically;
 7. a new positive episode discards outward contexts associated with the prior
   source episode and selects `asserted`; an accepted correlated-continuity
   reassertion discards outward context for that same episode as a zero-likelihood
@@ -469,7 +473,13 @@ holds:
 2. an adjacent node has a current valid transition assertion or unexpired token;
 3. an entry node and count transition provide boundary reacquisition;
 4. a reviewed missed-edge path of bounded graph length and time connects an
-  unexpired frontier to the target.
+  unexpired frontier to the target. Elapsed path time starts at token acceptance
+  unless the current episode-state set contains an exact source-node and
+  source-episode match in `clearing` or `clear`, with a clear event strictly
+  later than token acceptance and no later than the target; that exact clear
+  frontier is the bounded departure time. Missing, mismatched, asserted,
+  degraded, unavailable, stale, or future source state preserves
+  token-acceptance timing.
 
 Immediate authorization is evaluated synchronously in the same model update as
 the target edge and never enters confirmation dwell. A separately created mature
@@ -1055,7 +1065,12 @@ Persist only state needed to reproduce the next decision:
   otherwise it must discard the active state. It reconstructs neither pending nor
   prediction provenance. Older
   `zone-belief-v1` state is incompatible and must cold bootstrap from current
-  sensor/count snapshots.
+  sensor/count snapshots. The canonical committed-outward belief shape is
+  `context == cleared_with_outward` with a current generation and no pending
+  outward object. A reader normalizes the legacy object-bearing committed shape
+  only when its source equals that generation, no asserted episode remains, and
+  its deadline is strictly later than the stored frontier; malformed legacy
+  shapes reject atomically. This changes no persisted field or schema version.
 - **REQ-STATE-006:** A currently asserted stay sensor observed during cold
   bootstrap seeds belief but cannot by itself turn on an inactive zone. It may
   restore evidence-acquired `active` only from validated compatible persistence,
@@ -1280,7 +1295,11 @@ scenarios and adversarial tests demonstrate:
   Office retains the original asserted mmWave belief identity beyond the
   production false-release frontier without a new likelihood, traversal, or
   public edge; and
-25. all retained production incident regressions pass at the public contract.
+25. the exact retained 2026-08-28 bathroom departure commits outward decay past
+  the former authority deadline and publishes one ordinary release, while the
+  kitchen-to-foyer missed edge uses the exact matching kitchen clear frontier
+  without renewing its still-valid token; and
+26. all retained production incident regressions pass at the public contract.
 
 ## 17. Change Governance
 
@@ -1325,27 +1344,27 @@ This section is the maintained current-state index for the implementation. It is
 descriptive evidence of conformance, not a second source of requirements. The
 numbered requirements above remain authoritative if a summary here is incomplete.
 
-**Last conformance review:** 2026-08-23, after the reliability-warning recovery
-and active-only notification repair
+**Last conformance review:** 2026-08-28, after the committed-outward release and
+clear-anchored missed-edge repair
 **Repository version:** `0.2.6`
 **Home Assistant Store version:** `7`
 **Current inference schema:** `zone-belief-v4`
 **Known specification divergences:** none
 
-| Layer                     | Implemented contract                                                                                                                                                                          | Owning implementation                                                                 |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| Map and profiles          | Physical aliases, reciprocal adjacency, directed timing overrides, reliability, capability-based shared profile assignment, and unit reliability for conclusive interaction nodes             | `model.py`, `yaml_config.py`, `zone_model/profiles.py`                                |
-| Physical evidence         | Bounded sensor and interaction-pulse episodes, alias/flap deduplication, stable clear, per-alias interaction health invalidation, hardware hold, trust horizons, and cadence health           | `zone_model/episodes.py`                                                              |
-| Zone belief               | Per-zone binary log-odds filtering, reliability-tempered likelihoods, generation-idempotent finite-ceiling interaction evidence, role/context decay, and supported-arrival transitions        | `zone_model/filter.py`, `zone_model/calibration.py`                                   |
-| Traversal and acquisition | Pending bootstrap, immediate local-interaction acquisition, provisional and confirmed anonymous paths, adjacency, same-zone, boundary, missed-edge, and continuity reopening                  | `zone_model/traversal.py`, `zone_model/engine.py`                                     |
-| Anonymous supports        | Bounded moving/settled support state, confirmed creation, causal-frontier and selected-path transfer authority, guarded binding, coalescence, same-zone settlement, and deterministic removal | `zone_model/supports.py`                                                              |
-| Count context             | Categorical count zero, positive-count validation, count-conflict dwell, health degradation, traversal closure, asserted-stay release veto, and recovery from immutable support projections   | `zone_model/count.py`, `zone_model/engine.py`                                         |
-| Policy and public control | Shared 0.70/0.30 hysteresis, profile release dwell, asserted-stay pending-dwell cancellation, one `active` entity per zone, `home_active`, and optional deduplicated arrival events           | `zone_model/policy.py`, `binary_sensor.py`, `event.py`                                |
-| Prediction and learning   | Confirmed-route learning, fixed 0.85 maturity threshold, minimum five accepted transitions, and nonrenewing 10-second internal activation leases                                              | `zone_model/prediction.py`, `markov.py`                                               |
-| Persistence and migration | Atomic v4 persistence; strict restore; conservative v3 and v2 import; deferred schema-6 active seed; immutable accepted-v3 rollback backup                                                    | `zone_model/persistence.py`, `storage.py`, `occupancy_tracker.py`                     |
-| Diagnostics and UI        | Bounded policy audit, beliefs, episodes, health, traversal, supports, conflicts, predictions, warning occurrence history/current projection, lifecycle counters, WebSocket status, and panels | `zone_model/policy.py`, `status.py`, `sensor.py`, `websocket.py`, `frontend/panel.js` |
-| Runtime integration       | State and physical-interaction event normalization, authoritative count, deterministic timer advancement, edge-gated publication, delayed persistence, and final save                         | `runtime.py`, `occupancy_tracker.py`, `__init__.py`                                   |
-| Validation                | Retained public incidents and target fixtures, 657 Python tests at 100% branch coverage, Ruff, strict mypy, 30 frontend tests/build, and passing bounded 100-event benchmark                  | `tests/`, `benchmarks/occupancy_performance.py`                                       |
+| Layer                     | Implemented contract                                                                                                                                                                                                                 | Owning implementation                                                                     |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| Map and profiles          | Physical aliases, reciprocal adjacency, directed timing overrides including the calibrated kitchen-dining-foyer path, reliability, capability-based shared profile assignment, and unit reliability for conclusive interaction nodes | `model.py`, `yaml_config.py`, `zone_model/profiles.py`                                    |
+| Physical evidence         | Bounded sensor and interaction-pulse episodes, alias/flap deduplication, stable clear, per-alias interaction health invalidation, hardware hold, trust horizons, and cadence health                                                  | `zone_model/episodes.py`                                                                  |
+| Zone belief               | Per-zone binary log-odds filtering, reliability-tempered likelihoods, generation-idempotent finite-ceiling interaction evidence, durable committed-outward decay, role/context decay, and supported-arrival transitions              | `zone_model/filter.py`, `zone_model/calibration.py`                                       |
+| Traversal and acquisition | Pending bootstrap, immediate local-interaction acquisition, provisional and confirmed anonymous paths, adjacency, same-zone, boundary, clear-anchored bounded missed-edge timing, and continuity reopening                           | `zone_model/traversal.py`, `zone_model/engine.py`                                         |
+| Anonymous supports        | Bounded moving/settled support state, confirmed creation, causal-frontier and selected-path transfer authority, guarded binding, coalescence, same-zone settlement, and deterministic removal                                        | `zone_model/supports.py`                                                                  |
+| Count context             | Categorical count zero, positive-count validation, count-conflict dwell, health degradation, traversal closure, asserted-stay release veto, and recovery from immutable support projections                                          | `zone_model/count.py`, `zone_model/engine.py`                                             |
+| Policy and public control | Shared 0.70/0.30 hysteresis, profile release dwell, asserted-stay pending-dwell cancellation, one `active` entity per zone, `home_active`, and optional deduplicated arrival events                                                  | `zone_model/policy.py`, `binary_sensor.py`, `event.py`                                    |
+| Prediction and learning   | Confirmed-route learning, fixed 0.85 maturity threshold, minimum five accepted transitions, and nonrenewing 10-second internal activation leases                                                                                     | `zone_model/prediction.py`, `markov.py`                                                   |
+| Persistence and migration | Atomic v4 persistence; strict restore with legacy committed-outward shape normalization; conservative v3 and v2 import; deferred schema-6 active seed; immutable accepted-v3 rollback backup                                         | `zone_model/persistence.py`, `zone_model/filter.py`, `storage.py`, `occupancy_tracker.py` |
+| Diagnostics and UI        | Bounded policy audit, beliefs, episodes, health, traversal, supports, conflicts, predictions, warning occurrence history/current projection, lifecycle counters, WebSocket status, and panels                                        | `zone_model/policy.py`, `status.py`, `sensor.py`, `websocket.py`, `frontend/panel.js`     |
+| Runtime integration       | State and physical-interaction event normalization, authoritative count, deterministic timer advancement, edge-gated publication, delayed persistence, and final save                                                                | `runtime.py`, `occupancy_tracker.py`, `__init__.py`                                       |
+| Validation                | Retained public incidents and target fixtures, 673 Python tests at 100% branch coverage, Ruff, strict mypy, 30 frontend tests/build, and passing bounded 100-event benchmark                                                         | `tests/`, `benchmarks/occupancy_performance.py`                                           |
 
 The current implementation includes the retained 2026-08-20 office false-release
 repair: loss of a selected outside support clears an already-degraded count
@@ -1378,3 +1397,11 @@ cadence becomes historical at stable clear, or at a fresh independent positive
 when that arrives first. The diagnostic sensor preserves bounded 24-hour history,
 while its active count and active-only summary drive the daily Home Assistant
 notification so recovered warnings do not produce a current-fault alert.
+
+The retained 2026-08-28 release incident establishes that valid outward evidence
+is finite traversal authority but, once stable clear consumes it, selects durable
+`cleared_with_outward` decay until return or a new positive supersedes that
+context. Bounded two-hop missed-edge timing may start at an exact matching source
+clear frontier while token expiry remains unchanged. Exact bathroom and kitchen
+timestamps, release edges, timing boundaries, inverse source states, restore,
+and incomplete directed-map timing are retained in the target-model suites.
