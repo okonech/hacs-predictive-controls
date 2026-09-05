@@ -395,6 +395,11 @@ class PredictiveControlsRuntime:
     def _publish_update(self) -> None:
         """Invalidate projections and publish one coherent runtime update."""
 
+        self.confidence.publish_current_projection(self._dispatch_update)
+
+    def _dispatch_update(self) -> None:
+        """Dispatch an update within the tracker's current projection scope."""
+
         self._automation_summary_cache.clear()
         async_dispatcher_send(self.hass, DISPATCH_UPDATE)
 

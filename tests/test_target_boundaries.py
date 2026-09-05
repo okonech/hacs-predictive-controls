@@ -362,6 +362,54 @@ def test_tracker_prebootstrap_reason_and_snapshot_sort_guards() -> None:
         replace(snapshot, current_token_ids=("same", "same"))
 
 
+def test_tracker_publication_snapshot_failure_restores_live_projection() -> None:
+    tracker = OccupancyTracker(target_map(), TrackerConfig(1))
+    tracker.ensure_state(NOW)
+    snapshot_in_callback = None
+
+    def fail() -> None:
+        nonlocal snapshot_in_callback
+        snapshot_in_callback = tracker._current_snapshot()  # noqa: SLF001
+        raise RuntimeError("publication failed")
+
+    with pytest.raises(RuntimeError, match="publication failed"):
+        tracker.publish_current_projection(fail)
+
+    assert snapshot_in_callback is not None
+    assert tracker._publishing_snapshot is None  # noqa: SLF001
+    event_at = NOW + timedelta(seconds=2)
+    tracker.observe(event("hall", "hall", "on", event_at))
+    live_snapshot = tracker._current_snapshot()  # noqa: SLF001
+    assert live_snapshot is not None
+    assert live_snapshot is not snapshot_in_callback
+    assert live_snapshot.updated_at == event_at
+
+
+def test_tracker_nested_publication_restores_outer_snapshot() -> None:
+    tracker = OccupancyTracker(target_map(), TrackerConfig(1))
+    tracker.ensure_state(NOW)
+    engine = tracker._engine  # noqa: SLF001
+    assert engine is not None
+    outer_snapshot = engine.snapshot
+    tracker.observe(event("hall", "hall", "on", NOW + timedelta(seconds=2)))
+    inner_snapshot = engine.snapshot
+
+    def inner_callback() -> None:
+        assert tracker._current_snapshot() is inner_snapshot  # noqa: SLF001
+
+    def outer_callback() -> None:
+        assert tracker._current_snapshot() is outer_snapshot  # noqa: SLF001
+        tracker._publish_with_snapshot(  # noqa: SLF001
+            inner_snapshot,
+            inner_callback,
+        )
+        assert tracker._current_snapshot() is outer_snapshot  # noqa: SLF001
+
+    tracker._publish_with_snapshot(outer_snapshot, outer_callback)  # noqa: SLF001
+
+    assert tracker._publishing_snapshot is None  # noqa: SLF001
+
+
 def test_engine_validation_stale_count_and_unavailable_paths() -> None:
     with pytest.raises(ValueError, match="active seed"):
         ZoneModelEngine(target_map(), 1, NOW, active_seed={"missing": True})

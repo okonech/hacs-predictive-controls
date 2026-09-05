@@ -39,6 +39,7 @@ from .zone_model.types import (
     TraversalToken,
     ZoneBeliefState,
     ZoneModelResult,
+    ZoneModelSnapshot,
     ZonePolicyState,
 )
 
@@ -134,6 +135,7 @@ class OccupancyTracker:
             requested if requested > PRODUCT_MAX_OCCUPANTS else None
         )
         self._engine: ZoneModelEngine | None = None
+        self._publishing_snapshot: ZoneModelSnapshot | None = None
         self._predictions = TargetPredictionManager(predictive_map)
         self._legacy_seed: LegacySchema6Seed | None = None
         self._v2_seed: LegacyV2Seed | None = None
@@ -147,7 +149,7 @@ class OccupancyTracker:
 
     @property
     def states(self) -> dict[str, ZoneState]:
-        snapshot = None if self._engine is None else self._engine.snapshot
+        snapshot = self._current_snapshot()
         beliefs = (
             {}
             if snapshot is None
@@ -174,7 +176,7 @@ class OccupancyTracker:
             return {}
         return {
             state.zone: state.probability
-            for state in self._engine.snapshot.belief_states
+            for state in cast(ZoneModelSnapshot, self._current_snapshot()).belief_states
         }
 
     @property
@@ -183,19 +185,22 @@ class OccupancyTracker:
 
         if self._engine is None:
             return {}
-        return {state.zone: state for state in self._engine.snapshot.policy_states}
+        snapshot = cast(ZoneModelSnapshot, self._current_snapshot())
+        return {state.zone: state for state in snapshot.policy_states}
 
     @property
     def episode_states(self) -> tuple[EpisodeState, ...]:
         """Return current physical episodes without materializing retained audit."""
 
-        return () if self._engine is None else self._engine.snapshot.episode_states
+        snapshot = self._current_snapshot()
+        return () if snapshot is None else snapshot.episode_states
 
     @property
     def traversal_tokens(self) -> tuple[TraversalToken, ...]:
         """Return current traversal tokens without materializing retained audit."""
 
-        return () if self._engine is None else self._engine.snapshot.traversal_tokens
+        snapshot = self._current_snapshot()
+        return () if snapshot is None else snapshot.traversal_tokens
 
     @property
     def authorizations(self) -> tuple[TraversalAuthorization, ...]:
@@ -233,7 +238,7 @@ class OccupancyTracker:
 
     @property
     def diagnostics(self) -> TrackerDiagnostics:
-        snapshot = None if self._engine is None else self._engine.snapshot
+        snapshot = self._current_snapshot()
         beliefs = (
             {}
             if snapshot is None
@@ -329,7 +334,7 @@ class OccupancyTracker:
     def state_for_zone(self, zone: str) -> ZoneState:
         if self._engine is None or zone not in self._map.zones():
             return ZoneState(zone=zone)
-        snapshot = self._engine.snapshot
+        snapshot = cast(ZoneModelSnapshot, self._current_snapshot())
         belief = next(
             (item for item in snapshot.belief_states if item.zone == zone), None
         )
@@ -570,9 +575,19 @@ class OccupancyTracker:
             self._predictions = self._engine.prediction_manager
         return self._engine
 
+    def _current_snapshot(self) -> ZoneModelSnapshot | None:
+        if self._publishing_snapshot is not None:
+            return self._publishing_snapshot
+        return None if self._engine is None else self._engine.snapshot
+
     def commit_prediction_learning(self) -> None:
         if self._engine is not None:
             self._engine.commit_prediction_learning()
+
+    def publish_current_projection(self, callback: Callable[[], None]) -> None:
+        """Publish one synchronous update against a coherent model snapshot."""
+
+        self._publish_with_snapshot(self._current_snapshot(), callback)
 
     def _record_result(
         self, result: ZoneModelResult, *, defer_learning: bool = False
@@ -597,9 +612,10 @@ class OccupancyTracker:
         """Install coherent edge metadata before scheduling the entity write."""
 
         engine = cast(ZoneModelEngine, self._engine)
+        snapshot = engine.snapshot
         self._last_result = ZoneModelResult(
             "publishing",
-            engine.snapshot,
+            snapshot,
             (event,),
             (decision,),
             () if authorization is None else (authorization,),
@@ -607,7 +623,19 @@ class OccupancyTracker:
         self._policy_reason_by_zone[decision.zone] = decision.reason
         if decision.active_after and not decision.active_before:
             self._active_since_by_zone[decision.zone] = decision.event_at
-        callback()
+        self._publish_with_snapshot(snapshot, callback)
+
+    def _publish_with_snapshot(
+        self,
+        snapshot: ZoneModelSnapshot | None,
+        callback: Callable[[], None],
+    ) -> None:
+        previous_snapshot = self._publishing_snapshot
+        self._publishing_snapshot = snapshot
+        try:
+            callback()
+        finally:
+            self._publishing_snapshot = previous_snapshot
 
     def _rebuild_policy_projection_cache(self) -> None:
         """Build small public projection indexes outside the event hot path."""
