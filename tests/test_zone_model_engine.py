@@ -11,6 +11,8 @@ from custom_components.predictive_controls.model import PredictiveMap
 from custom_components.predictive_controls.zone_model.engine import ZoneModelEngine
 from custom_components.predictive_controls.zone_model.types import (
     CountInput,
+    EpisodeEffect,
+    EpisodeState,
     SensorInput,
 )
 
@@ -58,6 +60,140 @@ def presence_target_map() -> PredictiveMap:
             }
         }
     )
+
+
+def same_zone_presence_map() -> PredictiveMap:
+    return PredictiveMap.from_mapping(
+        {
+            "nodes": {
+                "first": {
+                    "zone": "room",
+                    "role": "anchor_sensor",
+                    "occupancy_behavior": "sticky",
+                    "entities": {"presence": "binary_sensor.first"},
+                },
+                "second": {
+                    "zone": "room",
+                    "role": "anchor_sensor",
+                    "occupancy_behavior": "sticky",
+                    "entities": {"presence": "binary_sensor.second"},
+                },
+            }
+        }
+    )
+
+
+def cleared_source(
+    engine: ZoneModelEngine,
+    node_id: str,
+    *,
+    started_at: datetime = NOW,
+    cleared_at: datetime = NOW + timedelta(seconds=2),
+    stable_clear_at: datetime = NOW + timedelta(seconds=12),
+) -> tuple[EpisodeState, EpisodeEffect]:
+    state = next(
+        item for item in engine.snapshot.episode_states if item.node_id == node_id
+    )
+    episode_id = state.episode_id or f"{node_id}:1:{started_at.isoformat()}"
+    return (
+        replace(
+            state,
+            alias_states=((f"binary_sensor.{node_id}", "off"),),
+            generation=max(1, state.generation),
+            episode_id=episode_id,
+            status="clear",
+            started_at=started_at,
+            last_event_at=cleared_at,
+            advanced_at=stable_clear_at,
+            clear_started_at=None,
+            clear_deadline=None,
+            traversal_valid_until=None,
+            clear_emitted=True,
+        ),
+        EpisodeEffect(
+            node_id,
+            "room",
+            episode_id,
+            "stable_clear",
+            stable_clear_at,
+        ),
+    )
+
+
+def test_confirmed_departure_requires_a_current_belief_generation() -> None:
+    engine = ZoneModelEngine(same_zone_presence_map(), 1, NOW)
+    source, effect = cleared_source(engine, "first")
+
+    with pytest.raises(AssertionError):
+        engine._register_confirmed_departure(source, effect)  # noqa: SLF001
+
+    belief = engine.snapshot.belief_states[0]
+    assert belief.generation_episode_id is None
+    assert belief.context == "cleared_without_outward"
+
+
+def test_confirmed_departure_rejects_noninteraction_generation() -> None:
+    engine = ZoneModelEngine(same_zone_presence_map(), 1, NOW)
+    engine.observe(
+        SensorInput("binary_sensor.second", "on", NOW + timedelta(seconds=1))
+    )
+    engine.observe(
+        SensorInput("binary_sensor.second", "off", NOW + timedelta(seconds=2))
+    )
+    engine.advance(NOW + timedelta(seconds=12))
+    source, effect = cleared_source(
+        engine,
+        "first",
+        stable_clear_at=NOW + timedelta(seconds=13),
+    )
+
+    engine._register_confirmed_departure(source, effect)  # noqa: SLF001
+
+    belief = engine.snapshot.belief_states[0]
+    second = next(
+        state for state in engine.snapshot.episode_states if state.node_id == "second"
+    )
+    assert belief.generation_episode_id == second.episode_id
+    assert belief.context == "cleared_without_outward"
+
+
+def test_confirmed_departure_rejects_another_asserted_same_zone_stay() -> None:
+    engine = ZoneModelEngine(same_zone_presence_map(), 1, NOW)
+    engine.observe(
+        SensorInput("binary_sensor.second", "on", NOW + timedelta(seconds=1))
+    )
+    engine.observe(
+        SensorInput("binary_sensor.first", "on", NOW + timedelta(seconds=2))
+    )
+    first = next(
+        state for state in engine.snapshot.episode_states if state.node_id == "first"
+    )
+    assert first.episode_id is not None
+    engine._filters["room"].apply_stable_clear(  # noqa: SLF001
+        first.episode_id,
+        NOW + timedelta(seconds=12),
+        1.0,
+    )
+    source = replace(
+        first,
+        alias_states=(("binary_sensor.first", "off"),),
+        status="clear",
+        last_event_at=NOW + timedelta(seconds=3),
+        advanced_at=NOW + timedelta(seconds=12),
+        traversal_valid_until=None,
+        clear_emitted=True,
+    )
+    effect = EpisodeEffect(
+        "first",
+        "room",
+        first.episode_id,
+        "stable_clear",
+        NOW + timedelta(seconds=12),
+    )
+
+    engine._register_confirmed_departure(source, effect)  # noqa: SLF001
+
+    assert engine.snapshot.belief_states[0].context == "cleared_without_outward"
 
 
 def correlated_arrival_incident_map() -> PredictiveMap:
@@ -116,123 +252,6 @@ def restore_incident_closet_belief(
         engine.audit_rows,
         at,
     )
-
-
-def test_inc_2026_08_28_authorized_correlated_closet_acquires_before_sleep_off(
-) -> None:
-    predictive_map = correlated_arrival_incident_map()
-    engine = ZoneModelEngine(
-        predictive_map,
-        2,
-        datetime(2026, 8, 28, 15, 45, 6, 906293, tzinfo=UTC),
-    )
-    for entity_id, state, event_at, reliability in (
-        (
-            "binary_sensor.closet",
-            "on",
-            datetime(2026, 8, 28, 15, 45, 6, 906293, tzinfo=UTC),
-            0.8,
-        ),
-        (
-            "binary_sensor.closet",
-            "off",
-            datetime(2026, 8, 28, 15, 46, 48, 88053, tzinfo=UTC),
-            0.8,
-        ),
-    ):
-        engine.observe(SensorInput(entity_id, state, event_at, reliability))
-    engine.advance(datetime(2026, 8, 28, 15, 46, 58, 88053, tzinfo=UTC))
-    for entity_id, event_at, reliability in (
-        (
-            "binary_sensor.bottom",
-            datetime(2026, 8, 28, 15, 47, 34, 3613, tzinfo=UTC),
-            0.8,
-        ),
-        (
-            "binary_sensor.hall",
-            datetime(2026, 8, 28, 15, 47, 37, 229584, tzinfo=UTC),
-            0.85,
-        ),
-        (
-            "binary_sensor.entrance",
-            datetime(2026, 8, 28, 15, 47, 56, 450011, tzinfo=UTC),
-            0.8,
-        ),
-    ):
-        engine.observe(SensorInput(entity_id, "on", event_at, reliability))
-
-    target_at = datetime(2026, 8, 28, 15, 48, 0, 349791, tzinfo=UTC)
-    engine = restore_incident_closet_belief(engine, predictive_map, target_at)
-    supports_before = engine.snapshot.anonymous_supports
-    leases_before = engine.prediction_manager.leases
-
-    result = engine.observe(
-        SensorInput("binary_sensor.closet", "on", target_at, 0.8)
-    )
-
-    episode = next(
-        state
-        for state in result.snapshot.episode_states
-        if state.node_id == "closet"
-    )
-    belief = next(
-        state for state in result.snapshot.belief_states if state.zone == "closet"
-    )
-    policy = next(
-        state for state in result.snapshot.policy_states if state.zone == "closet"
-    )
-    authorization = next(
-        item
-        for item in result.authorizations
-        if item.target_episode_id == episode.episode_id
-    )
-    arrival_transitions = tuple(
-        item
-        for item in belief.contributions
-        if item.kind == "arrival_transition" and item.episode_id == episode.episode_id
-    )
-
-    assert result.disposition == "accepted_correlated_positive"
-    assert episode.cadence_correlated
-    assert not episode.health_warning
-    assert authorization.authorized
-    assert authorization.reason == "adjacent_authorized"
-    assert len(arrival_transitions) == 1
-    post_local_log_odds = belief.log_odds - arrival_transitions[0].log_odds_delta
-    post_local_probability = 1.0 / (1.0 + math.exp(-post_local_log_odds))
-    assert post_local_probability == pytest.approx(0.676195601951254, abs=1e-12)
-    assert belief.probability == pytest.approx(0.7838097800975627, abs=1e-12)
-    assert policy.active
-    assert [(event.zone, event.kind) for event in result.policy_events] == [
-        ("closet", "acquired")
-    ]
-    assert all(
-        token.episode_id != episode.episode_id
-        for token in result.snapshot.traversal_tokens
-    )
-    assert all(
-        candidate.episode_id != episode.episode_id
-        for candidate in result.snapshot.pending_candidates
-    )
-    assert result.snapshot.anonymous_supports == supports_before
-    assert engine.prediction_manager.leases == leases_before
-    assert not any(event.kind == "refreshed" for event in result.policy_events)
-
-    engine.observe(
-        SensorInput(
-            "binary_sensor.closet",
-            "off",
-            datetime(2026, 8, 28, 15, 48, 51, 681142, tzinfo=UTC),
-            0.8,
-        )
-    )
-    sleep_off = engine.advance(
-        datetime(2026, 8, 28, 15, 49, 16, 794454, tzinfo=UTC)
-    )
-    closet = next(
-        state for state in sleep_off.snapshot.policy_states if state.zone == "closet"
-    )
-    assert closet.active
 
 
 def test_unauthorized_correlated_target_does_not_apply_arrival_transition() -> None:
@@ -1339,70 +1358,6 @@ def test_correlated_flap_after_hardware_hold_is_ignored_and_audited() -> None:
         for decision in flap.policy_decisions
     )
     assert flap.snapshot.traversal_tokens == ()
-
-
-def test_inc_2026_08_23_shaila_office_sustained_flapping_stays_below_on_threshold(
-) -> None:
-    entity_id = "binary_sensor.target"
-    predictive_map = PredictiveMap.from_mapping(
-        {
-            "nodes": {
-                "target": {
-                    "role": "room_occupancy",
-                    "occupancy_behavior": "sticky",
-                    "entities": {"mmwave": entity_id},
-                    "initial_weight": 0.75,
-                }
-            }
-        }
-    )
-    engine = ZoneModelEngine(
-        predictive_map,
-        1,
-        datetime.fromisoformat("2026-08-22T12:12:00.312303+00:00"),
-    )
-    retained_history = (
-        ("2026-08-22T12:12:00.312303+00:00", "on"),
-        ("2026-08-22T12:13:21.696150+00:00", "off"),
-        ("2026-08-22T12:15:14.321496+00:00", "on"),
-        ("2026-08-22T12:15:47.199246+00:00", "off"),
-        ("2026-08-22T12:17:35.825838+00:00", "on"),
-        ("2026-08-22T12:18:32.255483+00:00", "off"),
-        ("2026-08-22T12:20:32.331074+00:00", "on"),
-        ("2026-08-22T12:21:36.262743+00:00", "off"),
-        ("2026-08-22T12:21:58.835773+00:00", "on"),
-        ("2026-08-22T12:22:40.214191+00:00", "off"),
-        ("2026-08-22T12:23:20.335658+00:00", "on"),
-        ("2026-08-22T12:23:55.716778+00:00", "off"),
-        ("2026-08-22T12:25:13.843043+00:00", "on"),
-        ("2026-08-22T12:26:04.772062+00:00", "off"),
-        ("2026-08-22T12:31:54.352277+00:00", "on"),
-        ("2026-08-22T12:32:29.233070+00:00", "off"),
-        ("2026-08-22T12:33:43.857402+00:00", "on"),
-        ("2026-08-22T12:34:34.286213+00:00", "off"),
-    )
-
-    result = None
-    for timestamp, state in retained_history:
-        result = engine.observe(
-            SensorInput(
-                entity_id,
-                state,
-                datetime.fromisoformat(timestamp),
-                reliability=0.75,
-            )
-        )
-
-    assert result is not None
-    target_belief = next(
-        belief for belief in result.snapshot.belief_states if belief.zone == "target"
-    )
-    target_policy = next(
-        policy for policy in result.snapshot.policy_states if policy.zone == "target"
-    )
-    assert target_belief.probability < 0.70
-    assert not target_policy.active
-    assert result.policy_events == ()
 
 
 def test_engine_rejects_ambiguous_behavior_or_mixed_profile_zones() -> None:

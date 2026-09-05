@@ -283,6 +283,67 @@ def test_confirmed_stay_creates_one_settled_support_and_survives_token_expiry() 
     assert support_tracker.bindings == ()
 
 
+def test_low_belief_settled_endpoint_survives_only_without_outward_context() -> None:
+    support_tracker, hall, hall_token, room, room_token = seeded_support()
+    clear_at = NOW + timedelta(minutes=3)
+    clear_room = replace(
+        room,
+        status="clear",
+        alias_states=(("binary_sensor.room", "off"),),
+        last_event_at=clear_at,
+        advanced_at=clear_at,
+        traversal_valid_until=None,
+    )
+    low_probability = 0.2
+    low_belief = replace(
+        belief(room),
+        log_odds=math.log(low_probability / (1.0 - low_probability)),
+        last_updated_at=clear_at,
+        context="cleared_without_outward",
+        asserted_episode_id=None,
+    )
+
+    support_tracker.advance(
+        clear_at,
+        (hall, clear_room),
+        (belief(hall), low_belief),
+        (),
+        (),
+    )
+
+    assert support_tracker.supports
+    exact_target = episode(
+        "room",
+        profile_name="stay_presence",
+        at=clear_at + timedelta(seconds=1),
+    )
+    other_target = episode(
+        "room2",
+        profile_name="stay_presence",
+        at=clear_at + timedelta(seconds=1),
+    )
+    assert support_tracker.settled_endpoint_for(exact_target) is not None
+    assert support_tracker.settled_endpoint_for(other_target) is None
+    assert (
+        support_tracker.settled_endpoint_for(
+            replace(exact_target, status="unavailable")
+        )
+        is None
+    )
+
+    outward_belief = replace(low_belief, context="cleared_with_outward")
+    support_tracker.advance(
+        clear_at + timedelta(seconds=1),
+        (hall, clear_room),
+        (belief(hall), outward_belief),
+        (),
+        (),
+    )
+    assert support_tracker.supports == ()
+    assert support_tracker.latest_transition is not None
+    assert support_tracker.latest_transition.reason == "outward_clear"
+
+
 def test_support_tracker_rejects_invalid_construction_restore_and_frontiers() -> None:
     predictive_map = support_map()
     build = build_physical_nodes(predictive_map)

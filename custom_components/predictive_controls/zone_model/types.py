@@ -74,6 +74,7 @@ ACTIVE_EVIDENCE_REASONS = frozenset(
         "prediction_confirmed",
         "provisional_track_acquired",
         "same_zone_authorized",
+        "settled_endpoint_reacquired",
         "track_confirmed",
     }
 )

@@ -11,6 +11,7 @@ from ..model import PredictiveMap
 from .filter import ZoneBeliefFilter
 from .profiles import SHARED_PROFILES
 from .types import (
+    AnonymousOccupancySupport,
     AuthorizationUse,
     CountState,
     EpisodeEffect,
@@ -342,6 +343,7 @@ class TraversalFrontier:
         *,
         count: CountState | None,
         corroborating_states: Sequence[EpisodeState] = (),
+        settled_support: AnonymousOccupancySupport | None = None,
     ) -> TraversalAuthorization:
         self.advance(at)
         target_node = self._validated_episode(target)
@@ -374,12 +376,15 @@ class TraversalFrontier:
             remember_pending=True,
             fallback_reason="track_bootstrap_pending",
             source_states=source_states,
+            settled_support=settled_support,
         )
 
     def authorize_correlated_target(
         self,
         target: EpisodeState,
         at: datetime,
+        *,
+        settled_support: AnonymousOccupancySupport | None = None,
     ) -> TraversalAuthorization:
         """Authorize correlated target evidence without creating source authority."""
 
@@ -412,6 +417,7 @@ class TraversalFrontier:
             remember_pending=False,
             fallback_reason="untracked_rejected",
             source_states={},
+            settled_support=settled_support,
         )
 
     def _authorize_from_context(
@@ -424,6 +430,7 @@ class TraversalFrontier:
         remember_pending: bool,
         fallback_reason: str,
         source_states: Mapping[tuple[str, str], EpisodeState],
+        settled_support: AnonymousOccupancySupport | None,
     ) -> TraversalAuthorization:
         assert target.episode_id is not None
         target_episode_id = target.episode_id
@@ -520,6 +527,17 @@ class TraversalFrontier:
             confidence, path = self._advance_path(source, target.node_id)
             reason = "missed_edge_authorized"
             provenance = "missed_edge"
+        elif settled_support is not None:
+            if (
+                settled_support.state != "settled"
+                or settled_support.current_node_id != target.node_id
+                or settled_support.current_zone != target.zone
+            ):
+                raise ValueError("Settled endpoint does not match traversal target")
+            reason = "settled_endpoint_reacquired"
+            confidence = "confirmed"
+            path = settled_support.path_node_ids
+            provenance = "settled_endpoint"
         elif (pending := self._pending_support(target, at)) is not None:
             self._pending_by_zone.pop(pending.zone, None)
             if pending.zone == target.zone:
@@ -674,6 +692,118 @@ class TraversalFrontier:
             else "provisional"
         )
         return confidence, sequence
+
+    def confirmed_departure_token(
+        self,
+        source: EpisodeState,
+        at: datetime,
+    ) -> TraversalToken | None:
+        """Return a bounded confirmed path that began before source clear."""
+
+        self.validate_time(at)
+        if self._advanced_at != at:
+            raise ValueError("Departure lookup requires an advanced frontier")
+        if (
+            source.status != "clear"
+            or source.started_at is None
+            or source.last_event_at is None
+            or source.last_event_at < source.started_at
+        ):
+            return None
+
+        tokens = tuple(self._tokens.values())
+        matches: list[TraversalToken] = []
+        for final in tokens:
+            path = final.path_node_ids
+            if (
+                final.track_confidence != "confirmed"
+                or final.provenance_kind != "adjacent"
+                or len(path) != 3
+                or len(set(path)) != 3
+                or source.node_id in path
+                or final.valid_until <= at
+                or final.accepted_at > source.last_event_at
+                or path[0] not in self._map.neighbors(source.node_id)
+            ):
+                continue
+            middle_tokens = tuple(
+                token
+                for token in tokens
+                if token.node_id == path[1]
+                and token.path_node_ids == path[:2]
+                and token.track_confidence == "provisional"
+                and token.provenance_kind == "adjacent_pair"
+                and source.started_at <= token.accepted_at <= final.accepted_at
+                and (
+                    use := self._uses.get((token.token_id, final.episode_id))
+                )
+                is not None
+                and use.reason == "track_confirmed"
+                and use.authorized_at == final.accepted_at
+            )
+            if not middle_tokens:
+                continue
+            if any(
+                first.node_id == path[0]
+                and first.zone != source.zone
+                and first.path_node_ids == path[:1]
+                and first.track_confidence == "provisional"
+                and first.provenance_kind == "adjacent_pair"
+                and source.started_at
+                <= first.accepted_at
+                <= middle.accepted_at
+                and (
+                    use := self._uses.get((first.token_id, middle.episode_id))
+                )
+                is not None
+                and use.reason == "provisional_track_acquired"
+                and use.authorized_at == middle.accepted_at
+                for middle in middle_tokens
+                for first in tokens
+            ):
+                matches.append(final)
+        return min(
+            matches,
+            key=lambda token: (token.accepted_at, token.token_id),
+            default=None,
+        )
+
+    def same_zone_predecessor_for_outward(
+        self,
+        authorization: TraversalAuthorization,
+        generation: EpisodeState,
+        at: datetime,
+    ) -> TraversalToken | None:
+        """Prove that an outward target consumed a generation predecessor."""
+
+        self.validate_time(at)
+        if self._advanced_at != at:
+            raise ValueError("Outward lineage lookup requires an advanced frontier")
+        if (
+            not authorization.authorized
+            or authorization.authorized_at != at
+            or authorization.target_zone == generation.zone
+            or generation.episode_id is None
+            or generation.started_at is None
+            or generation.started_at > at
+            or generation.status not in {"asserted", "clearing"}
+            or generation.health_warning
+            or generation.cadence_warning
+        ):
+            return None
+        matches = tuple(
+            token
+            for token in authorization.source_tokens
+            if token.token_id in self._tokens
+            and token.zone == generation.zone
+            and (
+                use := self._uses.get((token.token_id, generation.episode_id))
+            )
+            is not None
+            and use.reason == "same_zone_authorized"
+            and use.authorized_at == generation.started_at
+        )
+        return matches[0] if len(matches) == 1 else None
 
     @staticmethod
     def _unique_tokens(tokens: Sequence[TraversalToken]) -> tuple[TraversalToken, ...]:

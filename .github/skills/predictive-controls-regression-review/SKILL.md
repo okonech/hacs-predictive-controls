@@ -42,20 +42,39 @@ production behavior before Gates 1-5 are complete.
 5. **Capture and prove the failure.** Add the smallest public regression using
    retained production event times, material order, physical map, sensor
    states/settings, count, belief, traversal, policy state, and expected public
-   edge or diagnostic contract. Run it against unchanged controlling behavior;
-   it must fail for the diagnosed reason. Freeze its factual inputs and public
+   edge or diagnostic contract. Every reported issue receives exactly one
+   separately named, self-contained incident file at
+   `tests/incidents/test_inc_YYYY_MM_DD_<symptom>.py`, containing the matching
+   primary `test_inc_YYYY_MM_DD_<symptom>` replay. Do not put a reported-incident
+   replay in a shared test module, and do not combine separate reports in one
+   file even when one generic fix resolves both. Run the new file against
+   unchanged controlling behavior; it must fail for the reported public outcome
+   and diagnosed reason. Freeze its factual inputs, event ordering, and public
    expectations after proof, and record the command and observed failure
-   signature in the implementation spec before production edits.
+   signature in the implementation spec before production edits. An older
+   similar file, an internal-only assertion, or a passing test against current
+   code is not proof of the newly reported failure. If the current code cannot
+   reproduce the report, stop implementation, keep the issue unresolved, and
+   improve evidence or diagnostics instead of changing behavior speculatively.
 6. **Implement the hardened specification.** Use
    `.github/skills/spec-implementation-tracking/SKILL.md`; keep exactly one phase
    in progress and update validated evidence and the next executable step. Make
    the smallest generic fix and avoid room-, entity-, person-, or
    incident-specific logic.
-7. **Validate from narrow to broad.** Immediately rerun the exact regression
-   after the first production edit, then the nearest inverse and boundary tests,
-   touched-file lint, complete retained incident corpus, full coverage, Ruff,
-   mypy, frontend, applicable benchmark, and diff/reference gates. Record each
-   completed gate in the implementation spec.
+7. **Validate from narrow to broad.** Immediately rerun the exact incident file
+   after the first production edit, then the nearest inverse and boundary tests
+   and touched-file lint. After the final code change, run the complete retained
+   `test_inc_` scenario corpus, the full coverage suite with
+   `.venv/bin/pytest -q`, all frontend tests with `npm run test:frontend`, Ruff,
+   mypy, frontend build when applicable, benchmark, and diff/reference gates.
+   Focused tests, the incident corpus, the full Python suite, and frontend tests
+   are distinct gates and do not replace one another. Record each command and
+   result in the implementation spec.
+   The corpus gate is always the explicit command
+   `.venv/bin/pytest --no-cov -q tests -k 'test_inc_'`, run after the final code
+   change. It is mandatory for every coded solution and cannot be inferred from
+   selected tests or replaced by a focused or full-suite run. Any skipped or
+   failing scenario blocks completion.
 8. **Reconcile authority and hand off.** Update the appropriate normative
    requirements and Section 19 implementation-conformance snapshot in
    `SPECIFICATION.md`, plus directly conflicting current-state documentation.
@@ -86,9 +105,14 @@ Before diagnosis, record:
    assumption; and
 10. the cheapest trace value or test that would disprove the leading hypothesis.
 
-Use `INC-YYYY-MM-DD-short-symptom` for the temporary working spec when an
-incident identity helps implementation tracking. Preserve that identity in the
-retained regression test when useful.
+The evidence record must be sufficient to replay the material sequence in event
+time and processing order. Do not collapse separate user reports into one test:
+each report keeps its own incident identity and exact scenario even when the
+implementation is shared.
+
+Use `INC-YYYY-MM-DD-short-symptom` for the temporary working spec and preserve
+that identity in the required retained
+`tests/incidents/test_inc_YYYY_MM_DD_<symptom>.py` file and matching test.
 Live Home Assistant diagnosis is read-only through approved deployment scripts.
 
 ## Controlling Layers
@@ -174,10 +198,11 @@ Low raw sensor confidence or a timer alone is not an equivalent release model.
 
 ## Validation Expectations
 
-Preserve the exact regression test and run the nearest discriminating inverse or
-boundary cases while editing. Before handoff, run the complete retained incident
-corpus, adversarial matrix, full Python coverage, Ruff, mypy, frontend,
+Preserve every report's exact regression test and run the nearest discriminating
+inverse or boundary cases while editing. Before handoff, run the complete
+retained `test_inc_` corpus, adversarial matrix, full Python coverage, Ruff, mypy, frontend,
 applicable 100-event benchmarks, and diff/reference checks. The final report must
 name the evidence provenance, diagnosed cause, working-spec deletion, retained
-regression-test path, red/green result, validation results, canonical
+regression-test path, per-report red/green result, complete incident-corpus
+result, validation results, canonical
 specification update, and remaining deployment work.

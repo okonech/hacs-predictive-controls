@@ -466,6 +466,7 @@ class ZoneModelEngine:
                 if (
                     authorization.authorized
                     and effect.kind in {"interaction", "positive"}
+                    and authorization.reason != "settled_endpoint_reacquired"
                 ):
                     source_authorizations.append(authorization)
             final_effect = applied_effect
@@ -501,6 +502,10 @@ class ZoneModelEngine:
             None
             if final_effect is not None
             and final_effect.kind == "correlated_positive"
+            and (
+                final_authorization is None
+                or final_authorization.reason != "settled_endpoint_reacquired"
+            )
             else final_effect
         )
         support_authorization = (
@@ -770,12 +775,14 @@ class ZoneModelEngine:
             token = self._frontier.issue(state, effect, authorization)
             return authorization, effect, token
         if effect.kind == "positive":
+            settled_support = self._supports.settled_endpoint_for(state)
             filter_.apply_positive(effect.episode_id, effect.at, effect.reliability)
             authorization = self._frontier.authorize(
                 state,
                 effect.at,
                 count=self._count.state,
                 corroborating_states=self._episodes.states,
+                settled_support=settled_support,
             )
             if authorization.authorized:
                 filter_.apply_arrival_transition(effect.episode_id, effect.at)
@@ -788,8 +795,14 @@ class ZoneModelEngine:
                 effect.at,
                 state.traversal_valid_until,
             )
+            self._register_generation_outward(
+                authorization,
+                state,
+                effect.at,
+            )
             return authorization, effect, token
         if effect.kind == "correlated_positive":
+            settled_support = self._supports.settled_endpoint_for(state)
             filter_.apply_correlated_positive(
                 effect.episode_id,
                 effect.at,
@@ -798,6 +811,7 @@ class ZoneModelEngine:
             authorization = self._frontier.authorize_correlated_target(
                 state,
                 effect.at,
+                settled_support=settled_support,
             )
             if authorization.authorized:
                 filter_.apply_arrival_transition(effect.episode_id, effect.at)
@@ -822,6 +836,7 @@ class ZoneModelEngine:
                 filter_.apply_stable_clear(
                     effect.episode_id, effect.at, effect.reliability
                 )
+            self._register_confirmed_departure(state, effect)
         elif effect.kind == "health_degraded":
             filter_.apply_health_degraded(effect.episode_id, effect.at)
             self._apply_warning_effect(effect)
@@ -831,6 +846,128 @@ class ZoneModelEngine:
             self._apply_warning_effect(effect)
         self._frontier.sync(state, effect.at)
         return None, effect, None
+
+    def _register_generation_outward(
+        self,
+        authorization: TraversalAuthorization,
+        target: EpisodeState,
+        at: datetime,
+    ) -> None:
+        nodes = {node.node_id: node for node in self._nodes}
+        for source_filter in self._filters.values():
+            generation_episode_id = source_filter.state.generation_episode_id
+            if generation_episode_id is None or source_filter.state.health_warning:
+                continue
+            generation = next(
+                (
+                    episode
+                    for episode in self._episodes.states
+                    if episode.episode_id == generation_episode_id
+                ),
+                None,
+            )
+            if generation is None or any(
+                episode.episode_id != generation_episode_id
+                and episode.zone == generation.zone
+                and not nodes[episode.node_id].interaction_aliases
+                and SHARED_PROFILES[episode.profile_name].role == "stay"
+                and episode.status in {"asserted", "clearing"}
+                and not episode.health_warning
+                and not episode.cadence_warning
+                for episode in self._episodes.states
+            ):
+                continue
+            predecessor = self._frontier.same_zone_predecessor_for_outward(
+                authorization,
+                generation,
+                at,
+            )
+            if predecessor is None:
+                continue
+            valid_until = max(
+                predecessor.valid_until,
+                predecessor.valid_until
+                if target.traversal_valid_until is None
+                else target.traversal_valid_until,
+            )
+            source_filter.register_outward(
+                generation_episode_id,
+                valid_until,
+                at,
+            )
+
+    def _register_confirmed_departure(
+        self,
+        source: EpisodeState,
+        effect: EpisodeEffect,
+    ) -> None:
+        source_node = next(
+            node for node in self._nodes if node.node_id == source.node_id
+        )
+        source_filter = self._filters[source.zone]
+        if (
+            source.status != "clear"
+            or source.episode_id != effect.episode_id
+            or source.started_at is None
+            or source.last_event_at is None
+            or source_node.interaction_aliases
+            or SHARED_PROFILES[source.profile_name].role != "stay"
+            or source.health_warning
+            or source.cadence_warning
+            or source_filter.state.context != "cleared_without_outward"
+        ):
+            return
+
+        generation_episode_id = source_filter.state.generation_episode_id
+        assert generation_episode_id is not None
+        generation = next(
+            (
+                state
+                for state in self._episodes.states
+                if state.episode_id == generation_episode_id
+            ),
+            None,
+        )
+        assert generation is not None
+        assert generation.zone == source.zone
+        nodes = {node.node_id: node for node in self._nodes}
+        if generation.episode_id != source.episode_id:
+            generation_node = nodes[generation.node_id]
+            if (
+                not generation_node.interaction_aliases
+                or generation.started_at is None
+                or not source.started_at
+                <= generation.started_at
+                <= source.last_event_at
+                or generation.health_warning
+                or generation.cadence_warning
+                or not any(
+                    contribution.kind == "local_interaction"
+                    and contribution.episode_id == generation.episode_id
+                    for contribution in source_filter.state.contributions
+                )
+            ):
+                return
+
+        if any(
+            state.node_id != source.node_id
+            and state.zone == source.zone
+            and not nodes[state.node_id].interaction_aliases
+            and SHARED_PROFILES[state.profile_name].role == "stay"
+            and state.status in {"asserted", "clearing"}
+            and not state.health_warning
+            and not state.cadence_warning
+            for state in self._episodes.states
+        ):
+            return
+
+        token = self._frontier.confirmed_departure_token(source, effect.at)
+        if token is not None:
+            source_filter.register_outward(
+                generation.episode_id or "",
+                token.valid_until,
+                effect.at,
+            )
 
     def _apply_warning_effect(self, effect: EpisodeEffect) -> None:
         reason = effect.warning_reason
@@ -1410,6 +1547,7 @@ class ZoneModelEngine:
                     "prediction_confirmed": "prediction_confirmation",
                     "provisional_track_acquired": "adjacent_pair",
                     "same_zone_authorized": "same_zone",
+                    "settled_endpoint_reacquired": "settled_endpoint",
                     "track_confirmed": "adjacent",
                 }[policy.activation_reason]
                 source_states = tuple(
@@ -1427,6 +1565,7 @@ class ZoneModelEngine:
                     "boundary_authorized",
                     "local_interaction",
                     "prediction_confirmed",
+                    "settled_endpoint_reacquired",
                 }
                 if interaction_episode != (
                     policy.activation_reason == "local_interaction"
@@ -1492,6 +1631,13 @@ class ZoneModelEngine:
                             or source_states
                         )
                     )
+                    or (
+                        policy.activation_reason == "settled_endpoint_reacquired"
+                        and (
+                            policy.activation_track_confidence != "confirmed"
+                            or source_states
+                        )
+                    )
                 ):
                     raise ValueError(
                         "Evidence-active policy is not bound to its acquisition episode"
@@ -1525,6 +1671,7 @@ class ZoneModelEngine:
             "local_interaction",
             "missed_edge",
             "same_zone",
+            "settled_endpoint",
         }
         tokens = {token.token_id: token for token in snapshot.traversal_tokens}
         retained_tokens = {
@@ -1750,7 +1897,6 @@ class ZoneModelEngine:
             ):
                 raise ValueError("Interaction support provenance is incompatible")
             if support.state == "settled":
-                calibration = POLICY_CALIBRATIONS[node.profile_name]
                 if (
                     SHARED_PROFILES[node.profile_name].role != "stay"
                     or state.status not in {"asserted", "clearing", "clear"}
@@ -1761,7 +1907,10 @@ class ZoneModelEngine:
                     or state.health_warning
                     or state.cadence_warning
                     or belief.health_warning
-                    or belief.probability < calibration.on_threshold
+                    or (
+                        state.status == "clear"
+                        and belief.context == "cleared_with_outward"
+                    )
                 ):
                     raise ValueError("Settled anonymous support is incompatible")
                 continue

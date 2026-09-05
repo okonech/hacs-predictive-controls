@@ -21,6 +21,13 @@ Before changing behavior in a matched file:
    `docs/spec/` working specification, completed exactly three
    adversarial hardening passes, and proved the exact regression fails for the
    diagnosed reason.
+   Every reported issue gets exactly one separately named, self-contained file
+   at `tests/incidents/test_inc_YYYY_MM_DD_<symptom>.py`. That file contains the
+   matching primary `test_inc_YYYY_MM_DD_<symptom>` replay of its material
+   production sequence; do not place the incident replay in a shared test
+   module. An older similar incident file never substitutes for the new report.
+   If unchanged code does not reproduce the reported failure, stop before
+   implementation and improve evidence or diagnostics.
 4. Implement from the hardened specification using
    `.github/skills/spec-implementation-tracking/SKILL.md`; keep its phase status,
    validated evidence, and next executable step current.
@@ -29,10 +36,24 @@ Before changing behavior in a matched file:
    whenever root cause remains unclear.
 6. After the first production edit, immediately rerun the exact regression. Then
    run the nearest inverse/boundary tests and touched-file lint before broadening.
-7. Before handoff, run the complete applicable pytest/coverage, repository mypy,
-   frontend, benchmark, and diff gates; update the governing requirements plus
-   Section 19 in `SPECIFICATION.md`, retain the exact regression test as the
-   permanent incident artifact, and delete the completed working spec.
+7. After the final Predictive Controls code change, run the complete Python suite
+   with `.venv/bin/pytest -q` and all frontend tests with
+   `npm run test:frontend`; focused tests never replace either full-suite run.
+   Before handoff, also run repository mypy, frontend build when applicable,
+   benchmark, and diff gates, including one explicit run of the entire retained
+   `test_inc_` scenario corpus. Update the governing requirements plus Section 19
+   in `SPECIFICATION.md`, retain every report's exact incident file as the
+   permanent artifact, and delete the completed working spec.
+
+For every Predictive Controls code change, the full Python and frontend test
+suites are blocking validation gates. Run `.venv/bin/pytest -q` and
+`npm run test:frontend` after the final code change. For every coded incident
+solution, the full retained incident corpus is an additional blocking gate. Run
+`.venv/bin/pytest --no-cov -q tests -k 'test_inc_'` after the final code change
+and before the full-suite handoff. Focused tests, selected incident tests, the
+incident corpus, the full Python suite, and frontend tests are distinct required
+runs and do not replace one another. Do not report the solution complete when a
+command was skipped or any test failed.
 
 Do not add room/entity/person-specific model logic, count timer callbacks as
 independent evidence, let prediction or policy feed zone belief, normalize

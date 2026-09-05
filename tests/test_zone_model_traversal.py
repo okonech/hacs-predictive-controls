@@ -16,6 +16,7 @@ from custom_components.predictive_controls.zone_model.profiles import (
 )
 from custom_components.predictive_controls.zone_model.traversal import TraversalFrontier
 from custom_components.predictive_controls.zone_model.types import (
+    AnonymousOccupancySupport,
     AuthorizationUse,
     CountState,
     EpisodeEffect,
@@ -168,12 +169,142 @@ def issue(frontier: TraversalFrontier, state: EpisodeState) -> TraversalToken:
     return frontier.issue(state, effect, authorization)
 
 
+def confirmed_departure_frontier() -> tuple[
+    TraversalFrontier,
+    EpisodeState,
+    datetime,
+]:
+    frontier = TraversalFrontier(graph(), NODES)
+    hall = episode("hall", "hall", "transition_fast", NOW)
+    assert not frontier.authorize(hall, NOW, count=None).authorized
+
+    middle_at = NOW + timedelta(seconds=1)
+    middle = episode("middle", "middle", "transition_fast", middle_at)
+    middle_authorization = frontier.authorize(middle, middle_at, count=None)
+    frontier.issue(
+        middle,
+        EpisodeEffect(
+            "middle",
+            "middle",
+            middle.episode_id or "",
+            "positive",
+            middle_at,
+        ),
+        middle_authorization,
+    )
+
+    remote_at = NOW + timedelta(seconds=2)
+    remote = episode(
+        "remote",
+        "remote",
+        "stay_pir",
+        remote_at,
+        valid_for=timedelta(seconds=90),
+    )
+    remote_authorization = frontier.authorize(remote, remote_at, count=None)
+    frontier.issue(
+        remote,
+        EpisodeEffect(
+            "remote",
+            "remote",
+            remote.episode_id or "",
+            "positive",
+            remote_at,
+        ),
+        remote_authorization,
+    )
+
+    stable_clear_at = NOW + timedelta(seconds=8)
+    frontier.advance(stable_clear_at)
+    source = EpisodeState(
+        "room_a",
+        "room_a",
+        "stay_pir",
+        (("binary_sensor.room_a", "off"),),
+        generation=1,
+        episode_id="room_a:1:source",
+        status="clear",
+        started_at=NOW - timedelta(minutes=1),
+        last_event_at=NOW + timedelta(seconds=3),
+        advanced_at=stable_clear_at,
+        clear_emitted=True,
+    )
+    return frontier, source, stable_clear_at
+
+
 def test_interaction_authorization_requires_a_fresh_clearing_pulse() -> None:
     frontier = TraversalFrontier(graph(), NODES)
     asserted = episode("room_a", "room_a", "stay_pir", NOW)
 
     with pytest.raises(ValueError, match="requires a fresh pulse"):
         frontier.authorize_interaction(asserted, NOW)
+
+
+def test_confirmed_departure_lookup_requires_advanced_valid_clear() -> None:
+    frontier = TraversalFrontier(graph(), NODES)
+    source = episode("room_a", "room_a", "stay_pir", NOW, status="clear")
+
+    with pytest.raises(ValueError, match="requires an advanced frontier"):
+        frontier.confirmed_departure_token(source, NOW)
+
+    frontier.advance(NOW)
+    assert (
+        frontier.confirmed_departure_token(
+            replace(source, started_at=None),
+            NOW,
+        )
+        is None
+    )
+    assert frontier.confirmed_departure_token(source, NOW) is None
+
+
+def test_confirmed_departure_lookup_requires_exact_authorization_chain() -> None:
+    frontier, source, stable_clear_at = confirmed_departure_frontier()
+
+    match = frontier.confirmed_departure_token(source, stable_clear_at)
+
+    assert match is not None
+    assert match.path_node_ids == ("hall", "middle", "remote")
+
+    for removed_reason in {"provisional_track_acquired", "track_confirmed"}:
+        restored = TraversalFrontier(graph(), NODES)
+        restored.restore_snapshot(
+            frontier.tokens,
+            frontier.current_token_ids,
+            tuple(use for use in frontier.uses if use.reason != removed_reason),
+            stable_clear_at,
+        )
+        assert restored.confirmed_departure_token(source, stable_clear_at) is None
+
+
+def test_confirmed_departure_lookup_rejects_timing_and_adjacency_inverses() -> None:
+    frontier, source, stable_clear_at = confirmed_departure_frontier()
+
+    assert (
+        frontier.confirmed_departure_token(
+            replace(source, started_at=NOW + timedelta(microseconds=1)),
+            stable_clear_at,
+        )
+        is None
+    )
+    assert (
+        frontier.confirmed_departure_token(
+            replace(source, last_event_at=NOW + timedelta(seconds=1)),
+            stable_clear_at,
+        )
+        is None
+    )
+    assert (
+        frontier.confirmed_departure_token(
+            replace(source, node_id="isolated", zone="isolated"),
+            stable_clear_at,
+        )
+        is None
+    )
+
+    final_expiry = max(token.valid_until for token in frontier.tokens)
+    frontier.advance(final_expiry)
+    assert frontier.confirmed_departure_token(source, final_expiry) is None
 
 
 def test_one_open_transition_authorizes_distinct_targets_once_each() -> None:
@@ -740,6 +871,149 @@ def test_authorization_registers_outward_context_for_each_source_zone() -> None:
     )
     assert (
         frontier.apply_outward_context(rejected, {}, NOW + timedelta(seconds=3)) == ()
+    )
+
+
+def test_settled_endpoint_authorizes_only_its_exact_target_without_source_use() -> None:
+    frontier = TraversalFrontier(graph(), NODES)
+    support = AnonymousOccupancySupport(
+        "support:room_a",
+        "settled",
+        NOW,
+        NOW,
+        "room_a:prior",
+        "room_a",
+        "room_a",
+        ("hall", "room_a"),
+        "adjacent",
+        None,
+        "settled",
+    )
+    target_at = NOW + timedelta(seconds=1)
+    target = episode("room_a", "room_a", "stay_pir", target_at)
+
+    authorized = frontier.authorize(
+        target,
+        target_at,
+        count=None,
+        settled_support=support,
+    )
+
+    assert authorized.authorized
+    assert authorized.reason == "settled_endpoint_reacquired"
+    assert authorized.source_tokens == ()
+    assert authorized.new_uses == ()
+    assert frontier.uses == ()
+    different = episode(
+        "room_b",
+        "room_b",
+        "stay_pir",
+        target_at + timedelta(seconds=1),
+    )
+    with pytest.raises(ValueError, match="does not match traversal target"):
+        frontier.authorize(
+            different,
+            different.started_at or target_at,
+            count=None,
+            settled_support=support,
+        )
+
+
+def test_same_zone_predecessor_lookup_requires_exact_live_use_row() -> None:
+    predecessor_state = episode(
+        "room_a",
+        "room_a",
+        "stay_pir",
+        NOW,
+        valid_for=timedelta(seconds=90),
+    )
+    predecessor = TraversalToken(
+        f"room_a:{predecessor_state.episode_id}",
+        "room_a",
+        "room_a",
+        "stay",
+        "stay_pir",
+        predecessor_state.episode_id or "",
+        NOW,
+        predecessor_state.traversal_valid_until or NOW,
+        "provisional",
+        ("room_a",),
+        "same_zone",
+    )
+    generation_at = NOW + timedelta(seconds=1)
+    generation = episode(
+        "room_a_presence",
+        "room_a",
+        "stay_presence",
+        generation_at,
+    )
+    use = AuthorizationUse(
+        predecessor.token_id,
+        generation.episode_id or "",
+        "same_zone_authorized",
+        generation_at,
+    )
+    outward_at = NOW + timedelta(seconds=2)
+    outward = episode("hall", "hall", "transition_fast", outward_at)
+    authorization = TraversalAuthorization(
+        outward.node_id,
+        outward.zone,
+        outward.episode_id or "",
+        outward_at,
+        True,
+        "adjacent_authorized",
+        (predecessor,),
+        track_confidence="provisional",
+        path_node_ids=("room_a", "hall"),
+        provenance_kind="adjacent",
+    )
+    unadvanced = TraversalFrontier(graph(), NODES)
+    with pytest.raises(ValueError, match="requires an advanced frontier"):
+        unadvanced.same_zone_predecessor_for_outward(
+            authorization,
+            generation,
+            outward_at,
+        )
+    frontier = TraversalFrontier(graph(), NODES)
+    frontier.restore_snapshot((predecessor,), (), (use,), outward_at)
+
+    assert (
+        frontier.same_zone_predecessor_for_outward(
+            authorization,
+            generation,
+            outward_at,
+        )
+        == predecessor
+    )
+
+    mismatched = TraversalFrontier(graph(), NODES)
+    mismatched.restore_snapshot(
+        (predecessor,),
+        (),
+        (replace(use, reason="adjacent_authorized"),),
+        outward_at,
+    )
+    assert (
+        mismatched.same_zone_predecessor_for_outward(
+            authorization,
+            generation,
+            outward_at,
+        )
+        is None
+    )
+
+    frontier.advance(predecessor.valid_until)
+    expired_authorization = replace(
+        authorization,
+        authorized_at=predecessor.valid_until,
+    )
+    assert (
+        frontier.same_zone_predecessor_for_outward(
+            expired_authorization,
+            generation,
+            predecessor.valid_until,
+        )
+        is None
     )
 
 

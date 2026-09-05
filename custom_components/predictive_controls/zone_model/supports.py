@@ -75,6 +75,28 @@ class AnonymousSupportTracker:
     def support_limit(self) -> int:
         return self._support_limit
 
+    def settled_endpoint_for(
+        self,
+        target: EpisodeState,
+    ) -> AnonymousOccupancySupport | None:
+        """Return one retained settled endpoint matching a trustworthy target."""
+
+        if (
+            target.status != "asserted"
+            or target.episode_id is None
+            or target.health_warning
+            or target.cadence_warning
+        ):
+            return None
+        matches = tuple(
+            support
+            for support in self._supports
+            if support.state == "settled"
+            and support.current_node_id == target.node_id
+            and support.current_zone == target.zone
+        )
+        return matches[0] if len(matches) == 1 else None
+
     @property
     def counters(self) -> dict[str, int]:
         return dict(self._counters)
@@ -114,13 +136,27 @@ class AnonymousSupportTracker:
             active_tokens,
             retained_tokens,
         )
-        if effect is not None and effect.kind in {"interaction", "positive"}:
+        reacquiring_settled_endpoint = bool(
+            effect is not None
+            and authorization is not None
+            and authorization.authorized
+            and authorization.reason == "settled_endpoint_reacquired"
+        )
+        if effect is not None and (
+            effect.kind in {"interaction", "positive"}
+            or (
+                effect.kind == "correlated_positive"
+                and reacquiring_settled_endpoint
+            )
+        ):
             next_state = self._rebind_settled_endpoint(
                 next_state,
                 effect,
                 issued_target_token,
                 at,
             )
+        if reacquiring_settled_endpoint:
+            return self._commit(next_state, at)
         if (
             effect is None
             or effect.kind not in {"interaction", "positive"}
@@ -355,6 +391,7 @@ class AnonymousSupportTracker:
                 state_by_node,
                 belief_by_zone,
                 allow_episode_rebind=True,
+                require_active_belief=False,
             ):
                 remove_reason = self._settled_removal_reason(
                     support,
@@ -421,6 +458,7 @@ class AnonymousSupportTracker:
         belief_by_zone: Mapping[str, ZoneBeliefState],
         *,
         allow_episode_rebind: bool = False,
+        require_active_belief: bool = True,
     ) -> bool:
         node = self._nodes.get(support.current_node_id)
         state = state_by_node.get(support.current_node_id)
@@ -446,8 +484,11 @@ class AnonymousSupportTracker:
                     and belief.context != "cleared_with_outward"
                 )
             )
-            and belief.probability
-            >= POLICY_CALIBRATIONS[node.profile_name].on_threshold
+            and (
+                not require_active_belief
+                or belief.probability
+                >= POLICY_CALIBRATIONS[node.profile_name].on_threshold
+            )
         )
 
     def _settled_removal_reason(
