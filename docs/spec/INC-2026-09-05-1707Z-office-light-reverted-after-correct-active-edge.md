@@ -153,10 +153,10 @@ probe and must not override intentional manual off without an explicit contract.
 
 ## Tracking
 
-| Phase | Status | Completed evidence | Next executable step |
-| --- | --- | --- | --- |
-| External-cause classification artifact | Complete | Exact focused command passed both positive-count cases with one acquisition, no release, and retained office active state. | None. |
-| External evidence | Blocked | Correct active edge, successful turn-on trace, context-free device-originated off report, no competing trace or Central Scene event, and disabled current auto-off/presence/protection settings verified live. | Capture node 282 Z-Wave command/value traffic if the failure recurs. |
+| Phase                                  | Status   | Completed evidence                                                                                                                                                                                             | Next executable step                                                 |
+| -------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| External-cause classification artifact | Complete | Exact focused command passed both positive-count cases with one acquisition, no release, and retained office active state.                                                                                     | None.                                                                |
+| External evidence                      | Blocked  | Correct active edge, successful turn-on trace, context-free device-originated off report, no competing trace or Central Scene event, and disabled current auto-off/presence/protection settings verified live. | Capture node 282 Z-Wave command/value traffic if the failure recurs. |
 
 ## Acceptance Gates
 
