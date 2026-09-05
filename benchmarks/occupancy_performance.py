@@ -982,6 +982,8 @@ def main() -> None:
         print(rendered, end="")
     else:
         args.output.write_text(rendered)
+        if not result["passed"]:
+            print(rendered, end="", file=sys.stderr)
     if not result["passed"]:
         raise SystemExit(1)
 

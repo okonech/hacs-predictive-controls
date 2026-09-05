@@ -1246,7 +1246,11 @@ assignment graph.
   blocking I/O, persistence, audit materialization, or learning update may
   precede that decision and schedule.
 - **REQ-PERF-002:** Routine benchmark validation uses 100 events. Every benchmark
-  entry point hard-rejects more than 1,000 requested events.
+  entry point hard-rejects more than 1,000 requested events. A standalone CLI
+  invocation with an output path writes the complete JSON result there. If that
+  result fails any gate, the invocation also emits the identical report to
+  stderr before exiting nonzero; a passing file-output invocation remains
+  silent.
 - **REQ-PERF-003:** Per-event work is bounded by configured nodes, local graph
   degree, active traversal tokens, and fixed audit limits; it must not enumerate
   whole-home occupant assignments.
@@ -1394,7 +1398,8 @@ This section is the maintained current-state index for the implementation. It is
 descriptive evidence of conformance, not a second source of requirements. The
 numbered requirements above remain authoritative if a summary here is incomplete.
 
-**Last conformance review:** 2026-09-05, after episode snapshot invariant repair
+**Last conformance review:** 2026-09-05, after episode snapshot invariant and
+benchmark failure-diagnostics repairs
 **Repository version:** `0.2.6`
 **Home Assistant Store version:** `7`
 **Current inference schema:** `zone-belief-v4`
@@ -1413,7 +1418,7 @@ numbered requirements above remain authoritative if a summary here is incomplete
 | Persistence and migration | Atomic v4 persistence; strict whole-snapshot restore with episode clear-marker validation and legacy committed-outward shape normalization; conservative v3 and v2 import; deferred schema-6 active seed; immutable accepted-v3 rollback backup                                                                                                             | `zone_model/persistence.py`, `zone_model/filter.py`, `storage.py`, `occupancy_tracker.py` |
 | Diagnostics and UI        | Bounded policy audit, beliefs, episodes, health, traversal, supports, conflicts, predictions, warning occurrence history/current projection, lifecycle counters, WebSocket status, and panels                                                                                                                                                               | `zone_model/policy.py`, `status.py`, `sensor.py`, `websocket.py`, `frontend/panel.js`     |
 | Runtime integration       | State and physical-interaction event normalization, authoritative count, deterministic timer advancement, edge-gated publication, delayed persistence, and final save                                                                                                                                                                                       | `runtime.py`, `occupancy_tracker.py`, `__init__.py`                                       |
-| Validation                | Retained public incidents and target fixtures, 696 Python tests at 100% branch coverage, Ruff, strict mypy, 30 frontend tests/build, explicit 24-test incident corpus, and passing bounded 100-event benchmark                                                                                                                                              | `tests/`, `benchmarks/occupancy_performance.py`                                           |
+| Validation                | Retained public incidents and target fixtures, 698 Python tests at 100% branch coverage, Ruff, strict mypy, 30 frontend tests/build, explicit 26-test incident corpus, a failed-result CLI contract that preserves file output and exposes the same report on stderr, and a passing bounded 100-event benchmark                                             | `tests/`, `benchmarks/occupancy_performance.py`                                           |
 
 The current implementation includes the retained 2026-08-20 office false-release
 repair: loss of a selected outside support clears an already-degraded count
