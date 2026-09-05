@@ -8,7 +8,7 @@ from custom_components.predictive_controls.zone_model.types import SensorInput
 
 
 @pytest.mark.target_model
-def test_inc_2026_08_23_shaila_office_sustained_flapping_stays_below_on_threshold(
+def test_inc_2026_08_22_1212z_shaila_office_sustained_flapping_stays_below_on_threshold(
 ) -> None:
     entity_id = "binary_sensor.target"
     predictive_map = PredictiveMap.from_mapping(

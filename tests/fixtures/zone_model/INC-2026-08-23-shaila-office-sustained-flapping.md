@@ -81,7 +81,7 @@ The exact screenshot excerpt retained by the regression is:
 
 ## Retained regression
 
-`tests/test_zone_model_engine.py::test_inc_2026_08_23_shaila_office_sustained_flapping_stays_below_on_threshold`
+`tests/incidents/test_inc_2026_08_22_1212z_shaila_office_sustained_flapping_stays_below_on_threshold.py::test_inc_2026_08_22_1212z_shaila_office_sustained_flapping_stays_below_on_threshold`
 
 The timestamps, states, `stay_presence` profile, node reliability `0.75`, and
 isolated target-belief expectation are immutable production evidence. Synthetic

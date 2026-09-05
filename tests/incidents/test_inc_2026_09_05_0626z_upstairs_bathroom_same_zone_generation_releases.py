@@ -18,7 +18,7 @@ def _at(value: str) -> datetime:
 
 @pytest.mark.target_model
 @pytest.mark.parametrize("authoritative_count", (1, 2))
-def test_inc_2026_09_05_upstairs_bathroom_same_zone_generation_releases(
+def test_inc_2026_09_05_0626z_upstairs_bathroom_same_zone_generation_releases(
     authoritative_count: int,
 ) -> None:
     hall_first_at = _at("2026-09-05T06:26:40.995428Z")

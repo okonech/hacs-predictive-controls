@@ -48,7 +48,7 @@ The public and operational outcomes are:
 The retained production record is
 `tests/fixtures/zone_model/INC-2026-08-23-shaila-office-sustained-flapping.md`.
 The immutable public regression is
-`tests/test_zone_model_engine.py::test_inc_2026_08_23_shaila_office_sustained_flapping_stays_below_on_threshold`.
+`tests/incidents/test_inc_2026_08_22_1212z_shaila_office_sustained_flapping_stays_below_on_threshold.py::test_inc_2026_08_22_1212z_shaila_office_sustained_flapping_stays_below_on_threshold`.
 Against unchanged code, its nine `on` generations drive isolated target belief
 to `0.9970341715801893`; the required assertion is `< 0.70`.
 

@@ -11,7 +11,7 @@ from custom_components.predictive_controls.zone_model.types import (
 
 
 @pytest.mark.target_model
-def test_inc_2026_08_22_prearrival_token_cannot_release_asserted_target() -> None:
+def test_inc_2026_08_22_1745z_prearrival_token_cannot_release_asserted_target() -> None:
     bootstrap_at = datetime(2026, 8, 22, 17, 45, 13, tzinfo=UTC)
     predictive_map = PredictiveMap.from_mapping(
         {

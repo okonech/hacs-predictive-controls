@@ -18,7 +18,7 @@ def _at(value: str) -> datetime:
 
 @pytest.mark.target_model
 @pytest.mark.parametrize("authoritative_count", (1, 2))
-def test_inc_2026_09_05_confirmed_track_before_source_clear_marks_outward(
+def test_inc_2026_09_05_0530z_confirmed_track_before_source_clear_marks_outward(
     authoritative_count: int,
 ) -> None:
     source_on_at = _at("2026-09-05T05:30:12.426589Z")

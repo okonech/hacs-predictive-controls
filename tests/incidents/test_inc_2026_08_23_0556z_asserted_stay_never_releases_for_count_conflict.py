@@ -55,7 +55,7 @@ def conflict_map(
 
 
 @pytest.mark.target_model
-def test_inc_2026_08_23_asserted_stay_never_releases_for_count_conflict() -> None:
+def test_inc_2026_08_23_0556z_asserted_stay_never_releases_for_count_conflict() -> None:
     target_on_at = datetime(2026, 8, 23, 5, 56, 40, 122876, tzinfo=UTC)
     conflict_started_at = datetime(2026, 8, 23, 5, 56, 43, 75447, tzinfo=UTC)
     conflict_deadline = datetime(2026, 8, 23, 5, 58, 43, 75447, tzinfo=UTC)

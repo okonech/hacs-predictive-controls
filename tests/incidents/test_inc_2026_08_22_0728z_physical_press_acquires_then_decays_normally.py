@@ -9,7 +9,7 @@ from custom_components.predictive_controls.zone_model.types import SensorInput
 
 
 @pytest.mark.target_model
-def test_inc_2026_08_22_physical_press_acquires_then_decays_normally() -> None:
+def test_inc_2026_08_22_0728z_physical_press_acquires_then_decays_normally() -> None:
     press_at = datetime(2026, 8, 22, 7, 28, 36, 46000, tzinfo=UTC)
     predictive_map = PredictiveMap.from_mapping(
         {

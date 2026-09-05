@@ -1,6 +1,6 @@
 ---
 name: Predictive Controls Model Governance
-description: "Use when changing Predictive Controls observations, zone belief, traversal, count, policy, prediction, persistence, profiles, thresholds, benchmarks, or regression tests."
+description: "Use when investigating or changing Predictive Controls observations, zone belief, traversal, count, policy, prediction, persistence, profiles, thresholds, benchmarks, or regression tests. This includes every report that a motion-, presence-, occupancy-, or room-sensor-driven light failed to turn on, stay on, turn off, or recover, even when the final controlling layer is automation or external hardware."
 applyTo:
   - "custom_components/predictive_controls/**/*.py"
   - "tests/**/*.py"
@@ -10,6 +10,15 @@ applyTo:
 # Predictive Controls Model Governance
 
 `SPECIFICATION.md` is the sole design authority.
+
+Motion-, presence-, occupancy-, and room-sensor-driven lighting reports are
+Predictive Controls incidents from the outset. Keep their working specification,
+diagnosis, and one separate retained regression per reported symptom in this
+repository. Home Assistant live evidence still comes only from approved
+read-only scripts in the sibling Homelab repository. If the completed review
+assigns the controlling layer to `AUTOMATION` or `EXTERNAL`, keep the incident
+record here and make only the resulting configuration or operational change in
+the owning repository.
 
 Before changing behavior in a matched file:
 
@@ -22,10 +31,14 @@ Before changing behavior in a matched file:
    adversarial hardening passes, and proved the exact regression fails for the
    diagnosed reason.
    Every reported issue gets exactly one separately named, self-contained file
-   at `tests/incidents/test_inc_YYYY_MM_DD_<symptom>.py`. That file contains the
-   matching primary `test_inc_YYYY_MM_DD_<symptom>` replay of its material
-   production sequence; do not place the incident replay in a shared test
-   module. An older similar incident file never substitutes for the new report.
+   at `tests/incidents/test_inc_YYYY_MM_DD_HHMMz_<symptom>.py`, where `HHMMz` is
+   the first material event's UTC minute. That file contains the matching primary
+   `test_inc_YYYY_MM_DD_HHMMz_<symptom>` replay of its material production
+   sequence; do not place the incident replay in a shared test module. If the
+   event minute is unknown, use the report-receipt UTC minute and record that
+   provenance. An older or same-day similar incident file never substitutes for
+   the new report. Existing incident files and primary tests must be renamed to
+   this convention when their retained evidence provides the event minute.
    If unchanged code does not reproduce the reported failure, stop before
    implementation and improve evidence or diagnostics.
 4. Implement from the hardened specification using

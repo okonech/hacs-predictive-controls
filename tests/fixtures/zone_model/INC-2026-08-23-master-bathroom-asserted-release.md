@@ -62,7 +62,7 @@ builds.
 
 ## Retained regression
 
-`tests/test_zone_model_count.py::test_inc_2026_08_23_asserted_stay_never_releases_for_count_conflict`
+`tests/incidents/test_inc_2026_08_23_0556z_asserted_stay_never_releases_for_count_conflict.py::test_inc_2026_08_23_0556z_asserted_stay_never_releases_for_count_conflict`
 
 The immutable public expectation is that the target remains active and emits no
 `released` edge at the retained release frontier while the same raw stay

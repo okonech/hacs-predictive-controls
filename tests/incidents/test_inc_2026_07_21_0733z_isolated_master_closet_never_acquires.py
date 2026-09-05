@@ -8,18 +8,9 @@ from custom_components.predictive_controls.zone_model.types import SensorInput
 
 
 @pytest.mark.target_model
-@pytest.mark.parametrize(
-    "incident_at",
-    (
-        datetime(2026, 7, 21, 6, 22, tzinfo=UTC),
-        datetime(2026, 7, 21, 7, 33, tzinfo=UTC),
-    ),
-    ids=("2026-07-21-02-22-EDT", "2026-07-21-03-33-EDT"),
-)
-def test_inc_2026_07_21_isolated_master_closet_never_acquires(
-    incident_at: datetime,
-) -> None:
-    """Freeze the two retained minute-precision production false activations."""
+def test_inc_2026_07_21_0733z_isolated_master_closet_never_acquires() -> None:
+    """Freeze the 07:33Z production false activation report."""
+    incident_at = datetime(2026, 7, 21, 7, 33, tzinfo=UTC)
     predictive_map = PredictiveMap.from_mapping(
         {
             "nodes": {

@@ -173,6 +173,7 @@ class PhysicalEpisodes:
                     status="unavailable",
                     clear_started_at=None,
                     clear_deadline=None,
+                    clear_emitted=False,
                 )
             state = replace(
                 state,
@@ -223,6 +224,7 @@ class PhysicalEpisodes:
                         if impossible
                         else state.cadence_warning_reason
                     ),
+                    clear_emitted=False,
                 )
                 assert state.episode_id is not None
                 if impossible:

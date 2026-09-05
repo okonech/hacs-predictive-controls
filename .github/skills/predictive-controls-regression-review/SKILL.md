@@ -1,6 +1,6 @@
 ---
 name: predictive-controls-regression-review
-description: "Use for any reported Predictive Controls bug, incorrect behavior, production incident, false activation, false release, stale active state, missed activation, wrong probability, traversal defect, warning defect, or incident-derived fix. Requires live evidence as available, root-cause diagnosis, a temporary working spec hardened by exactly three adversarial passes, exact retained regression proof, tracked implementation, full validation, final SPECIFICATION.md reconciliation, and working-spec deletion."
+description: "Use for any reported Predictive Controls bug, incorrect behavior, production incident, false activation, false release, stale active state, missed activation, wrong probability, traversal defect, warning defect, or incident-derived fix. This explicitly includes reports that a motion-, presence-, occupancy-, or room-sensor-driven light failed to turn on, stay on, turn off, or recover, even if diagnosis later assigns the controlling layer to automation or external hardware. Requires live evidence as available, root-cause diagnosis, a temporary working spec hardened by exactly three adversarial passes, one separately retained regression per report, tracked implementation, full validation, final SPECIFICATION.md reconciliation, and working-spec deletion."
 argument-hint: "Describe the incident, wrong public behavior, or proposed model/profile change"
 ---
 
@@ -9,6 +9,13 @@ argument-hint: "Describe the incident, wrong public behavior, or proposed model/
 ## Required Sources
 
 Read `SPECIFICATION.md`. It is the only product and model authority.
+
+Every motion-, presence-, occupancy-, or room-sensor-driven lighting report is
+owned by this incident workflow from intake through layer classification. Keep
+the working specification and one separate retained regression per report in
+this repository. Use the sibling Homelab repository only for approved read-only
+Home Assistant evidence and for any downstream automation or deployment change
+assigned by the completed review.
 
 ## Mandatory Incident Workflow
 
@@ -44,10 +51,14 @@ production behavior before Gates 1-5 are complete.
    states/settings, count, belief, traversal, policy state, and expected public
    edge or diagnostic contract. Every reported issue receives exactly one
    separately named, self-contained incident file at
-   `tests/incidents/test_inc_YYYY_MM_DD_<symptom>.py`, containing the matching
-   primary `test_inc_YYYY_MM_DD_<symptom>` replay. Do not put a reported-incident
-   replay in a shared test module, and do not combine separate reports in one
-   file even when one generic fix resolves both. Run the new file against
+   `tests/incidents/test_inc_YYYY_MM_DD_HHMMz_<symptom>.py`, where `HHMMz` is the
+   first material event's UTC minute, containing the matching primary
+   `test_inc_YYYY_MM_DD_HHMMz_<symptom>` replay. If the event minute is unknown,
+   use the report-receipt UTC minute and record that provenance. Existing files
+   and primary tests must be renamed when their retained evidence provides the
+   event minute. Do not put a reported-incident replay in a shared test module,
+   and do not combine separate reports in one file even when one generic fix
+   resolves both. Run the new file against
    unchanged controlling behavior; it must fail for the reported public outcome
    and diagnosed reason. Freeze its factual inputs, event ordering, and public
    expectations after proof, and record the command and observed failure
@@ -110,9 +121,12 @@ time and processing order. Do not collapse separate user reports into one test:
 each report keeps its own incident identity and exact scenario even when the
 implementation is shared.
 
-Use `INC-YYYY-MM-DD-short-symptom` for the temporary working spec and preserve
-that identity in the required retained
-`tests/incidents/test_inc_YYYY_MM_DD_<symptom>.py` file and matching test.
+Use `INC-YYYY-MM-DD-HHMMZ-short-symptom` for the temporary working spec, where
+`HHMMZ` is the first material event's UTC minute, and preserve that identity in
+the required retained
+`tests/incidents/test_inc_YYYY_MM_DD_HHMMz_<symptom>.py` file and matching test.
+If the event minute is unknown, use the report-receipt UTC minute and state that
+provenance.
 Live Home Assistant diagnosis is read-only through approved deployment scripts.
 
 ## Controlling Layers

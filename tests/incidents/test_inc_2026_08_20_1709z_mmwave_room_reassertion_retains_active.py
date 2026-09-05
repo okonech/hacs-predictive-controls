@@ -8,7 +8,7 @@ from custom_components.predictive_controls.zone_model.types import SensorInput
 
 
 @pytest.mark.target_model
-def test_inc_2026_08_20_mmwave_room_reassertion_retains_active() -> None:
+def test_inc_2026_08_20_1709z_mmwave_room_reassertion_retains_active() -> None:
     incident_at = datetime(2026, 8, 20, 17, 9, 40, tzinfo=UTC)
     predictive_map = PredictiveMap.from_mapping(
         {

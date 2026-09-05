@@ -45,7 +45,7 @@ def event(node: str, zone: str, state: str, at: datetime) -> OccupancyEvent:
 
 
 @pytest.mark.target_model
-def test_inc_2026_08_23_fresh_transition_episode_clears_cadence_warning() -> None:
+def test_inc_2026_08_23_2318z_fresh_transition_episode_clears_cadence_warning() -> None:
     confidence = ZoneConfidenceEngine(target_map(), expected_occupants=1)
     asserted_at = datetime(2026, 8, 23, 23, 18, 9, 318691, tzinfo=UTC)
     cleared_at = datetime(2026, 8, 23, 23, 18, 22, 409960, tzinfo=UTC)

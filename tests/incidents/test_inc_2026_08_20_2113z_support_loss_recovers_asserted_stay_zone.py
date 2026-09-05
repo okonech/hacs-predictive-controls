@@ -51,7 +51,7 @@ def conflict_map(
 
 
 @pytest.mark.target_model
-def test_inc_2026_08_20_support_loss_recovers_asserted_stay_zone() -> None:
+def test_inc_2026_08_20_2113z_support_loss_recovers_asserted_stay_zone() -> None:
     target_on_at = datetime(2026, 8, 20, 21, 13, 22, 395673, tzinfo=UTC)
     conflict_started_at = datetime(2026, 8, 20, 21, 13, 27, 131114, tzinfo=UTC)
     degraded_at = datetime(2026, 8, 20, 21, 15, 27, 764256, tzinfo=UTC)

@@ -90,7 +90,7 @@ class _FakeServices:
 
 
 @pytest.mark.scenario
-def test_inc_2026_08_23_stale_interaction_recovery_does_not_change_occupancy(
+def test_inc_2026_08_23_1909z_stale_interaction_recovery_does_not_change_occupancy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = runtime_module(monkeypatch)

@@ -53,7 +53,9 @@ repository, so the frozen test does not invent or assert them.
 
 ## Retained regression
 
-`tests/test_zone_model_public_contract.py::test_inc_2026_07_21_isolated_master_closet_never_acquires`
+`tests/incidents/test_inc_2026_07_21_0622z_isolated_master_closet_never_acquires.py::test_inc_2026_07_21_0622z_isolated_master_closet_never_acquires`
+and
+`tests/incidents/test_inc_2026_07_21_0733z_isolated_master_closet_never_acquires.py::test_inc_2026_07_21_0733z_isolated_master_closet_never_acquires`
 
 The immutable public assertion is that no closet `acquired` edge occurs, the
 closet remains inactive while both disconnected fronts are current, and the

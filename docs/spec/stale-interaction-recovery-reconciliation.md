@@ -37,7 +37,7 @@ The public outcome is exact:
 The immutable evidence record is
 `tests/fixtures/zone_model/INC-2026-08-23-stale-interaction-recovery.md`.
 The retained public regression is
-`tests/test_runtime.py::test_inc_2026_08_23_stale_interaction_recovery_does_not_change_occupancy`.
+`tests/incidents/test_inc_2026_08_23_1909z_stale_interaction_recovery_does_not_change_occupancy.py::test_inc_2026_08_23_1909z_stale_interaction_recovery_does_not_change_occupancy`.
 It fails against unchanged behavior because Shaila Office falsely becomes
 active.
 
@@ -417,7 +417,7 @@ correctness, rollback, or acceptance gap.
 
 ```bash
 pytest --no-cov -q \
-  tests/test_runtime.py::test_inc_2026_08_23_stale_interaction_recovery_does_not_change_occupancy
+   tests/incidents/test_inc_2026_08_23_1909z_stale_interaction_recovery_does_not_change_occupancy.py::test_inc_2026_08_23_1909z_stale_interaction_recovery_does_not_change_occupancy
 pytest --no-cov -q tests/test_events.py tests/test_runtime.py \
   tests/test_zone_model_engine.py tests/test_zone_model_filter.py \
   tests/test_zone_model_persistence.py

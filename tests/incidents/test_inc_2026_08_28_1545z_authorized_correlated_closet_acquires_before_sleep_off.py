@@ -68,7 +68,7 @@ def restore_incident_closet_belief(
 
 
 @pytest.mark.target_model
-def test_inc_2026_08_28_authorized_correlated_closet_acquires_before_sleep_off(
+def test_inc_2026_08_28_1545z_authorized_correlated_closet_acquires_before_sleep_off(
 ) -> None:
     predictive_map = correlated_arrival_incident_map()
     engine = ZoneModelEngine(

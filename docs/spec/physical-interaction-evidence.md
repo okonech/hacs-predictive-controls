@@ -525,7 +525,7 @@ Required positive and inverse cases:
 
 | Contract                                                                  | Required executable proof                                                                                                                       |
 | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| Exact public incident, finite ceiling, outward and missed-outward release | `test_inc_2026_08_22_physical_press_acquires_then_decays_normally`                                                                              |
+| Exact public incident, finite ceiling, outward and missed-outward release | `test_inc_2026_08_22_0728z_physical_press_acquires_then_decays_normally`                                                                        |
 | Count zero and positive count one/two                                     | `test_physical_press_does_not_bypass_authoritative_count_zero`; `test_interaction_count_two_acquires_without_conflict_delay`                    |
 | Live/startup/health normalization                                         | `test_event_from_entity_normalizes_live_interaction_but_not_startup_state`; `test_runtime_start_does_not_replay_retained_interaction_timestamp` |
 | Physical-only map, isolated aliases, unit reliability                     | `test_interaction_nodes_cannot_mix_state_entities_or_actuator_domains`; `test_interaction_nodes_require_unit_reliability`                       |

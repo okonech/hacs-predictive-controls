@@ -133,6 +133,39 @@ def test_reassertion_after_hardware_hold_but_inside_burst_is_not_impossible() ->
     ]
 
 
+def test_reassertion_after_stable_clear_resets_clear_emitted() -> None:
+    model = episodes()
+    first = model.observe(sensor("binary_sensor.a", "on", 0))
+    model.observe(sensor("binary_sensor.a", "off", 1))
+    model.advance(NOW + timedelta(seconds=6))
+
+    reasserted = model.observe(sensor("binary_sensor.a", "on", 7))
+    restored = episodes()
+    restored.restore_snapshot(model.states)
+
+    assert reasserted.disposition == "correlated_reassertion"
+    assert reasserted.state.episode_id == first.state.episode_id
+    assert reasserted.state.status == "asserted"
+    assert reasserted.state.clear_emitted is False
+    assert restored.states == model.states
+
+
+def test_unavailable_after_stable_clear_resets_clear_emitted() -> None:
+    model = episodes()
+    model.observe(sensor("binary_sensor.a", "on", 0))
+    model.observe(sensor("binary_sensor.a", "off", 16))
+    model.advance(NOW + timedelta(seconds=21))
+
+    unavailable = model.observe(sensor("binary_sensor.a", "unavailable", 22))
+    restored = episodes()
+    restored.restore_snapshot(model.states)
+
+    assert unavailable.disposition == "neutral_availability"
+    assert unavailable.state.status == "unavailable"
+    assert unavailable.state.clear_emitted is False
+    assert restored.states == model.states
+
+
 def test_stay_presence_completed_cycles_link_at_half_open_boundary() -> None:
     linked = episodes(profile="stay_presence")
     first = linked.observe(sensor("binary_sensor.a", "on", 0))
