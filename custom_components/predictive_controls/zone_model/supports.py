@@ -10,6 +10,7 @@ from ..const import PRODUCT_MAX_OCCUPANTS
 from ..model import PredictiveMap
 from .policy import POLICY_CALIBRATIONS
 from .profiles import SHARED_PROFILES
+from .traversal import CORRELATED_CONTINUATION_REASONS
 from .types import (
     AnonymousOccupancySupport,
     CountSupport,
@@ -118,6 +119,25 @@ class AnonymousSupportTracker:
         )
         return self._commit(next_state, at)
 
+    def has_transfer_authority(
+        self,
+        authorization: TraversalAuthorization,
+    ) -> bool:
+        if (
+            not authorization.authorized
+            or authorization.reason not in CORRELATED_CONTINUATION_REASONS
+            or self._advanced_at != authorization.authorized_at
+        ):
+            return False
+        supports = {item.support_id: item for item in self._supports}
+        bindings = {item.token_id: item.support_id for item in self._bindings}
+        selected_source_ids, _, _ = self._select_source_supports(
+            authorization,
+            supports,
+            bindings,
+        )
+        return bool(selected_source_ids)
+
     def apply(
         self,
         at: datetime,
@@ -157,9 +177,19 @@ class AnonymousSupportTracker:
             )
         if reacquiring_settled_endpoint:
             return self._commit(next_state, at)
+        correlated_continuation = bool(
+            effect is not None
+            and effect.kind == "correlated_positive"
+            and authorization is not None
+            and authorization.authorized
+            and authorization.reason in CORRELATED_CONTINUATION_REASONS
+        )
         if (
             effect is None
-            or effect.kind not in {"interaction", "positive"}
+            or (
+                effect.kind not in {"interaction", "positive"}
+                and not correlated_continuation
+            )
             or authorization is None
             or not authorization.authorized
             or issued_target_token is None
@@ -169,21 +199,11 @@ class AnonymousSupportTracker:
 
         supports = {item.support_id: item for item in next_state.supports}
         bindings = {item.token_id: item.support_id for item in next_state.bindings}
-        source_ids: set[str] = set()
-        ineligible_source_token_ids: set[str] = set()
-        stale_source_token_ids: set[str] = set()
-        path_source_nodes = frozenset(authorization.path_node_ids[:-1])
-        for token in authorization.source_tokens:
-            if token.node_id not in path_source_nodes:
-                ineligible_source_token_ids.add(token.token_id)
-                continue
-            source_id, stale = self._binding_authority(token, supports, bindings)
-            if source_id is not None:
-                source_ids.add(source_id)
-            elif stale:
-                ineligible_source_token_ids.add(token.token_id)
-                stale_source_token_ids.add(token.token_id)
-        selected_source_ids = tuple(sorted(source_ids))
+        (
+            selected_source_ids,
+            ineligible_source_token_ids,
+            stale_source_token_ids,
+        ) = self._select_source_supports(authorization, supports, bindings)
         latest = next_state.latest_transition
         support_id: str | None = None
         if selected_source_ids:
@@ -222,7 +242,8 @@ class AnonymousSupportTracker:
                 selected_source_ids if len(selected_source_ids) > 1 else (),
             )
         elif (
-            len(supports) < self._support_limit
+            effect.kind in {"interaction", "positive"}
+            and len(supports) < self._support_limit
             and self._confirmed_strength(issued_target_token)
             and self._settlement_eligible(issued_target_token, episodes, beliefs)
         ):
@@ -269,6 +290,32 @@ class AnonymousSupportTracker:
             self._transition(supports, bindings, latest),
             at,
             stale_binding_ignored=len(stale_source_token_ids),
+        )
+
+    def _select_source_supports(
+        self,
+        authorization: TraversalAuthorization,
+        supports: Mapping[str, AnonymousOccupancySupport],
+        bindings: Mapping[str, str],
+    ) -> tuple[tuple[str, ...], set[str], set[str]]:
+        source_ids: set[str] = set()
+        ineligible_source_token_ids: set[str] = set()
+        stale_source_token_ids: set[str] = set()
+        path_source_nodes = frozenset(authorization.path_node_ids[:-1])
+        for token in authorization.source_tokens:
+            if token.node_id not in path_source_nodes:
+                ineligible_source_token_ids.add(token.token_id)
+                continue
+            source_id, stale = self._binding_authority(token, supports, bindings)
+            if source_id is not None:
+                source_ids.add(source_id)
+            elif stale:
+                ineligible_source_token_ids.add(token.token_id)
+                stale_source_token_ids.add(token.token_id)
+        return (
+            tuple(sorted(source_ids)),
+            ineligible_source_token_ids,
+            stale_source_token_ids,
         )
 
     def clear(

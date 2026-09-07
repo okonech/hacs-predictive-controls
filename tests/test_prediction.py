@@ -285,9 +285,13 @@ def test_correlated_target_confirms_mature_prediction_without_learning() -> None
     assert policy.phase == "active"
     assert decision.reason == "prediction_confirmed"
     assert not [event for event in result.policy_events if event.zone == "living"]
-    assert all(
-        token.episode_id != living.episode_id
+    assert sum(
+        token.episode_id == living.episode_id
         for token in result.snapshot.traversal_tokens
+    ) == 1
+    assert any(
+        support.current_node_id == living.node_id
+        for support in result.snapshot.anonymous_supports
     )
     engine.commit_prediction_learning()
     assert engine.prediction_manager.chain.counts["kitchen"]["living"] == 5.0

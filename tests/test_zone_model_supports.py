@@ -16,6 +16,7 @@ from custom_components.predictive_controls.zone_model.supports import (
     AnonymousSupportTracker,
 )
 from custom_components.predictive_controls.zone_model.types import (
+    AnonymousOccupancySupport,
     EpisodeEffect,
     EpisodeState,
     OutwardContext,
@@ -708,6 +709,97 @@ def test_support_transfers_to_one_moving_then_settled_endpoint() -> None:
         "support_expired": 0,
         "support_stale_binding_ignored": 0,
     }
+
+
+def test_correlated_continuation_transfers_existing_support_only() -> None:
+    support_tracker, _hall, _hall_token, room, room_token = seeded_support()
+    original_support_id = support_tracker.supports[0].support_id
+    target_at = NOW + timedelta(seconds=3)
+    room2 = episode("room2", profile_name="stay_presence", at=target_at)
+    room2_token = token(room2, target_at, ("room", "hall2", "room2"))
+    target_authorization = authorization(room2_token, (room_token,))
+    states = (room, room2)
+    beliefs = (belief(room), belief(room2))
+    support_tracker.advance(target_at, states, beliefs, (room_token,), ())
+
+    assert support_tracker.has_transfer_authority(target_authorization)
+    support_tracker.apply(
+        target_at,
+        EpisodeEffect(
+            room2.node_id,
+            room2.zone,
+            room2.episode_id or "",
+            "correlated_positive",
+            target_at,
+        ),
+        target_authorization,
+        room2_token,
+        states,
+        beliefs,
+        (room_token, room2_token),
+        (),
+    )
+
+    assert len(support_tracker.supports) == 1
+    assert support_tracker.supports[0].support_id == original_support_id
+    assert support_tracker.supports[0].current_node_id == "room2"
+    assert support_tracker.counters["support_created"] == 1
+
+
+@pytest.mark.parametrize("case", ("unbound", "stale", "off_path"))
+def test_correlated_continuation_without_eligible_source_cannot_create_support(
+    case: str,
+) -> None:
+    expected_supports: tuple[AnonymousOccupancySupport, ...]
+    if case == "unbound":
+        support_tracker = tracker()
+        room = episode("room", profile_name="stay_presence")
+        room_token = token(room, NOW, ("source", "hall", "room"))
+        expected_supports = ()
+    else:
+        support_tracker, _hall, _hall_token, room, room_token = seeded_support()
+        expected_supports = support_tracker.supports
+    target_at = NOW + timedelta(seconds=3)
+    room2 = episode("room2", profile_name="stay_presence", at=target_at)
+    path = (
+        ("hall", "hall2", "room2")
+        if case == "off_path"
+        else ("room", "hall2", "room2")
+    )
+    room2_token = token(room2, target_at, path)
+    source_token = (
+        replace(
+            room_token,
+            accepted_at=room_token.accepted_at - timedelta(microseconds=1),
+        )
+        if case == "stale"
+        else room_token
+    )
+    target_authorization = authorization(room2_token, (source_token,))
+    states = (room, room2)
+    beliefs = (belief(room), belief(room2))
+    support_tracker.advance(target_at, states, beliefs, (source_token,), ())
+
+    assert not support_tracker.has_transfer_authority(target_authorization)
+    support_tracker.apply(
+        target_at,
+        EpisodeEffect(
+            room2.node_id,
+            room2.zone,
+            room2.episode_id or "",
+            "correlated_positive",
+            target_at,
+        ),
+        target_authorization,
+        room2_token,
+        states,
+        beliefs,
+        (source_token, room2_token),
+        (),
+    )
+
+    assert support_tracker.supports == expected_supports
+    assert all(item.current_node_id != "room2" for item in support_tracker.supports)
 
 
 @pytest.mark.parametrize(

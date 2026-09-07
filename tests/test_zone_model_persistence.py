@@ -920,6 +920,40 @@ def test_stale_transfer_authority_is_restart_equivalent() -> None:
     assert retained.updated_at == NOW + timedelta(seconds=3)
 
 
+def test_correlated_support_continuation_is_restart_equivalent() -> None:
+    correlated_incident = import_module(
+        "tests.incidents."
+        "test_inc_2026_09_06_1931z_correlated_intermediate_splits_support_lineage"
+    )
+    predictive_map = correlated_incident.incident_map()
+    engine = correlated_incident.engine_before_correlated_intermediate()
+    correlated_at = datetime.fromisoformat("2026-09-06T19:32:54.617692+00:00")
+    restore_at = correlated_at - timedelta(microseconds=1)
+    engine.advance(restore_at)
+    restored = restore_target_state(
+        predictive_map,
+        serialize_target_state(predictive_map, engine),
+        restore_at,
+    )
+    correlated = SensorInput(
+        "binary_sensor.master_bedroom_closet",
+        "on",
+        correlated_at,
+    )
+
+    uninterrupted_result = engine.observe(correlated)
+    restored_result = restored.observe(correlated)
+
+    assert restored_result.snapshot == uninterrupted_result.snapshot
+    assert restored_result.policy_events == uninterrupted_result.policy_events
+    assert restored_result.policy_decisions == uninterrupted_result.policy_decisions
+    assert restored_result.authorizations == uninterrupted_result.authorizations
+    assert restored.audit_rows == engine.audit_rows
+    assert restored_result.snapshot.anonymous_supports[0].current_node_id == (
+        "master_bedroom_closet"
+    )
+
+
 def test_weak_clear_retained_support_survives_restart() -> None:
     predictive_map = conflict_map()
     engine = engine_with_two_front_conflict()

@@ -599,22 +599,26 @@ candidate used as the first half of an adjacent pair is removed atomically.
   never received authorization has no lineage to reopen and remains
   `correlated_flap_ignored`. The reopened token can authorize only a fresh
   distinct compatible target episode under the normal graph rules.
-- **REQ-TRAV-014:** A fresh-generation `correlated_positive` is target evidence,
-  never source authority. A dedicated target-only path may authorize it from
+- **REQ-TRAV-014:** A fresh-generation `correlated_positive` is target evidence
+  and remains target-only by default. A dedicated path may authorize it from
   distinct trustworthy same-zone, adjacent, boundary, bounded missed-edge, or
   pending-pair physical context, consume an existing compatible pending source,
-  and record bounded source-token uses. It may not remember the target as
-  pending, issue or reopen a target token, apply outward source context, create,
-  move, or renew anonymous support from the target, or make the target a later
-  traversal, prediction, or learning source. The only support mutation allowed
-  is the exact settled-endpoint rebind in `REQ-TRAV-016`; it does not create
-  source authority. An isolated correlated target and positive count alone
-  remain unauthorized. A current cadence warning blocks source authority but not
+  and record bounded source-token uses. It may issue one ordinary finite target
+  token and transfer/coalesce existing anonymous support only when its
+  authorization reason is `adjacent_authorized`, `track_confirmed`, or
+  `missed_edge_authorized` and at least one selected source token occurs before
+  the target on the accepted path with an eligible support binding under
+  `token.accepted_at >= support.updated_at`. The resulting token may authorize a
+  later distinct physical episode under normal graph rules. Correlation alone
+  may not remember the target as pending, apply outward source context, create
+  support, or become a same-event prediction or learning source. If no eligible
+  support-backed source exists, no target token is issued and the current
+  target-only behavior is unchanged. The exact settled-endpoint rebind in
+  `REQ-TRAV-016` remains the only other support mutation. An isolated correlated
+  target and positive count alone remain unauthorized. A current cadence warning
+  blocks ordinary source authority but not this bounded support continuation or
   independently authorized target confirmation; health degradation remains a
   block. Ordinary distinct graph evidence remains valid.
-  The path returns the existing `TraversalAuthorization`, which carries source
-  tokens and uses but no target-token field; the engine's separate issuable-token
-  result is always `None` for this path.
 - **REQ-TRAV-015:** When a trustworthy non-interaction stay episode stably
   clears without a live source token, the engine may commit
   `cleared_with_outward` only from an independently confirmed three-node path
@@ -723,6 +727,9 @@ learning, and a credible settled endpoint may remain after ordinary token expiry
   stale or off-path binding remains bounded lineage and cannot cause target
   rebinding, but may remap to an independently selected coalescence winner to
   preserve referential integrity. A split never clones support.
+  A support-backed `correlated_positive` admitted by `REQ-TRAV-014` uses this
+  same source selection and may transfer/coalesce only the selected existing
+  support set; it can never enter support creation.
   Current front evidence is never counted alongside its derived support, and
   lingering `active` or high belief alone cannot create support.
   Topology-preserving transfer retains identity and conflict dwell;
@@ -774,6 +781,8 @@ learning, and a credible settled endpoint may remain after ordinary token expiry
   endpoint or select it for binding-derived coalescence; linked lineage outside
   the selected target path cannot prove departure either. Remote graph activity
   without an eligible mapped source cannot move, duplicate, or erase it.
+  The support-backed correlated continuation in `REQ-TRAV-014` uses this exact
+  temporal and path predicate and otherwise commits no support mutation.
   Creation, transfer, coalescence, removal, and mapping rewrite are validated and
   committed atomically in event-time order. Cardinality or ambiguity may
   decline/coalesce support but never invent another.
@@ -1040,12 +1049,14 @@ specification change.
 - **REQ-PRED-006:** Prediction evaluation and publication use the same zero-wait
   fast path as direct adjacency. Audit, persistence, and route-statistic updates
   cannot block that path.
-- **REQ-PRED-007:** A `correlated_positive`, its dedicated target-only
-  authorization, and any confirmation of a predicted phase are excluded from
-  prediction-source preparation, pending prediction learning, route-statistic
-  commit, and support application. The evidence may confirm a mature lease
-  already created by a distinct confirmed source, but that outcome teaches
-  nothing and creates no source authority.
+- **REQ-PRED-007:** A `correlated_positive`, its dedicated authorization, and any
+  confirmation of a predicted phase are excluded from prediction-source
+  preparation, pending prediction learning, and route-statistic commit. The
+  evidence may confirm a mature lease already created by a distinct confirmed
+  source, but that outcome teaches nothing. The transfer-only support-backed
+  continuation in `REQ-TRAV-014` may issue traversal authority for a later
+  distinct physical episode; it does not create or renew a prediction lease or
+  learning candidate from the correlated event itself.
 
 ## 13. Persistence and Restart
 
@@ -1335,10 +1346,11 @@ scenarios and adversarial tests demonstrate:
 19. a linked positive immediately before ten minutes is correlated, one exactly
   at ten minutes is full, and a warning starts exactly at three hours only after
   a completed linked cycle, with quiet winning an equal deadline;
-20. an isolated correlated target cannot activate, refresh, create pending,
-  token, support, prediction, or learning state, while distinct valid graph
-  context or an existing mature prediction may confirm genuine target reentry
-  without making it a source;
+20. an isolated or support-unbound correlated target cannot refresh, create
+  pending, token, support, prediction, or learning state, while distinct valid
+  graph context or an existing mature prediction may confirm genuine target
+  reentry; only the transfer-only support-backed exception in `REQ-TRAV-014`
+  may issue a bounded token for later distinct graph use;
 21. count zero and unknown/unavailable reset cadence without synthetic effects,
   nonzero count does not, and active correlated stay release remains vetoed
   through stable-clear confirmation before ordinary full dwell;
@@ -1402,27 +1414,27 @@ This section is the maintained current-state index for the implementation. It is
 descriptive evidence of conformance, not a second source of requirements. The
 numbered requirements above remain authoritative if a summary here is incomplete.
 
-**Last conformance review:** 2026-09-05, after episode snapshot invariant,
-benchmark failure diagnostics, and callback-scoped publication snapshot repairs
+**Last conformance review:** 2026-09-07, after the correlated-intermediate
+support-lineage repair and independent read-only conformance review
 **Repository version:** `0.2.6`
 **Home Assistant Store version:** `7`
 **Current inference schema:** `zone-belief-v4`
 **Known specification divergences:** none
 
-| Layer                     | Implemented contract                                                                                                                                                                                                                                                                                                                                         | Owning implementation                                                                     |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
-| Map and profiles          | Physical aliases, reciprocal adjacency, directed timing overrides including the calibrated kitchen-dining-foyer path, reliability, capability-based shared profile assignment, and unit reliability for conclusive interaction nodes                                                                                                                         | `model.py`, `yaml_config.py`, `zone_model/profiles.py`                                    |
-| Physical evidence         | Bounded sensor and interaction-pulse episodes, alias/flap deduplication, stable clear with writer-valid emitted-state markers, per-alias interaction health invalidation, hardware hold, trust horizons, and cadence health                                                                                                                                  | `zone_model/episodes.py`                                                                  |
-| Zone belief               | Per-zone binary log-odds filtering, reliability-tempered likelihoods, generation-idempotent finite-ceiling interaction evidence, durable committed-outward decay, role/context decay, and supported-arrival transitions                                                                                                                                      | `zone_model/filter.py`, `zone_model/calibration.py`                                       |
-| Traversal and acquisition | Pending bootstrap, immediate local-interaction acquisition, provisional and confirmed anonymous paths, adjacency, same-zone, boundary, clear-anchored bounded missed-edge timing, confirmed-departure and exact-predecessor outward classification, continuity reopening, target-only cadence-correlated arrivals, and exact settled-endpoint reacquisition  | `zone_model/traversal.py`, `zone_model/engine.py`                                         |
-| Anonymous supports        | Bounded moving/settled support state, confirmed creation, no-outward last-known retention, exact-endpoint rebind, causal-frontier and selected-path transfer authority, guarded binding, coalescence, same-zone settlement, and deterministic removal                                                                                                        | `zone_model/supports.py`                                                                  |
-| Count context             | Categorical count zero, positive-count validation, count-conflict dwell, health degradation, traversal closure, asserted-stay release veto, and recovery from immutable support projections                                                                                                                                                                  | `zone_model/count.py`, `zone_model/engine.py`                                             |
-| Policy and public control | Shared 0.70/0.30 hysteresis, profile release dwell, asserted-stay pending-dwell cancellation, one `active` entity per zone, `home_active`, and optional deduplicated arrival events                                                                                                                                                                          | `zone_model/policy.py`, `binary_sensor.py`, `event.py`                                    |
-| Prediction and learning   | Confirmed-route learning, fixed 0.85 maturity threshold, minimum five accepted transitions, and nonrenewing 10-second internal activation leases                                                                                                                                                                                                             | `zone_model/prediction.py`, `markov.py`                                                   |
-| Persistence and migration | Atomic v4 persistence; strict whole-snapshot restore with episode clear-marker validation and legacy committed-outward shape normalization; conservative v3 and v2 import; deferred schema-6 active seed; immutable accepted-v3 rollback backup                                                                                                              | `zone_model/persistence.py`, `zone_model/filter.py`, `storage.py`, `occupancy_tracker.py` |
-| Diagnostics and UI        | Bounded policy audit, beliefs, episodes, health, traversal, supports, conflicts, predictions, warning occurrence history/current projection, lifecycle counters, WebSocket status, and panels                                                                                                                                                                | `zone_model/policy.py`, `status.py`, `sensor.py`, `websocket.py`, `frontend/panel.js`     |
-| Runtime integration       | State and physical-interaction event normalization, authoritative count, deterministic timer advancement, edge-gated publication, one immutable current-state snapshot per synchronous update dispatch, delayed persistence, and final save                                                                                                                  | `runtime.py`, `occupancy_tracker.py`, `__init__.py`                                       |
-| Validation                | Retained public incidents and target fixtures, 701 Python tests at 100% branch coverage, Ruff, strict mypy, 30 frontend tests/build, explicit 27-test incident corpus, a failed-result CLI contract that preserves file output and exposes the same report on stderr, and three passing bounded 100-event benchmarks with cadence p99 `2.616813-2.848891 ms` | `tests/`, `benchmarks/occupancy_performance.py`                                           |
+| Layer                     | Implemented contract                                                                                                                                                                                                                                                                                                                                                                                         | Owning implementation                                                                     |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| Map and profiles          | Physical aliases, reciprocal adjacency, directed timing overrides including the calibrated kitchen-dining-foyer path, reliability, capability-based shared profile assignment, and unit reliability for conclusive interaction nodes                                                                                                                                                                         | `model.py`, `yaml_config.py`, `zone_model/profiles.py`                                    |
+| Physical evidence         | Bounded sensor and interaction-pulse episodes, alias/flap deduplication, stable clear with writer-valid emitted-state markers, per-alias interaction health invalidation, hardware hold, trust horizons, and cadence health                                                                                                                                                                                  | `zone_model/episodes.py`                                                                  |
+| Zone belief               | Per-zone binary log-odds filtering, reliability-tempered likelihoods, generation-idempotent finite-ceiling interaction evidence, durable committed-outward decay, role/context decay, and supported-arrival transitions                                                                                                                                                                                      | `zone_model/filter.py`, `zone_model/calibration.py`                                       |
+| Traversal and acquisition | Pending bootstrap, immediate local-interaction acquisition, provisional and confirmed anonymous paths, adjacency, same-zone, boundary, clear-anchored bounded missed-edge timing, confirmed-departure and exact-predecessor outward classification, continuity reopening, target-only cadence-correlated arrivals with a transfer-only support-backed continuation, and exact settled-endpoint reacquisition | `zone_model/traversal.py`, `zone_model/engine.py`                                         |
+| Anonymous supports        | Bounded moving/settled support state, confirmed creation, no-outward last-known retention, exact-endpoint rebind, causal-frontier and selected-path transfer authority including correlated continuation without creation, guarded binding, coalescence, same-zone settlement, and deterministic removal                                                                                                     | `zone_model/supports.py`                                                                  |
+| Count context             | Categorical count zero, positive-count validation, count-conflict dwell, health degradation, traversal closure, asserted-stay release veto, and recovery from immutable support projections                                                                                                                                                                                                                  | `zone_model/count.py`, `zone_model/engine.py`                                             |
+| Policy and public control | Shared 0.70/0.30 hysteresis, profile release dwell, asserted-stay pending-dwell cancellation, one `active` entity per zone, `home_active`, and optional deduplicated arrival events                                                                                                                                                                                                                          | `zone_model/policy.py`, `binary_sensor.py`, `event.py`                                    |
+| Prediction and learning   | Confirmed-route learning, fixed 0.85 maturity threshold, minimum five accepted transitions, and nonrenewing 10-second internal activation leases                                                                                                                                                                                                                                                             | `zone_model/prediction.py`, `markov.py`                                                   |
+| Persistence and migration | Atomic v4 persistence; strict whole-snapshot restore with episode clear-marker validation and legacy committed-outward shape normalization; conservative v3 and v2 import; deferred schema-6 active seed; immutable accepted-v3 rollback backup                                                                                                                                                              | `zone_model/persistence.py`, `zone_model/filter.py`, `storage.py`, `occupancy_tracker.py` |
+| Diagnostics and UI        | Bounded policy audit, beliefs, episodes, health, traversal, supports, conflicts, predictions, warning occurrence history/current projection, lifecycle counters, WebSocket status, and panels                                                                                                                                                                                                                | `zone_model/policy.py`, `status.py`, `sensor.py`, `websocket.py`, `frontend/panel.js`     |
+| Runtime integration       | State and physical-interaction event normalization, authoritative count, deterministic timer advancement, edge-gated publication, one immutable current-state snapshot per synchronous update dispatch, delayed persistence, and final save                                                                                                                                                                  | `runtime.py`, `occupancy_tracker.py`, `__init__.py`                                       |
+| Validation                | Retained public incidents and target fixtures, 708 Python tests at 100% branch coverage, Ruff, strict mypy, 30 frontend tests/build, explicit 28-test incident corpus, a failed-result CLI contract that preserves file output and exposes the same report on stderr, and passing bounded 100-event benchmarks with cadence-correlated-target p99 `2.702129 ms`                                              | `tests/`, `benchmarks/occupancy_performance.py`                                           |
 
 The current implementation includes the retained 2026-08-20 office false-release
 repair: loss of a selected outside support clears an already-degraded count
@@ -1438,6 +1450,19 @@ on the accepted path. Linked off-path lineage remains bounded but cannot move or
 target-rebind support. Restart, callback failure, coalescence remapping, exact
 expiry, count-conflict inverse, and lifecycle-counter boundaries are retained in
 the target-model regression suites.
+
+The retained 2026-09-06 correlated-intermediate incident establishes that an
+independently graph-authorized `correlated_positive` may carry one existing
+anonymous support through a real intermediate only when a fresh selected
+source-token binding is on the accepted path. The continuation issues one
+ordinary bounded token, transfers/coalesces but never creates support, and may
+serve as graph context for a later distinct episode while remaining excluded
+from same-event prediction and learning. The exact bathroom, closet, entrance,
+top-of-stairs, Shaila Office, and Alex Office timestamps, public count-conflict
+projection, unbound/stale/off-path inverses, token bound, and restart equivalence
+are retained in
+`test_inc_2026_09_06_1931z_correlated_intermediate_splits_support_lineage` and
+the owning target-model suites.
 
 The implementation also includes the retained 2026-08-23 Master Bathroom
 asserted-stay repair. Positive count conflict may health-degrade the current stay
@@ -1468,10 +1493,11 @@ The retained 2026-08-28 master wake-up incident establishes that an independentl
 authorized fresh-generation `correlated_positive` applies the shared supported-
 arrival transition after its reliability-tempered local likelihood and before
 policy in the same update. Isolated correlated targets remain unauthorized, and
-authorized targets remain excluded from target-token, pending, support,
-prediction-source, learning-source, outward-context, and refresh behavior. The
-exact production timestamps, reliability, pre-arrival belief, public acquisition,
-sleep-off retention frontier, and unauthorized inverse are retained in
+authorized targets without eligible fresh on-path support remain excluded from
+target-token and support behavior. Every correlated target remains excluded from
+pending, same-event prediction/learning, outward-context, and refresh behavior.
+The exact production timestamps, reliability, pre-arrival belief, public
+acquisition, sleep-off retention frontier, and unauthorized inverse are retained in
 `test_inc_2026_08_28_1545z_authorized_correlated_closet_acquires_before_sleep_off` and
 `test_unauthorized_correlated_target_does_not_apply_arrival_transition`.
 
@@ -1491,11 +1517,12 @@ settled stay endpoint survives ordinary no-outward belief decay below policy
 threshold and may authorize only a fresh trustworthy positive at that exact node
 and zone. Reacquisition rebinds one support, creates no source use, and remains
 excluded from same-event prediction and learning; correlated target evidence
-still issues no token. All thirteen observed post-release cycles, counts 1 and 2,
-restart, one public reacquisition edge before sleep-off, outward removal, exact-
-endpoint rejection, and the earlier isolated-closet false-activation incident
-are retained in `test_inc_2026_09_05_0116z_settled_closet_reacquires_before_sleep_off`
-and the owning support/traversal suites.
+using only settled-endpoint reacquisition still issues no token. All thirteen
+observed post-release cycles, counts 1 and 2, restart, one public reacquisition
+edge before sleep-off, outward removal, exact-endpoint rejection, and the earlier
+isolated-closet false-activation incident are retained in
+`test_inc_2026_09_05_0116z_settled_closet_reacquires_before_sleep_off` and the
+owning support/traversal suites.
 
 The retained 2026-09-05 closet restore-rejection incident establishes that both
 known physical-episode transitions away from stable `clear` reset

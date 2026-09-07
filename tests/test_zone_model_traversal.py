@@ -416,6 +416,56 @@ def test_adjacent_source_authorizes_correlated_target_without_target_authority(
     assert all(token.node_id != target.node_id for token in frontier.tokens)
 
 
+def test_support_backed_correlated_continuation_issues_one_bounded_token() -> None:
+    frontier = TraversalFrontier(graph(), NODES)
+    hall = episode("hall", "hall", "transition_fast", NOW)
+    issue(frontier, hall)
+    frontier.sync(hall, NOW)
+    target_at = NOW + timedelta(seconds=2)
+    target = replace(
+        episode("room_a_presence", "room_a", "stay_presence", target_at),
+        cadence_run_started_at=NOW - timedelta(minutes=1),
+        cadence_last_transition_at=target_at,
+        cadence_cycle_count=2,
+        cadence_correlated=True,
+    )
+    authorization = frontier.authorize_correlated_target(target, target_at)
+    effect = EpisodeEffect(
+        target.node_id,
+        target.zone,
+        target.episode_id or "",
+        "correlated_positive",
+        target_at,
+    )
+
+    with pytest.raises(ValueError, match="authorized current positive episode"):
+        frontier.issue(target, effect, authorization)
+    with pytest.raises(ValueError, match="support-backed graph authority"):
+        frontier.issue_correlated_continuation(
+            target,
+            effect,
+            authorization,
+            support_backed=False,
+        )
+
+    issued = frontier.issue_correlated_continuation(
+        target,
+        effect,
+        authorization,
+        support_backed=True,
+    )
+    duplicate = frontier.issue_correlated_continuation(
+        target,
+        effect,
+        authorization,
+        support_backed=True,
+    )
+
+    assert issued == duplicate
+    assert issued.valid_until == target.traversal_valid_until
+    assert sum(token.episode_id == target.episode_id for token in frontier.tokens) == 1
+
+
 def test_recent_same_zone_missed_edge_and_disconnected_authorization() -> None:
     frontier = TraversalFrontier(graph(), NODES)
     hall = episode("hall", "hall", "transition_fast", NOW)

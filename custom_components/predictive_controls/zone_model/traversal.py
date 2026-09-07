@@ -25,6 +25,9 @@ from .types import (
 
 TOKEN_LIMIT = 64
 USE_LIMIT = 256
+CORRELATED_CONTINUATION_REASONS = frozenset(
+    {"adjacent_authorized", "track_confirmed", "missed_edge_authorized"}
+)
 
 
 class TraversalFrontier:
@@ -236,10 +239,47 @@ class TraversalFrontier:
         effect: EpisodeEffect,
         authorization: TraversalAuthorization,
     ) -> TraversalToken:
+        return self._issue_token(
+            state,
+            effect,
+            authorization,
+            allowed_effect_kinds=frozenset({"interaction", "positive"}),
+        )
+
+    def issue_correlated_continuation(
+        self,
+        state: EpisodeState,
+        effect: EpisodeEffect,
+        authorization: TraversalAuthorization,
+        *,
+        support_backed: bool,
+    ) -> TraversalToken:
+        if (
+            not support_backed
+            or authorization.reason not in CORRELATED_CONTINUATION_REASONS
+        ):
+            raise ValueError(
+                "Correlated continuation requires support-backed graph authority"
+            )
+        return self._issue_token(
+            state,
+            effect,
+            authorization,
+            allowed_effect_kinds=frozenset({"correlated_positive"}),
+        )
+
+    def _issue_token(
+        self,
+        state: EpisodeState,
+        effect: EpisodeEffect,
+        authorization: TraversalAuthorization,
+        *,
+        allowed_effect_kinds: frozenset[str],
+    ) -> TraversalToken:
         self.advance(effect.at)
         node = self._validated_episode(state)
         if (
-            effect.kind not in {"interaction", "positive"}
+            effect.kind not in allowed_effect_kinds
             or effect.node_id != state.node_id
             or effect.episode_id != state.episode_id
             or state.status not in {"asserted", "clearing"}

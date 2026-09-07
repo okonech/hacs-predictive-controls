@@ -504,7 +504,10 @@ class ZoneModelEngine:
             and final_effect.kind == "correlated_positive"
             and (
                 final_authorization is None
-                or final_authorization.reason != "settled_endpoint_reacquired"
+                or (
+                    final_authorization.reason != "settled_endpoint_reacquired"
+                    and final_token is None
+                )
             )
             else final_effect
         )
@@ -815,7 +818,18 @@ class ZoneModelEngine:
             )
             if authorization.authorized:
                 filter_.apply_arrival_transition(effect.episode_id, effect.at)
-            return authorization, effect, None
+            support_backed = self._supports.has_transfer_authority(authorization)
+            token = (
+                self._frontier.issue_correlated_continuation(
+                    state,
+                    effect,
+                    authorization,
+                    support_backed=True,
+                )
+                if support_backed
+                else None
+            )
+            return authorization, effect, token
         if effect.kind == "correlated_flap_ignored":
             if self._frontier.reopen_authorized_continuity(state, effect):
                 effect = replace(effect, kind="correlated_continuity_authorized")
