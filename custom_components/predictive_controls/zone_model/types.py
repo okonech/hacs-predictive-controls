@@ -75,6 +75,7 @@ ACTIVE_EVIDENCE_REASONS = frozenset(
         "provisional_track_acquired",
         "same_zone_authorized",
         "settled_endpoint_reacquired",
+        "settled_adjacent_transfer",
         "track_confirmed",
     }
 )
@@ -620,6 +621,35 @@ class AuthorizationUse:
 
 
 @dataclass(frozen=True)
+class SettledAdjacentHandoff:
+    """Operation-local consumable source selection; never persisted as identity."""
+
+    support_id: str
+    source_node_id: str
+    source_zone: str
+    source_episode_id: str
+    source_updated_at: datetime
+    target_node_id: str
+    target_episode_id: str
+    authorized_at: datetime
+
+    def __post_init__(self) -> None:
+        if not self.support_id.startswith("support:") or not all(
+            (self.source_node_id, self.source_zone, self.source_episode_id,
+             self.target_node_id, self.target_episode_id)
+        ):
+            raise ValueError("Settled handoff identities are invalid")
+        require_utc(self.source_updated_at, "Settled handoff source frontier")
+        require_utc(self.authorized_at, "Settled handoff authorization frontier")
+        if (
+            self.source_updated_at > self.authorized_at
+            or self.source_node_id == self.target_node_id
+            or self.source_episode_id == self.target_episode_id
+        ):
+            raise ValueError("Settled handoff source and target are inconsistent")
+
+
+@dataclass(frozen=True)
 class TraversalAuthorization:
     """Deterministic graph authorization result for one target episode."""
 
@@ -635,6 +665,7 @@ class TraversalAuthorization:
     path_node_ids: tuple[str, ...] = ()
     provenance_kind: str | None = None
     equivalent_confirmed_strength: bool = False
+    settled_handoff: SettledAdjacentHandoff | None = None
 
     def __post_init__(self) -> None:
         if not (self.target_node_id and self.target_zone and self.target_episode_id):
@@ -642,6 +673,23 @@ class TraversalAuthorization:
         require_utc(self.authorized_at, "Traversal authorization frontier")
         if not isinstance(self.authorized, bool) or not self.reason:
             raise ValueError("Traversal authorization result is invalid")
+        handoff = self.settled_handoff
+        if (self.reason == "settled_adjacent_transfer") != (handoff is not None):
+            raise ValueError("Settled handoff requires its dedicated authorization")
+        if handoff is not None and (
+            not self.authorized
+            or self.source_tokens
+            or self.new_uses
+            or self.target_node_id != handoff.target_node_id
+            or self.target_episode_id != handoff.target_episode_id
+            or self.target_zone == handoff.source_zone
+            or self.authorized_at != handoff.authorized_at
+            or self.path_node_ids != (handoff.source_node_id, handoff.target_node_id)
+            or self.provenance_kind != "settled_adjacent_transfer"
+            or self.track_confidence != "provisional"
+            or not self.equivalent_confirmed_strength
+        ):
+            raise ValueError("Settled handoff authorization is inconsistent")
         if self.authorized:
             if self.track_confidence not in TRACK_CONFIDENCES:
                 raise ValueError("Authorized traversal requires track confidence")
@@ -778,6 +826,7 @@ class AnonymousOccupancySupport:
             "boundary",
             "local_interaction",
             "missed_edge",
+            "settled_adjacent_transfer",
         }:
             raise ValueError("Anonymous-support provenance is invalid")
         if self.last_transition not in SUPPORT_TRANSITIONS:

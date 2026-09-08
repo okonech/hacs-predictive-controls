@@ -68,6 +68,7 @@ def test_shared_profiles_have_independent_finite_timing() -> None:
     assert TRANSITION_FAST.assertion_trust_horizon < STAY_PIR.assertion_trust_horizon
     assert STAY_PIR.post_clear_residual < STAY_PRESENCE.post_clear_residual
     assert ENTRY_BOUNDARY.role == "entry"
+    assert STAY_PRESENCE.traversal_context_window == timedelta(seconds=180)
     assert STAY_PIR.track_bootstrap_window == timedelta(seconds=90)
     assert STAY_PRESENCE.track_bootstrap_window == timedelta(seconds=120)
     assert TRANSITION_FAST.track_bootstrap_window == timedelta(seconds=45)

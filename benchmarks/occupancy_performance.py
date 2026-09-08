@@ -9,7 +9,7 @@ import importlib
 import json
 import math
 import sys
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, is_dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from time import perf_counter_ns
@@ -21,12 +21,23 @@ from custom_components.predictive_controls.model import PredictiveMap
 from custom_components.predictive_controls.yaml_config import load_predictive_map
 from custom_components.predictive_controls.zone_model.engine import ZoneModelEngine
 from custom_components.predictive_controls.zone_model.persistence import (
+    restore_target_state,
     serialize_target_state,
+    target_map_fingerprint,
 )
-from custom_components.predictive_controls.zone_model.policy import PolicyAuditLog
+from custom_components.predictive_controls.zone_model.policy import (
+    POLICY_CALIBRATIONS,
+    PolicyAuditLog,
+)
+from custom_components.predictive_controls.zone_model.profiles import (
+    SHARED_PROFILES,
+    build_physical_nodes,
+)
 from custom_components.predictive_controls.zone_model.traversal import TOKEN_LIMIT
 from custom_components.predictive_controls.zone_model.types import (
     SensorInput,
+    ZoneModelResult,
+    ZoneModelSnapshot,
 )
 
 MAX_BENCHMARK_EVENTS = 1000
@@ -53,6 +64,15 @@ class BenchmarkWorkload:
     occupants: int
     events: tuple[SensorInput, ...]
     receive_at: tuple[datetime, ...]
+    started_at: datetime
+
+    @property
+    def bootstrap_at(self) -> datetime:
+        """Use the timed engine's actual frontier, including an empty trace."""
+
+        return min(
+            (event.event_at for event in self.events), default=self.started_at
+        )
 
 
 def _build_workload(
@@ -105,7 +125,271 @@ def _build_workload(
         occupants,
         tuple(events),
         tuple(receive_at),
+        started_at,
     )
+
+
+def _semantic_value(value: Any) -> Any:
+    """Encode every field, using the persistence writer's UTC ISO convention."""
+
+    if isinstance(value, datetime):
+        if value.utcoffset() != timedelta(0):
+            raise ValueError("Semantic timestamps must be aware UTC")
+        return value.isoformat()
+    if isinstance(value, timedelta):
+        return value.total_seconds()
+    if is_dataclass(value) and not isinstance(value, type):
+        return _semantic_value(asdict(value))
+    if isinstance(value, dict):
+        if any(not isinstance(key, str) for key in value):
+            raise TypeError("Semantic mapping keys must be strings")
+        return {key: _semantic_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_semantic_value(item) for item in value]
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float) and math.isfinite(value):
+        return value
+    raise TypeError(f"Unsupported semantic value: {type(value).__name__}")
+
+
+def _render_json(value: object) -> str:
+    return json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n"
+
+
+def _semantic_differences(
+    before: Any, after: Any, path: str = ""
+) -> list[dict[str, Any]]:
+    """Return lossless, type-sensitive differences addressed by JSON Pointer."""
+
+    differences: list[dict[str, Any]] = []
+    if isinstance(before, dict) and isinstance(after, dict):
+        for key in sorted(before.keys() | after.keys()):
+            child = path + "/" + key.replace("~", "~0").replace("/", "~1")
+            if key not in before or key not in after:
+                differences.append({
+                    "path": child,
+                    "before_present": key in before,
+                    "after_present": key in after,
+                    "before": before.get(key),
+                    "after": after.get(key),
+                })
+            else:
+                differences.extend(
+                    _semantic_differences(before[key], after[key], child)
+                )
+    elif isinstance(before, list) and isinstance(after, list):
+        for index in range(max(len(before), len(after))):
+            child = f"{path}/{index}"
+            if index >= len(before) or index >= len(after):
+                differences.append({
+                    "path": child,
+                    "before_present": index < len(before),
+                    "after_present": index < len(after),
+                    "before": before[index] if index < len(before) else None,
+                    "after": after[index] if index < len(after) else None,
+                })
+            else:
+                differences.extend(
+                    _semantic_differences(before[index], after[index], child)
+                )
+    elif type(before) is not type(after) or before != after:
+        differences.append({"path": path, "before": before, "after": after})
+    return differences
+
+
+def _capture_workload(
+    predictive_map: PredictiveMap, workload: BenchmarkWorkload
+) -> dict[str, Any]:
+    """Replay independently, never inside a latency measurement.
+
+    Keep full operation results and writer state (including audit and prediction).
+    At every frontier validate strict restore, then compare its next operation
+    with uninterrupted execution. Only the writer fingerprint moves to metadata.
+    """
+
+    engine = ZoneModelEngine(
+        predictive_map, workload.occupants, workload.bootstrap_at
+    )
+
+    def state(model: ZoneModelEngine) -> dict[str, Any]:
+        payload = serialize_target_state(predictive_map, model)
+        del payload["map_fingerprint"]
+        return _semantic_value(payload)  # type: ignore[no-any-return]
+
+    initial = state(engine)
+    restarted = restore_target_state(
+        predictive_map,
+        serialize_target_state(predictive_map, engine),
+        engine.snapshot.updated_at,
+    )
+    initial_differences = _semantic_differences(initial, state(restarted))
+    rows = []
+    for event, received_at in zip(workload.events, workload.receive_at, strict=True):
+        result = _semantic_value(engine.observe(event, processing_at=received_at))
+        replayed = _semantic_value(
+            restarted.observe(event, processing_at=received_at)
+        )
+        current = state(engine)
+        continuation = _semantic_differences(
+            {"result": result, "state": current},
+            {"result": replayed, "state": state(restarted)},
+        )
+        restarted = restore_target_state(
+            predictive_map,
+            serialize_target_state(predictive_map, engine),
+            engine.snapshot.updated_at,
+        )
+        restored = _semantic_differences(current, state(restarted))
+        rows.append({
+            "event": _semantic_value(event),
+            "received_at": _semantic_value(received_at),
+            "result": result,
+            "state": current,
+            "diagnostics": {
+                "counters": _semantic_value(engine.diagnostic_counters),
+                "latest_support_transition": _semantic_value(
+                    engine.latest_support_transition
+                ),
+                "pending_prediction_learning": _semantic_value(
+                    engine._pending_prediction_learning
+                ),
+            },
+            "restore": {
+                "continuation_differences": continuation,
+                "state_differences": restored,
+                "passed": not continuation and not restored,
+            },
+        })
+    return {
+        "occupants": workload.occupants,
+        "started_at": _semantic_value(workload.started_at),
+        "bootstrap_at": _semantic_value(workload.bootstrap_at),
+        "event_count": len(workload.events),
+        "initial_state": initial,
+        "initial_restore_differences": initial_differences,
+        "events": rows,
+        "passed": not initial_differences
+        and all(row["restore"]["passed"] for row in rows),
+    }
+
+
+def _validate_semantic_capture(payload: Any) -> None:
+    """Reject missing profiles/counts/events rather than comparing empty reports."""
+
+    if (
+        not isinstance(payload, dict)
+        or type(payload.get("schema_version")) is not int
+        or payload["schema_version"] != 1
+        or payload.get("trace_profile") not in TRACE_PROFILES
+        or not isinstance(payload.get("metadata"), dict)
+        or not isinstance(payload["metadata"].get("map_fingerprint"), str)
+        or not payload["metadata"]["map_fingerprint"]
+        or not isinstance(payload.get("counts"), dict)
+        or not payload["counts"]
+    ):
+        raise ValueError("Invalid semantic capture schema, profile, or metadata")
+    for count, workload in payload["counts"].items():
+        if (
+            not isinstance(workload, dict)
+            or str(workload.get("occupants")) != count
+            or type(workload.get("event_count")) is not int
+            or not 0 <= workload["event_count"] <= MAX_BENCHMARK_EVENTS
+            or not isinstance(workload.get("events"), list)
+            or len(workload["events"]) != workload["event_count"]
+            or not {"started_at", "bootstrap_at", "initial_state",
+                    "initial_restore_differences", "passed"} <= workload.keys()
+        ):
+            raise ValueError("Invalid semantic workload or event count")
+        for row in workload["events"]:
+            if (
+                not isinstance(row, dict)
+                or not {"event", "received_at", "result", "state", "restore",
+                    "diagnostics"}
+                <= row.keys()
+                or not isinstance(row["result"], dict)
+                or not {"disposition", "snapshot", "authorizations",
+                        "policy_events", "policy_decisions"} <= row["result"].keys()
+            ):
+                raise ValueError("Invalid semantic event result")
+
+
+def _normalize_optional_handoff(before: Any, after: Any) -> None:
+    """Align absent/null handoffs on result and pending-learning authorizations.
+
+    Inputs are private comparison copies, not captures. Deliberately walk the
+    capture schema rather than recursively matching field names. Nonnull values,
+    including null-to-nonnull and absent-to-nonnull changes, remain untouched.
+    """
+
+    for count in before["counts"].keys() & after["counts"].keys():
+        for old_row, new_row in zip(
+            before["counts"][count]["events"],
+            after["counts"][count]["events"],
+            strict=False,
+        ):
+            for parent, array in (
+                ("result", "authorizations"),
+                ("diagnostics", "pending_prediction_learning"),
+            ):
+                old_parent, new_parent = old_row[parent], new_row[parent]
+                if not isinstance(old_parent, dict) or not isinstance(new_parent, dict):
+                    continue
+                old_items, new_items = old_parent.get(array), new_parent.get(array)
+                if not isinstance(old_items, list) or not isinstance(new_items, list):
+                    continue
+                for old, new in zip(old_items, new_items, strict=False):
+                    if not isinstance(old, dict) or not isinstance(new, dict):
+                        continue
+                    key = "settled_handoff"
+                    if key not in old and new.get(key) is None:
+                        new.pop(key, None)
+                    elif key not in new and old.get(key) is None:
+                        old.pop(key, None)
+
+
+def compare_semantic(before: Any, after: Any) -> dict[str, Any]:
+    """Compare behavior with one explicitly approved schema representation rule.
+
+    Only absent versus explicit null for optional settled_handoff directly on
+    /counts/{count}/events/{event_index}/result/authorizations/{authorization_index}
+    or /counts/{count}/events/{event_index}/diagnostics/pending_prediction_learning/
+    {authorization_index} is equivalent. Preserve nonnull differences, other
+    missing/null distinctions, unknown fields and nested lookalikes. Fingerprint
+    changes are separately visible but not failures; capture and restore checks
+    stay exact.
+    """
+
+    _validate_semantic_capture(before)
+    _validate_semantic_capture(after)
+    before = _semantic_value(before)
+    after = _semantic_value(after)
+    fingerprints = {
+        "before": before["metadata"].pop("map_fingerprint"),
+        "after": after["metadata"].pop("map_fingerprint"),
+    }
+    _normalize_optional_handoff(before, after)
+    differences = _semantic_differences(before, after)
+    return {
+        "schema_version": 1,
+        "normalization_rules": [
+            "ABSENT equals explicit null only at "
+            "/counts/{count}/events/{event_index}/result/authorizations/"
+            "{authorization_index}/settled_handoff and "
+            "/counts/{count}/events/{event_index}/diagnostics/"
+            "pending_prediction_learning/{authorization_index}/settled_handoff "
+            "on paired authorization "
+            "objects in arrays; nonnull values and all other fields remain exact."
+        ],
+        "before_profile": before["trace_profile"],
+        "after_profile": after["trace_profile"],
+        "fingerprints": fingerprints,
+        "fingerprints_equal": fingerprints["before"] == fingerprints["after"],
+        "differences": differences,
+        "passed": not differences
+        and all(item["passed"] is True for item in before["counts"].values())
+        and all(item["passed"] is True for item in after["counts"].values()),
+    }
 
 
 def _percentile(samples: list[float], quantile: float) -> float:
@@ -119,10 +403,7 @@ def _measure_core(
     predictive_map: PredictiveMap,
     workload: BenchmarkWorkload,
 ) -> tuple[dict[str, Any], ZoneModelEngine]:
-    bootstrap_at = min(
-        (event.event_at for event in workload.events),
-        default=datetime.now(UTC),
-    )
+    bootstrap_at = workload.bootstrap_at
     started_ns = perf_counter_ns()
     engine = ZoneModelEngine(predictive_map, workload.occupants, bootstrap_at)
     startup_ms = (perf_counter_ns() - started_ns) / 1_000_000
@@ -307,6 +588,196 @@ def _runtime_publication_types() -> tuple[
                 sys.modules[name] = prior  # type: ignore[assignment]
 
 
+def _handoff_fixture(
+    predictive_map: PredictiveMap, started_at: datetime, *, correlated: bool,
+) -> ZoneModelSnapshot:
+    """Prepare REQ-TRAV-018 authority on the unmodified 16-zone reference map.
+
+    Ordinary source history is entirely event-created: dining -> foyer -> stairs
+    -> guest bedroom, followed by predecessor clears and two hours of continuous
+    source assertion. Timers expire authority; they never renew it. The target
+    living-left node has never fired on this route and is in a different zone.
+
+    The correlated variant is explicitly synthetic component composition: recent
+    isolated target history runs independently, never beside the eligible source.
+    Only its episode and zone projections/pending state are copied. No tokens,
+    supports, audit claims or frozen-test imports are manufactured. Both variants
+    must strictly round-trip before they can enter a measurement.
+    """
+
+    target_id = "living_left_sensor"
+    target_zone = predictive_map.nodes[target_id].occupancy_zone
+    event_at = started_at + timedelta(seconds=7203)
+    frontier = event_at - timedelta(microseconds=1)
+
+    def event(node_id: str, state: str, seconds: int) -> SensorInput:
+        return SensorInput(
+            next(iter(predictive_map.nodes[node_id].entities.values())),
+            state, started_at + timedelta(seconds=seconds),
+        )
+
+    source = ZoneModelEngine(predictive_map, 2, started_at)
+    route = (
+        "dining_sensor", "foyer_sensor", "stairs_bottom_sensor",
+        "guest_bedroom_sensor",
+    )
+    for seconds, node_id in enumerate(route):
+        source.observe(event(node_id, "on", seconds))
+    original_support, = source.snapshot.anonymous_supports
+    assert original_support.current_node_id == route[-1]
+    assert original_support.path_node_ids == route[-3:]
+    for seconds, node_id in enumerate(route[:-1], start=10):
+        source.observe(event(node_id, "off", seconds))
+    source.commit_prediction_learning()
+    source.advance(frontier)
+    snapshot = source.snapshot
+    assert snapshot.anonymous_supports == (original_support,)
+    assert not source._pending_prediction_learning
+    assert not snapshot.pending_candidates
+    if correlated:
+        donor = ZoneModelEngine(predictive_map, 2, started_at)
+        primed = donor.observe(event(target_id, "on", 7163))  # T - 40s
+        assert primed.authorizations[0].reason == "track_bootstrap_pending"
+        assert not primed.policy_events and not primed.snapshot.anonymous_supports
+        donor.observe(event(target_id, "off", 7173))  # T - 30s
+        donor.advance(started_at + timedelta(seconds=7183))  # stable clear T - 20s
+        donor.advance(frontier)
+        isolated = donor.snapshot
+        assert not isolated.traversal_tokens and not isolated.anonymous_supports
+        assert not isolated.reliability_warning_occurrences
+        target_episode = next(
+            s for s in isolated.episode_states if s.node_id == target_id
+        )
+        assert target_episode.status == "clear"
+        assert target_episode.cadence_run_started_at == event_at - timedelta(seconds=40)
+        snapshot = replace(
+            snapshot,
+            episode_states=tuple(
+                target_episode if s.node_id == target_id else s
+                for s in snapshot.episode_states
+            ),
+            belief_states=tuple(
+                next(t for t in isolated.belief_states if t.zone == target_zone)
+                if s.zone == target_zone else s for s in snapshot.belief_states
+            ),
+            policy_states=tuple(
+                next(t for t in isolated.policy_states if t.zone == target_zone)
+                if s.zone == target_zone else s for s in snapshot.policy_states
+            ),
+            pending_candidates=isolated.pending_candidates,
+        )
+    # No inherited audit or prediction history is claimed by the synthetic seed.
+    prepared = ZoneModelEngine.restore(predictive_map, snapshot, (), frontier)
+    payload = serialize_target_state(predictive_map, prepared)
+    restored = restore_target_state(predictive_map, payload, frontier)
+    assert restored.snapshot == snapshot
+    assert serialize_target_state(predictive_map, restored) == payload
+    _assert_handoff_source(predictive_map, snapshot)
+    # Check the exact accepted frontier too, without counting a timer as evidence.
+    advanced = restored.advance(event_at)
+    assert not advanced.policy_events and not advanced.authorizations
+    _assert_handoff_source(predictive_map, advanced.snapshot)
+    return snapshot
+
+
+def _assert_handoff_source(
+    predictive_map: PredictiveMap, snapshot: ZoneModelSnapshot,
+) -> None:
+    """Fail setup closed unless every source predicate and isolation holds."""
+
+    support, = snapshot.anonymous_supports
+    node = next(
+        n for n in build_physical_nodes(predictive_map).nodes
+        if n.node_id == support.current_node_id
+    )
+    episode = next(s for s in snapshot.episode_states if s.node_id == node.node_id)
+    belief = next(s for s in snapshot.belief_states if s.zone == node.zone)
+    target = predictive_map.nodes["living_left_sensor"]
+    assert snapshot.count_state.expected_count == 2
+    assert support.state == "settled" and support.valid_until is None
+    assert support.current_zone == node.zone != target.occupancy_zone
+    assert node.node_id != target.node_id
+    assert target.node_id in predictive_map.nodes[node.node_id].adjacent
+    assert SHARED_PROFILES[node.profile_name].role == "stay"
+    assert not node.interaction_aliases
+    assert support.current_episode_id == episode.episode_id
+    assert episode.episode_id is not None and episode.started_at is not None
+    assert support.created_at <= support.updated_at <= snapshot.updated_at
+    assert episode.started_at <= snapshot.updated_at
+    assert episode.status == "asserted" and episode.known_on
+    assert not episode.health_warning and not episode.cadence_warning
+    assert not belief.health_warning and belief.context == "asserted"
+    assert (
+        belief.generation_episode_id == belief.asserted_episode_id == episode.episode_id
+    )
+    assert belief.outward_context is None
+    assert belief.probability >= POLICY_CALIBRATIONS[belief.profile_name].on_threshold
+    assert episode.traversal_valid_until is not None
+    assert episode.assertion_trust_until is not None
+    assert (
+        episode.traversal_valid_until
+        < episode.assertion_trust_until < snapshot.updated_at
+    )
+    assert not snapshot.traversal_tokens and not snapshot.retained_traversal_tokens
+    assert not snapshot.support_token_bindings and not snapshot.authorization_uses
+    assert all(p.node_id == target.node_id for p in snapshot.pending_candidates)
+    assert not next(
+        p for p in snapshot.policy_states if p.zone == target.occupancy_zone
+    ).active
+
+
+def _handoff_qualified(
+    before: ZoneModelSnapshot, result: ZoneModelResult, *, correlated: bool,
+) -> bool:
+    """Qualify the real operation, not just a high belief or already-active seed."""
+
+    support, = before.anonymous_supports
+    event_at = before.updated_at + timedelta(microseconds=1)
+    target_id, target_zone = "living_left_sensor", "living_room"
+    if len(result.authorizations) != 1:
+        return False
+    authorization, = result.authorizations
+    selection = authorization.settled_handoff
+    token = next(
+        (t for t in result.snapshot.traversal_tokens
+         if t.episode_id == authorization.target_episode_id), None,
+    )
+    return (
+        result.disposition == (
+            "accepted_correlated_positive" if correlated else "accepted_positive"
+        )
+        and authorization.authorized
+        and authorization.reason == "settled_adjacent_transfer"
+        and authorization.provenance_kind == "settled_adjacent_transfer"
+        and authorization.target_node_id == target_id
+        and not authorization.source_tokens and not authorization.new_uses
+        and selection is not None
+        and selection.support_id == support.support_id
+        and selection.source_episode_id == support.current_episode_id
+        and selection.source_updated_at == support.updated_at
+        and selection.authorized_at == event_at
+        and token is not None
+        and token.path_node_ids == (support.current_node_id, target_id)
+        and token.track_confidence == "provisional"
+        and token.equivalent_confirmed_strength
+        and token.accepted_at == event_at < token.valid_until
+        and [(e.zone, e.kind, e.event_at, e.authorization_reason)
+             for e in result.policy_events] == [
+                 (target_zone, "acquired", event_at, "settled_adjacent_transfer")
+             ]
+        and any(
+            d.zone == target_zone and not d.active_before and d.active_after
+            and d.reason == "acquired"
+            for d in result.policy_decisions
+        )
+        and len(result.snapshot.anonymous_supports) == 1
+        and result.snapshot.anonymous_supports[0].support_id == support.support_id
+        and result.snapshot.anonymous_supports[0].created_at == support.created_at
+        and result.snapshot.anonymous_supports[0].current_node_id == target_id
+        and result.snapshot.anonymous_supports[0].updated_at == event_at
+    )
+
+
 def _measure_fast_paths(
     predictive_map: PredictiveMap,
     *,
@@ -375,6 +846,10 @@ def _measure_fast_paths(
     entities[cadence_entity_key] = next(
         iter(cadence_map.nodes[cadence_node_id].entities.values())
     )
+    handoff_snapshots = {
+        correlated: _handoff_fixture(predictive_map, started_at, correlated=correlated)
+        for correlated in (False, True)
+    }
 
     (
         runtime_type,
@@ -418,10 +893,13 @@ def _measure_fast_paths(
         "same_zone": [],
         "third_node_confirmation": [],
         "mature_prediction": [],
+        "settled_adjacent_transfer": [],
+        "correlated_settled_adjacent_transfer": [],
     }
     activations = dict.fromkeys(samples, 0)
     publications = dict.fromkeys(samples, 0)
     qualifications = dict.fromkeys(samples, 0)
+    public_writes = dict.fromkeys(samples, 0)
 
     def measured_observe(
         name: str,
@@ -462,9 +940,30 @@ def _measure_fast_paths(
         written = write_ns[0] if write_ns else finished
         samples[name].append((written - began) / 1_000_000)
         publications[name] += bool(write_ns)
+        public_writes[name] += len(write_ns)
         return runtime.confidence
 
     for _ in range(iterations):
+        for correlated, snapshot in handoff_snapshots.items():
+            name = (
+                "correlated_settled_adjacent_transfer" if correlated
+                else "settled_adjacent_transfer"
+            )
+            handoff = make_runtime(predictive_map, 2)
+            seed = ZoneModelEngine.restore(
+                predictive_map, snapshot, (), snapshot.updated_at,
+            )
+            payload = serialize_target_state(predictive_map, seed)
+            assert handoff.restore_stored_state(payload, snapshot.updated_at)
+            assert handoff.confidence.occupancy_store_data() == payload
+            handoff_result = measured_observe(
+                name, handoff, "living_left_sensor", 7_203_000, "living_room",
+            )
+            activations[name] += handoff_result.policy_states["living_room"].active
+            qualifications[name] += _handoff_qualified(
+                snapshot, handoff_result._last_result, correlated=correlated,
+            )
+
         cadence = make_runtime(cadence_map, 2)
         observe(cadence, "living_left_sensor", 0)
         observe(cadence, cadence_entity_key, 1)
@@ -702,11 +1201,19 @@ def _measure_fast_paths(
     return {
         name: {
             "sample_count": len(values),
+            "activation_count": activations[name],
+            "path_qualification_count": qualifications[name],
+            "publication_count": publications[name],
+            "public_write_count": public_writes[name],
             "p99_ms": _percentile(values, 0.99),
             "max_ms": max(values),
             "all_activated": activations[name] == iterations,
             "all_path_qualified": qualifications[name] == iterations,
-            "all_publications_scheduled": publications[name] == iterations,
+            "all_publications_scheduled": (
+                publications[name] == iterations
+                and ("settled_adjacent_transfer" not in name
+                     or public_writes[name] == iterations)
+            ),
             "registered_entity_count": 2 + 2 * len(predictive_map.zones()),
             "update_subscriber_count": 2 + len(predictive_map.zones()),
             "p99_gate": _percentile(values, 0.99) <= FAST_PATH_P99_MS,
@@ -880,12 +1387,18 @@ def run_benchmark(
     event_count: int = ROUTINE_BENCHMARK_EVENTS,
     target_counts: tuple[int, ...] = (2,),
     trace_profile: str = "deterministic",
+    semantic_output: Path | None = None,
 ) -> dict[str, Any]:
-    if event_count > MAX_BENCHMARK_EVENTS:
+    if not 0 <= event_count <= MAX_BENCHMARK_EVENTS:
         raise ValueError("Benchmark event count must not exceed 1000")
+    if trace_profile not in TRACE_PROFILES:
+        raise ValueError(f"Unknown trace profile: {trace_profile}")
+    if not target_counts or len(set(target_counts)) != len(target_counts):
+        raise ValueError("Benchmark requires distinct occupant counts")
     predictive_map = load_predictive_map(map_path.read_text())
     started_at = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
     counts: dict[str, Any] = {}
+    workloads: list[BenchmarkWorkload] = []
     passed = True
     fast_paths = _measure_fast_paths(predictive_map, iterations=event_count or 1)
     timer_work = _measure_timer_work(iterations=event_count or 1)
@@ -913,6 +1426,7 @@ def run_benchmark(
             occupants=occupants,
             trace_profile=trace_profile,
         )
+        workloads.append(workload)
         core, _engine = _measure_core(predictive_map, workload)
         gates = {
             "preferred_callback": core["p95_ms"] <= PREFERRED_CALLBACK_MS,
@@ -934,6 +1448,20 @@ def run_benchmark(
             "core": core,
             "gates": gates,
         }
+    if semantic_output is not None:
+        semantic_counts = {
+            str(workload.occupants): _capture_workload(predictive_map, workload)
+            for workload in workloads
+        }
+        semantic = {
+            "schema_version": 1,
+            "trace_profile": trace_profile,
+            "metadata": {"map_fingerprint": target_map_fingerprint(predictive_map)},
+            "counts": semantic_counts,
+        }
+        _validate_semantic_capture(semantic)
+        semantic_output.write_text(_render_json(semantic), encoding="utf-8")
+        passed = passed and all(item["passed"] for item in semantic_counts.values())
     return {
         "schema_version": 3,
         "engine": "zone_belief",
@@ -971,19 +1499,45 @@ def main() -> None:
         "--trace-profile", choices=TRACE_PROFILES, default="deterministic"
     )
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--semantic-output", type=Path)
+    parser.add_argument("--compare-semantic", type=Path, nargs=2,
+                        metavar=("BEFORE", "AFTER"))
     args = parser.parse_args()
-    result = run_benchmark(
-        args.map,
-        event_count=args.events,
-        trace_profile=args.trace_profile,
-    )
-    rendered = json.dumps(result, indent=2, sort_keys=True) + "\n"
-    if args.output is None:
-        print(rendered, end="")
-    else:
-        args.output.write_text(rendered)
-        if not result["passed"]:
-            print(rendered, end="", file=sys.stderr)
+    try:
+        inputs = args.compare_semantic or [args.map]
+        outputs = [path for path in (args.output, args.semantic_output)
+                   if path is not None]
+        resolved = [path.resolve() for path in outputs]
+        if len(set(resolved)) != len(resolved) or any(
+            path.resolve() in resolved for path in inputs
+        ):
+            raise ValueError("Output paths must be distinct from each other and inputs")
+        if args.compare_semantic:
+            if args.semantic_output is not None:
+                raise ValueError("Comparison cannot also capture semantic output")
+            before, after = (
+                json.loads(path.read_text(encoding="utf-8"))
+                for path in args.compare_semantic
+            )
+            result = compare_semantic(before, after)
+        else:
+            result = run_benchmark(
+                args.map,
+                event_count=args.events,
+                trace_profile=args.trace_profile,
+                semantic_output=args.semantic_output,
+            )
+        rendered = _render_json(result)
+        if args.output is None:
+            print(rendered, end="")
+        else:
+            args.output.write_text(rendered, encoding="utf-8")
+            if not result["passed"]:
+                print(rendered, end="", file=sys.stderr)
+    except (OSError, ValueError, TypeError) as error:
+        print(_render_json({"passed": False, "error": str(error)}),
+              end="", file=sys.stderr)
+        raise SystemExit(2) from error
     if not result["passed"]:
         raise SystemExit(1)
 

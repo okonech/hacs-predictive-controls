@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime
 
@@ -18,6 +18,7 @@ from .types import (
     EpisodeState,
     PendingAcquisitionCandidate,
     PhysicalNode,
+    SettledAdjacentHandoff,
     TraversalAuthorization,
     TraversalToken,
     require_utc,
@@ -255,8 +256,11 @@ class TraversalFrontier:
         support_backed: bool,
     ) -> TraversalToken:
         if (
-            not support_backed
-            or authorization.reason not in CORRELATED_CONTINUATION_REASONS
+            authorization.settled_handoff is None
+            and (
+                not support_backed
+                or authorization.reason not in CORRELATED_CONTINUATION_REASONS
+            )
         ):
             raise ValueError(
                 "Correlated continuation requires support-backed graph authority"
@@ -384,6 +388,7 @@ class TraversalFrontier:
         count: CountState | None,
         corroborating_states: Sequence[EpisodeState] = (),
         settled_support: AnonymousOccupancySupport | None = None,
+        handoff_resolver: Callable[[], SettledAdjacentHandoff | None] | None = None,
     ) -> TraversalAuthorization:
         self.advance(at)
         target_node = self._validated_episode(target)
@@ -417,6 +422,7 @@ class TraversalFrontier:
             fallback_reason="track_bootstrap_pending",
             source_states=source_states,
             settled_support=settled_support,
+            handoff_resolver=handoff_resolver,
         )
 
     def authorize_correlated_target(
@@ -425,6 +431,7 @@ class TraversalFrontier:
         at: datetime,
         *,
         settled_support: AnonymousOccupancySupport | None = None,
+        handoff_resolver: Callable[[], SettledAdjacentHandoff | None] | None = None,
     ) -> TraversalAuthorization:
         """Authorize correlated target evidence without creating source authority."""
 
@@ -458,6 +465,7 @@ class TraversalFrontier:
             fallback_reason="untracked_rejected",
             source_states={},
             settled_support=settled_support,
+            handoff_resolver=handoff_resolver,
         )
 
     def _authorize_from_context(
@@ -471,6 +479,7 @@ class TraversalFrontier:
         fallback_reason: str,
         source_states: Mapping[tuple[str, str], EpisodeState],
         settled_support: AnonymousOccupancySupport | None,
+        handoff_resolver: Callable[[], SettledAdjacentHandoff | None] | None,
     ) -> TraversalAuthorization:
         assert target.episode_id is not None
         target_episode_id = target.episode_id
@@ -483,6 +492,7 @@ class TraversalFrontier:
         path: tuple[str, ...] = ()
         provenance: str | None = None
         equivalent_strength = False
+        handoff = None
         same_zone = tuple(
             token
             for token in candidates
@@ -575,8 +585,9 @@ class TraversalFrontier:
             ):
                 raise ValueError("Settled endpoint does not match traversal target")
             reason = "settled_endpoint_reacquired"
-            confidence = "confirmed"
-            path = settled_support.path_node_ids
+            short_path = len(settled_support.path_node_ids) == 2
+            confidence = "provisional" if short_path else "confirmed"
+            path = (target.node_id,) if short_path else settled_support.path_node_ids
             provenance = "settled_endpoint"
         elif (pending := self._pending_support(target, at)) is not None:
             self._pending_by_zone.pop(pending.zone, None)
@@ -598,8 +609,17 @@ class TraversalFrontier:
                     (pending.node_id, target.node_id),
                     "adjacent_pair",
                 )
-        elif remember_pending:
-            self._remember_pending(target, at, target_node.reliability)
+        else:
+            if handoff_resolver is not None:
+                handoff = handoff_resolver()
+            if handoff is not None:
+                reason = "settled_adjacent_transfer"
+                confidence = "provisional"
+                path = (handoff.source_node_id, target.node_id)
+                provenance = "settled_adjacent_transfer"
+                equivalent_strength = True
+            elif remember_pending:
+                self._remember_pending(target, at, target_node.reliability)
         authorized = confidence is not None
         if authorized:
             self._pending_by_zone.pop(target.zone, None)
@@ -626,6 +646,7 @@ class TraversalFrontier:
             path,
             provenance,
             equivalent_strength,
+            handoff,
         )
 
     def _remember_pending(

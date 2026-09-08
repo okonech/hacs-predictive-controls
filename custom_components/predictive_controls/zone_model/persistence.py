@@ -112,7 +112,7 @@ def _target_map_fingerprint_payload(
         for profile in profiles.values():
             profile.pop("cycle_correlation_window")
             profile.pop("sustained_cadence_warning_window")
-    return {
+    payload: dict[str, object] = {
         "nodes": {
             node_id: {
                 "zone": node.occupancy_zone,
@@ -150,6 +150,9 @@ def _target_map_fingerprint_payload(
             "lease_seconds": LEASE_DURATION.total_seconds(),
         },
     }
+    if not pre_feature:
+        payload["settled_adjacent_transfer_version"] = 1
+    return payload
 
 
 def _fingerprint(payload: object) -> str:
@@ -164,7 +167,7 @@ def target_map_fingerprint(predictive_map: PredictiveMap) -> str:
 
 
 def pre_feature_target_map_fingerprint(predictive_map: PredictiveMap) -> str:
-    """Return the one accepted fingerprint from before cadence calibration."""
+    """Historical pre-cadence recipe; superseded for public inference restore."""
 
     return _fingerprint(
         _target_map_fingerprint_payload(predictive_map, pre_feature=True)
@@ -193,27 +196,17 @@ def restore_target_state(
     require_utc(restore_at, "Target restore time")
     root = _mapping(payload, "Target state")
     schema = root.get("schema")
-    if schema not in {TARGET_SCHEMA, LEGACY_V3_SCHEMA}:
+    if schema != TARGET_SCHEMA:
         raise ValueError("Target schema is incompatible")
     fingerprint = root.get("map_fingerprint")
-    pre_feature_v4 = bool(
-        schema == TARGET_SCHEMA
-        and fingerprint == pre_feature_target_map_fingerprint(predictive_map)
-        and _is_pre_feature_v4_snapshot(root.get("snapshot"))
-    )
-    if fingerprint != target_map_fingerprint(predictive_map) and not pre_feature_v4:
+    if fingerprint != target_map_fingerprint(predictive_map):
         raise ValueError("Target map fingerprint is incompatible")
-    legacy_v3 = schema == LEGACY_V3_SCHEMA
-    snapshot = _decode_snapshot(
-        root.get("snapshot"),
-        legacy_v3=legacy_v3,
-        pre_feature_v4=pre_feature_v4,
-    )
+    snapshot = _decode_snapshot(root.get("snapshot"))
     audit_payload = root.get("audit")
     if not isinstance(audit_payload, list):
         raise ValueError("Target audit must be a list")
     audit = tuple(
-        _decode_policy_decision(item, legacy_v3=legacy_v3)
+        _decode_policy_decision(item)
         for item in audit_payload
     )
     prediction = root.get("prediction")

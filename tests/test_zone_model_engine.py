@@ -1240,6 +1240,41 @@ def test_isolated_positive_expires_without_activation() -> None:
     assert room.active is False
 
 
+def test_isolated_correlated_positive_remains_inactive() -> None:
+    predictive_map = PredictiveMap.from_mapping(
+        {
+            "nodes": {
+                "isolated": {
+                    "role": "anchor_sensor",
+                    "occupancy_behavior": "sticky",
+                    "entities": {"presence": "binary_sensor.isolated"},
+                }
+            }
+        }
+    )
+    engine = ZoneModelEngine(predictive_map, 1, NOW)
+    engine.observe(SensorInput("binary_sensor.isolated", "on", NOW))
+    clear_at = NOW + timedelta(seconds=10)
+    stable_clear_at = clear_at + timedelta(seconds=10)
+    engine.observe(SensorInput("binary_sensor.isolated", "off", clear_at))
+    engine.advance(stable_clear_at)
+    pending_before = engine.snapshot.pending_candidates
+
+    correlated = engine.observe(
+        SensorInput(
+            "binary_sensor.isolated",
+            "on",
+            stable_clear_at + timedelta(seconds=10),
+        )
+    )
+
+    assert correlated.disposition == "accepted_correlated_positive"
+    assert correlated.authorizations[0].reason == "untracked_rejected"
+    assert not correlated.snapshot.policy_states[0].active
+    assert correlated.snapshot.pending_candidates == pending_before
+    assert correlated.snapshot.traversal_tokens == ()
+
+
 def test_pending_adjacent_pair_activates_only_leading_zone() -> None:
     engine = ZoneModelEngine(target_map(), 1, NOW)
 

@@ -466,7 +466,9 @@ class ZoneModelEngine:
                 if (
                     authorization.authorized
                     and effect.kind in {"interaction", "positive"}
-                    and authorization.reason != "settled_endpoint_reacquired"
+                    and authorization.reason not in {
+                        "settled_endpoint_reacquired", "settled_adjacent_transfer"
+                    }
                 ):
                     source_authorizations.append(authorization)
             final_effect = applied_effect
@@ -485,6 +487,18 @@ class ZoneModelEngine:
                 event.event_at,
             )
         self._frontier.sync(update.state, event.event_at)
+        prepared_handoff = None
+        if final_authorization is not None and final_authorization.settled_handoff:
+            assert final_effect is not None and final_token is not None
+            prepared_handoff = self._supports.prepare_handoff(
+                event.event_at,
+                final_effect,
+                final_authorization,
+                final_token,
+                self._episodes.states,
+                tuple(self._filters[zone].state for zone in sorted(self._filters)),
+                self._frontier.tokens,
+            )
         prediction_leases = self._prepare_predictions(
             event.event_at, tuple(source_authorizations)
         )
@@ -524,6 +538,7 @@ class ZoneModelEngine:
             tuple(self._filters[zone].state for zone in sorted(self._filters)),
             self._frontier.tokens,
             self._frontier.retained_tokens,
+            prepared_handoff=prepared_handoff,
         )
         pending_expiry_decisions = self._record_pending_expiries(
             event.event_at, processing_at
@@ -786,23 +801,28 @@ class ZoneModelEngine:
                 count=self._count.state,
                 corroborating_states=self._episodes.states,
                 settled_support=settled_support,
+                handoff_resolver=lambda: self._supports.settled_adjacent_for(
+                    state, effect, self._episodes.states,
+                    tuple(item.state for item in self._filters.values()),
+                ),
             )
             if authorization.authorized:
                 filter_.apply_arrival_transition(effect.episode_id, effect.at)
                 token = self._frontier.issue(state, effect, authorization)
             else:
                 token = None
-            TraversalFrontier.apply_outward_context(
-                authorization,
-                self._filters,
-                effect.at,
-                state.traversal_valid_until,
-            )
-            self._register_generation_outward(
-                authorization,
-                state,
-                effect.at,
-            )
+            if authorization.settled_handoff is None:
+                TraversalFrontier.apply_outward_context(
+                    authorization,
+                    self._filters,
+                    effect.at,
+                    state.traversal_valid_until,
+                )
+                self._register_generation_outward(
+                    authorization,
+                    state,
+                    effect.at,
+                )
             return authorization, effect, token
         if effect.kind == "correlated_positive":
             settled_support = self._supports.settled_endpoint_for(state)
@@ -815,6 +835,10 @@ class ZoneModelEngine:
                 state,
                 effect.at,
                 settled_support=settled_support,
+                handoff_resolver=lambda: self._supports.settled_adjacent_for(
+                    state, effect, self._episodes.states,
+                    tuple(item.state for item in self._filters.values()),
+                ),
             )
             if authorization.authorized:
                 filter_.apply_arrival_transition(effect.episode_id, effect.at)
@@ -826,7 +850,7 @@ class ZoneModelEngine:
                     authorization,
                     support_backed=True,
                 )
-                if support_backed
+                if support_backed or authorization.settled_handoff is not None
                 else None
             )
             return authorization, effect, token
@@ -1397,6 +1421,42 @@ class ZoneModelEngine:
         interaction_traversal = row.traversal_reason == "local_interaction"
         if interaction_evidence != interaction_traversal:
             raise ValueError("Interaction audit provenance is inconsistent")
+        if row.traversal_reason == "settled_adjacent_transfer":
+            if (
+                row.node_id is None
+                or row.episode_id is None
+                or len(row.evidence_ids) != 2
+                or len(set(row.evidence_ids)) != 2
+                or row.episode_id not in row.evidence_ids
+                or row.local_evidence_kind not in {"positive", "correlated_positive"}
+                or not row.local_trustworthy
+                or not row.authorization_authorized
+            ):
+                raise ValueError("Settled-adjacent audit identity is incomplete")
+            target, target_at = self._episode_reference(
+                row.episode_id, episodes, frontier, exact=False
+            )
+            source_id = next(
+                value for value in row.evidence_ids if value != row.episode_id
+            )
+            source, source_at = self._episode_reference(
+                source_id, episodes, frontier, exact=False
+            )
+            source_node = next(
+                node for node in self._nodes if node.node_id == source.node_id
+            )
+            if (
+                target.node_id != row.node_id
+                or target.zone != row.zone
+                or target_at != row.event_at
+                or source_at > row.event_at
+                or source_node.interaction_aliases
+                or SHARED_PROFILES[source_node.profile_name].role != "stay"
+                or not self._direct_different_zone_pair(
+                    (source.node_id, target.node_id)
+                )
+            ):
+                raise ValueError("Settled-adjacent audit is not episode-derived")
         if not interaction_evidence:
             return
         if row.node_id is None or row.episode_id is None:
@@ -1561,18 +1621,20 @@ class ZoneModelEngine:
                     "prediction_confirmed": "prediction_confirmation",
                     "provisional_track_acquired": "adjacent_pair",
                     "same_zone_authorized": "same_zone",
+                    "settled_adjacent_transfer": "settled_adjacent_transfer",
                     "settled_endpoint_reacquired": "settled_endpoint",
                     "track_confirmed": "adjacent",
                 }[policy.activation_reason]
-                source_states = tuple(
+                source_references = tuple(
                     self._episode_reference(
                         episode_id,
                         episodes,
                         at,
                         exact=False,
-                    )[0]
+                    )
                     for episode_id in policy.activation_source_episode_ids
                 )
+                source_states = tuple(source for source, _ in source_references)
                 path = policy.activation_path_node_ids
                 source_nodes = {source.node_id for source in source_states}
                 requires_source = policy.activation_reason not in {
@@ -1648,8 +1710,31 @@ class ZoneModelEngine:
                     or (
                         policy.activation_reason == "settled_endpoint_reacquired"
                         and (
-                            policy.activation_track_confidence != "confirmed"
+                            not (
+                                (
+                                    policy.activation_track_confidence == "confirmed"
+                                    and len(path) == 3
+                                )
+                                or (
+                                    policy.activation_track_confidence == "provisional"
+                                    and len(path) == 1
+                                )
+                            )
                             or source_states
+                        )
+                    )
+                    or (
+                        policy.activation_reason == "settled_adjacent_transfer"
+                        and (
+                            policy.activation_track_confidence != "provisional"
+                            or not self._direct_different_zone_pair(path)
+                            or len(source_references) != 1
+                            or source_states[0].node_id != path[0]
+                            or source_references[0][1] > policy.activation_at
+                            or physical_nodes[path[0]].interaction_aliases
+                            or SHARED_PROFILES[
+                                physical_nodes[path[0]].profile_name
+                            ].role != "stay"
                         )
                     )
                 ):
@@ -1685,6 +1770,7 @@ class ZoneModelEngine:
             "local_interaction",
             "missed_edge",
             "same_zone",
+            "settled_adjacent_transfer",
             "settled_endpoint",
         }
         tokens = {token.token_id: token for token in snapshot.traversal_tokens}
@@ -1753,6 +1839,24 @@ class ZoneModelEngine:
                 raise ValueError("Traversal token provenance is incompatible")
             if token.track_confidence == "confirmed" and len(token.path_node_ids) != 3:
                 raise ValueError("Confirmed traversal token lacks a bounded path")
+            if token.provenance_kind == "settled_adjacent_transfer" and (
+                token.track_confidence != "provisional"
+                or not token.equivalent_confirmed_strength
+                or not self._direct_different_zone_pair(token.path_node_ids)
+            ):
+                raise ValueError("Settled-adjacent traversal token is incompatible")
+            if token.provenance_kind == "settled_endpoint" and not (
+                (
+                    token.track_confidence == "confirmed"
+                    and len(token.path_node_ids) == 3
+                )
+                or (
+                    token.track_confidence == "provisional"
+                    and len(token.path_node_ids) == 1
+                    and not token.equivalent_confirmed_strength
+                )
+            ):
+                raise ValueError("Settled-endpoint traversal token is incompatible")
             if token.equivalent_confirmed_strength and (
                 (
                     token.provenance_kind in {"boundary", "missed_edge"}
@@ -1763,7 +1867,10 @@ class ZoneModelEngine:
                     and len(token.path_node_ids) != 1
                 )
                 or token.provenance_kind
-                not in {"boundary", "local_interaction", "missed_edge"}
+                not in {
+                    "boundary", "local_interaction", "missed_edge",
+                    "settled_adjacent_transfer",
+                }
             ):
                 raise ValueError("Equivalent traversal strength is incompatible")
             if any(node_id not in self._map.nodes for node_id in token.path_node_ids):
@@ -1892,24 +1999,131 @@ class ZoneModelEngine:
                 None,
             )
             state = episodes.get(support.current_node_id)
-            belief = beliefs[support.current_zone]
+            belief = beliefs.get(support.current_zone)
             if (
                 node is None
                 or node.zone != support.current_zone
                 or state is None
+                or belief is None
                 or state.episode_id != support.current_episode_id
+                or state.started_at is None
+                or state.started_at > support.updated_at
                 or support.updated_at > snapshot.updated_at
             ):
                 raise ValueError("Anonymous-support endpoint is incompatible")
-            origin_token = tokens.get(
-                support.support_id.removeprefix("support:")
+            origin_id = support.support_id.removeprefix("support:")
+            origin_node = next(
+                (
+                    node_id
+                    for node_id in sorted(episodes, key=len, reverse=True)
+                    if origin_id.startswith(f"{node_id}:")
+                ),
+                None,
             )
+            if origin_node is None:
+                raise ValueError("Anonymous-support origin node is incompatible")
+            origin_episode = origin_id[len(origin_node) + 1 :]
+            origin_state, origin_at = self._episode_reference(
+                origin_episode, episodes, snapshot.updated_at, exact=False
+            )
+            # Least-ID coalescence retains the minimum creation time across
+            # members. Its bounded descendants cannot reconstruct that history.
             if (
-                origin_token is not None
-                and origin_token.accepted_at == support.created_at
-                and origin_token.provenance_kind != support.provenance_kind
+                origin_state.node_id != origin_node
+                or not support.created_at <= origin_at <= support.updated_at
+            ):
+                raise ValueError(
+                    "Anonymous-support origin identity/time is incompatible"
+                )
+            origin_token = tokens.get(origin_id)
+            if origin_token is not None and not self._supports._confirmed_strength(
+                origin_token
+            ):
+                raise ValueError(
+                    "Anonymous-support origin lacks valid creation strength"
+                )
+            untransferred = (
+                origin_episode == support.current_episode_id
+                and origin_node == support.current_node_id
+                and support.created_at == support.updated_at
+            )
+            if untransferred and (
+                (
+                    origin_token is not None
+                    and (
+                        origin_token.provenance_kind != support.provenance_kind
+                        or origin_token.path_node_ids != support.path_node_ids
+                    )
+                )
+                or support.provenance_kind == "settled_adjacent_transfer"
+                or (
+                    support.provenance_kind == "adjacent"
+                    and len(set(support.path_node_ids)) != 3
+                )
+            ):
+                raise ValueError(
+                    "Interaction or traversal support creation provenance "
+                    "is incompatible"
+                )
+            path = support.path_node_ids
+            interaction_support = support.provenance_kind == "local_interaction"
+            if (
+                bool(node.interaction_aliases) != interaction_support
+                or (interaction_support and (node.reliability != 1.0 or len(path) != 1))
             ):
                 raise ValueError("Interaction support provenance is incompatible")
+            if (
+                (
+                    support.provenance_kind == "settled_adjacent_transfer"
+                    and not self._direct_different_zone_pair(path)
+                )
+                or (
+                    support.provenance_kind == "adjacent"
+                    and len(path) not in {2, 3}
+                )
+                or (
+                    support.provenance_kind in {"boundary", "missed_edge"}
+                    and len(path) != 3
+                )
+            ):
+                raise ValueError(
+                    "Anonymous-support current provenance/path is incompatible"
+                )
+            target_tokens = tuple(
+                tokens[token_id]
+                for token_id, support_id in bindings.items()
+                if support_id == support.support_id
+                and tokens[token_id].node_id == support.current_node_id
+                and tokens[token_id].episode_id == support.current_episode_id
+            )
+            for token in target_tokens:
+                # Coalescence can leave a causally stale target binding, but
+                # changing updated_at cannot excuse a contradictory endpoint.
+                endpoint_rebind = token.provenance_kind == "settled_endpoint"
+                if token.accepted_at > support.updated_at or (
+                    endpoint_rebind
+                    and not (
+                        support.state == "settled"
+                        and (
+                            (
+                                token.track_confidence == "confirmed"
+                                and token.path_node_ids == path
+                            )
+                            or (
+                                token.track_confidence == "provisional"
+                                and len(path) == 2
+                                and token.path_node_ids == (support.current_node_id,)
+                            )
+                        )
+                    )
+                ) or (
+                    not endpoint_rebind
+                    and (
+                        token.provenance_kind != support.provenance_kind
+                        or token.path_node_ids != path
+                    )
+                ):
+                    raise ValueError("Anonymous-support target binding is incompatible")
             if support.state == "settled":
                 if (
                     SHARED_PROFILES[node.profile_name].role != "stay"
@@ -1928,17 +2142,24 @@ class ZoneModelEngine:
                 ):
                     raise ValueError("Settled anonymous support is incompatible")
                 continue
-            target_tokens = tuple(
-                tokens[token_id]
-                for token_id, support_id in bindings.items()
-                if support_id == support.support_id
-                and tokens[token_id].node_id == support.current_node_id
-                and tokens[token_id].episode_id == support.current_episode_id
-            )
             if not target_tokens or all(
-                token.valid_until != support.valid_until for token in target_tokens
+                token.valid_until != support.valid_until
+                or token.accepted_at != support.updated_at
+                for token in target_tokens
             ):
                 raise ValueError("Moving support lacks its target binding")
+
+    def _direct_different_zone_pair(self, path: tuple[str, ...]) -> bool:
+        """A handoff is one physical edge, never a bounded missed-edge path."""
+
+        return bool(
+            len(path) == 2
+            and path[0] != path[1]
+            and all(node_id in self._map.nodes for node_id in path)
+            and path[1] in self._map.neighbors(path[0])
+            and self._map.nodes[path[0]].occupancy_zone
+            != self._map.nodes[path[1]].occupancy_zone
+        )
 
     def _validate_count_snapshot(self, snapshot: ZoneModelSnapshot) -> None:
         """Require stored count conflicts to match current support evidence."""

@@ -411,8 +411,8 @@ class ZonePolicy:
                     activation_track_confidence = authorization.track_confidence
                     activation_path_node_ids = authorization.path_node_ids
                     activation_provenance_kind = authorization.provenance_kind
-                    activation_source_episode_ids = tuple(
-                        token.episode_id for token in authorization.source_tokens
+                    activation_source_episode_ids = self._source_episode_ids(
+                        authorization
                     )
                     if emit_event:
                         event = self._event(
@@ -874,11 +874,7 @@ class ZonePolicy:
             if local_state is None or local_state.episode_id is None
             else (local_state.episode_id,)
         )
-        source_evidence = (
-            ()
-            if authorization is None
-            else tuple(token.episode_id for token in authorization.source_tokens)
-        )
+        source_evidence = self._source_episode_ids(authorization)
         evidence_ids = tuple(dict.fromkeys((*local_evidence, *source_evidence)))
         return PolicyDecision(
             at,
@@ -905,6 +901,17 @@ class ZonePolicy:
             None if event is None else event.kind,
             reason,
         )
+
+
+    @staticmethod
+    def _source_episode_ids(
+        authorization: TraversalAuthorization | None,
+    ) -> tuple[str, ...]:
+        if authorization is None:
+            return ()
+        if authorization.settled_handoff is not None:
+            return (authorization.settled_handoff.source_episode_id,)
+        return tuple(token.episode_id for token in authorization.source_tokens)
 
 
 __all__ = ["POLICY_CALIBRATIONS", "PolicyAuditLog", "ZonePolicy"]

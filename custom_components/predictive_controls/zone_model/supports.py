@@ -17,6 +17,7 @@ from .types import (
     EpisodeEffect,
     EpisodeState,
     PhysicalNode,
+    SettledAdjacentHandoff,
     SupportTokenBinding,
     SupportTransition,
     SupportTransitionEvent,
@@ -98,6 +99,155 @@ class AnonymousSupportTracker:
         )
         return matches[0] if len(matches) == 1 else None
 
+    def settled_adjacent_for(
+        self,
+        target: EpisodeState,
+        effect: EpisodeEffect,
+        episodes: Sequence[EpisodeState],
+        beliefs: Sequence[ZoneBeliefState],
+    ) -> SettledAdjacentHandoff | None:
+        """Select a unique currently supported assertion, never an aged token."""
+
+        node = self._nodes.get(target.node_id)
+        at = effect.at
+        if (
+            node is None
+            or node.interaction_aliases
+            or effect.kind not in {"positive", "correlated_positive"}
+            or effect.node_id != target.node_id
+            or effect.zone != target.zone
+            or effect.episode_id != target.episode_id
+            or target.started_at != at
+            or target.status != "asserted"
+            or not target.known_on
+            or target.health_warning
+            or target.cadence_warning
+            or target.traversal_valid_until is None
+            or target.traversal_valid_until <= at
+            or not 0 < effect.reliability <= 1
+        ):
+            return None
+        states = self._unique_by(episodes, "node_id", "episode")
+        zones = self._unique_by(beliefs, "zone", "belief")
+        eligible: list[AnonymousOccupancySupport] = []
+        for support in self._supports:
+            source_node = self._nodes.get(support.current_node_id)
+            source = states.get(support.current_node_id)
+            belief = zones.get(support.current_zone)
+            if (
+                support.state == "settled"
+                and support.valid_until is None
+                and support.created_at <= support.updated_at <= at
+                and source_node is not None
+                and source_node.zone == support.current_zone
+                and not source_node.interaction_aliases
+                and SHARED_PROFILES[source_node.profile_name].role == "stay"
+                and source_node.node_id != target.node_id
+                and source_node.zone != target.zone
+                and target.node_id in self._map.neighbors(source_node.node_id)
+                and source is not None
+                and source.zone == support.current_zone
+                and source.episode_id == support.current_episode_id
+                and source.started_at is not None
+                and source.started_at <= at
+                and source.status == "asserted"
+                and source.known_on
+                and not source.health_warning
+                and not source.cadence_warning
+                and belief is not None
+                and not belief.health_warning
+                and belief.context == "asserted"
+                and belief.generation_episode_id == support.current_episode_id
+                and belief.asserted_episode_id == support.current_episode_id
+                and belief.outward_context is None
+                and belief.probability
+                >= POLICY_CALIBRATIONS[belief.profile_name].on_threshold
+            ):
+                eligible.append(support)
+        if len(eligible) != 1:
+            return None
+        support = eligible[0]
+        return SettledAdjacentHandoff(
+            support.support_id,
+            support.current_node_id,
+            support.current_zone,
+            support.current_episode_id,
+            support.updated_at,
+            target.node_id,
+            effect.episode_id,
+            at,
+        )
+
+    def prepare_handoff(
+        self,
+        at: datetime,
+        effect: EpisodeEffect,
+        authorization: TraversalAuthorization,
+        token: TraversalToken,
+        episodes: Sequence[EpisodeState],
+        beliefs: Sequence[ZoneBeliefState],
+        active_tokens: Sequence[TraversalToken],
+    ) -> SupportTransition:
+        """Validate and build the complete transfer before public callbacks."""
+
+        self._validate_time(at)
+        self._validate_application(effect, authorization, token, at)
+        handoff = authorization.settled_handoff
+        if handoff is None or token not in active_tokens:
+            raise ValueError("Settled transfer requires its selected live target")
+        supports = {item.support_id: item for item in self._supports}
+        bindings = {item.token_id: item.support_id for item in self._bindings}
+        support = supports.get(handoff.support_id)
+        if (
+            support is not None
+            and support.current_node_id == token.node_id
+            and support.current_episode_id == token.episode_id
+            and support.updated_at == at
+            and bindings.get(token.token_id) == support.support_id
+        ):
+            return SupportTransition(
+                self._supports, self._bindings, self._latest_transition
+            )
+        target = next(
+            (item for item in episodes if item.node_id == token.node_id), None
+        )
+        if (
+            target is None
+            or support is None
+            or self.settled_adjacent_for(target, effect, episodes, beliefs) != handoff
+            or token.track_confidence != "provisional"
+            or not token.equivalent_confirmed_strength
+            or token.valid_until != target.traversal_valid_until
+        ):
+            raise ValueError("Settled transfer selection is no longer valid")
+        settled = self._settlement_eligible(token, episodes, beliefs)
+        transition = "settled" if settled else "advanced"
+        supports[support.support_id] = AnonymousOccupancySupport(
+            support.support_id,
+            "settled" if settled else "moving",
+            support.created_at,
+            at,
+            token.episode_id,
+            token.node_id,
+            token.zone,
+            token.path_node_ids,
+            "settled_adjacent_transfer",
+            None if settled else token.valid_until,
+            transition,
+        )
+        bindings = {
+            token_id: support_id for token_id, support_id in bindings.items()
+            if support_id != support.support_id
+        }
+        bindings[token.token_id] = support.support_id
+        latest = SupportTransitionEvent(
+            support.support_id, at, transition, "settled_adjacent_transfer"
+        )
+        supports, bindings, merged = self._coalesce_settled_zones(
+            supports, bindings, at, latest
+        )
+        return self._transition(supports, bindings, merged)
+
     @property
     def counters(self) -> dict[str, int]:
         return dict(self._counters)
@@ -148,7 +298,18 @@ class AnonymousSupportTracker:
         beliefs: Sequence[ZoneBeliefState],
         active_tokens: Sequence[TraversalToken],
         retained_tokens: Sequence[TraversalToken],
+        *,
+        prepared_handoff: SupportTransition | None = None,
     ) -> SupportTransition:
+        if authorization is not None and authorization.settled_handoff is not None:
+            if prepared_handoff is None:
+                if effect is None or issued_target_token is None:
+                    raise ValueError("Settled transfer requires a target effect/token")
+                prepared_handoff = self.prepare_handoff(
+                    at, effect, authorization, issued_target_token,
+                    episodes, beliefs, active_tokens,
+                )
+            return self._commit(prepared_handoff, at)
         next_state = self._advanced_state(
             at,
             episodes,

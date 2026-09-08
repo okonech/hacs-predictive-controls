@@ -352,6 +352,42 @@ def test_isolated_correlated_target_is_rejected_without_pending_authority() -> N
     assert frontier.uses == ()
 
 
+@pytest.mark.parametrize(
+    ("target_offset", "authorized", "reason"),
+    [
+        (
+            timedelta(seconds=179, microseconds=999999),
+            True,
+            "adjacent_authorized",
+        ),
+        (timedelta(seconds=180), False, "track_bootstrap_pending"),
+    ],
+)
+def test_stay_presence_token_has_180_second_half_open_expiry(
+    target_offset: timedelta,
+    authorized: bool,
+    reason: str,
+) -> None:
+    frontier = TraversalFrontier(graph(), NODES)
+    source = episode(
+        "room_a_presence",
+        "room_a",
+        "stay_presence",
+        NOW,
+        valid_for=timedelta(seconds=180),
+    )
+    token = issue(frontier, source)
+    target_at = NOW + target_offset
+    target = episode("hall", "hall", "transition_fast", target_at)
+
+    result = frontier.authorize(target, target_at, count=None)
+
+    assert token.valid_until == NOW + timedelta(seconds=180)
+    assert result.authorized is authorized
+    assert result.reason == reason
+    assert (token in result.source_tokens) is authorized
+
+
 def test_correlated_target_requires_current_trustworthy_episode() -> None:
     frontier = TraversalFrontier(graph(), NODES)
     target = episode(
@@ -1221,6 +1257,27 @@ def test_positive_count_never_authorizes_isolated_episode() -> None:
     frontier.advance(NOW + timedelta(seconds=89, microseconds=999999))
     assert len(frontier.pending_candidates) == 1
     frontier.advance(NOW + timedelta(seconds=90))
+    assert not frontier.pending_candidates
+
+
+def test_stay_presence_pending_candidate_keeps_120_second_expiry() -> None:
+    frontier = TraversalFrontier(graph(), NODES)
+    target = episode(
+        "isolated_presence",
+        "isolated",
+        "stay_presence",
+        NOW,
+        valid_for=timedelta(seconds=180),
+    )
+
+    result = frontier.authorize(target, NOW, count=CountState(1))
+
+    assert not result.authorized
+    assert result.reason == "track_bootstrap_pending"
+    assert frontier.pending_candidates[0].expires_at == NOW + timedelta(seconds=120)
+    frontier.advance(NOW + timedelta(seconds=119, microseconds=999999))
+    assert len(frontier.pending_candidates) == 1
+    frontier.advance(NOW + timedelta(seconds=120))
     assert not frontier.pending_candidates
 
 
