@@ -25,11 +25,18 @@ def project_reliability_warnings(
     return _group_reliability_warnings(reportable)
 
 
+def reliability_warning_label(kind: str, reasons: object) -> str:
+    """Describe unsupported presence without diagnosing a hardware fault."""
+    if kind == "suspected_stuck" and _reasons(reasons) == ("assertion_timeout",):
+        return "Continuous presence detected; path unverified"
+    return kind.replace("_", " ")
+
+
 def reliability_warning_summary(rows: Sequence[dict[str, object]]) -> str:
     """Render deterministic compact text from projected warning rows."""
 
     return "; ".join(
-        f"{row['zone']}: {str(row['kind']).replace('_', ' ')} "
+        f"{row['zone']}: {reliability_warning_label(str(row['kind']), row['reasons'])} "
         f"[{', '.join(_reasons(row['reasons']))}]"
         f"{' (active)' if row['active'] else ''}"
         for row in rows

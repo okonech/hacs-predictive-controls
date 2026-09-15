@@ -31,9 +31,14 @@
 </head>
 
 <body>
+  <aside style="padding:12px;color:#eee">Local mock only — no Home Assistant access.
+    <button id="all-on">All three ON</button>
+    <button id="history">First two OFF</button>
+    <button id="warning">Toggle warning</button>
+  </aside>
   <predictive-controls-panel></predictive-controls-panel>
   <script type="module">
-    await import(`../../custom_components/predictive_controls/frontend/panel.js?ts=${Date.now()}`);
+    await import(`../../custom_components/predictive_controls/frontend/panel-v0.2.6.js`);
 
     const map = {
       floors: ["basement", "first_floor", "second_floor"],
@@ -102,9 +107,7 @@
       entry_id: "preview",
       map,
       map_yaml: "preview: true\n",
-      actions_yaml: "actions: []\n",
       transition_window_seconds: 30,
-      prediction_threshold: 0.6,
       expected_occupants: 2,
     };
     const status = {
@@ -149,7 +152,34 @@
       device_class: "motion",
     }));
 
-    document.querySelector("predictive-controls-panel").hass = {
+    const route = ["entrance_mmwave_dimmer", "dining_room_motion", "living_room_fireplace_right"].map((id, index) => {
+      const at = `2026-09-15T12:00:0${index}+00:00`;
+      return { node_id: id, zone: map.nodes[id].zone, episode_id: `${id}:1:${at}`, at, kind: "positive", branch_active: true };
+    });
+    const path = { route, visits: structuredClone(route), endpoint: structuredClone(route.at(-1)), track_confidence: "confirmed", endpoint_eligible: true };
+    status.expected_occupants = 2;
+    status.occupancy_diagnostics.selected_paths = [path, null];
+    status.occupancy_diagnostics.episodes = route.map(v => ({ node_id: v.node_id, zone: v.zone, episode_id: v.episode_id, status: "asserted" }));
+    status.occupancy_diagnostics.path_health = route.map(v => ({ node_id: v.node_id, zone: v.zone, phase: "on" }));
+    status.occupancy_diagnostics.reliability_warnings = [];
+    const panel = document.querySelector("predictive-controls-panel");
+    document.querySelector("#all-on").onclick = () => {
+      for (const health of status.occupancy_diagnostics.path_health) health.phase = "on";
+      for (const visit of route) visit.branch_active = true;
+      panel.refreshStatus();
+    };
+    document.querySelector("#history").onclick = () => {
+      status.occupancy_diagnostics.path_health.forEach((health, index) => health.phase = index < 2 ? "off" : "on");
+      route.forEach((visit, index) => visit.branch_active = index === 2);
+      panel.refreshStatus();
+    };
+    document.querySelector("#warning").onclick = () => {
+      status.occupancy_diagnostics.reliability_warnings = status.occupancy_diagnostics.reliability_warnings.length ? [] : [{
+        node_id: route[2].node_id, zone: route[2].zone, kind: "suspected_stuck", reasons: ["assertion_timeout"], active: true, last_observed_at: "2026-09-15T12:10:00Z",
+      }];
+      panel.refreshStatus();
+    };
+    panel.hass = {
       callWS(message) {
         if (message.type === "predictive_controls/config") return Promise.resolve(config);
         if (message.type === "predictive_controls/status") return Promise.resolve(status);

@@ -25,6 +25,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
+
+      - name: Install frontend build dependencies
+        run: npm ci
+
+      # Check committed bytes before any writing build can mask stale artifacts.
+      - name: Strict frontend types and asset freshness
+        run: npm run check:frontend
 
       - name: Install Python dependencies
         run: python -m pip install -e '.[test]'

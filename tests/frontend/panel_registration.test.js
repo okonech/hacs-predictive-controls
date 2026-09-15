@@ -489,7 +489,7 @@ test("occupancy graph gives active warning zones red precedence", async () => {
     panel.innerHTML,
     /class="zone-card status-confirmed is-active has-warning"/,
   );
-  assert.match(panel.innerHTML, /Suspected Stuck warning/);
+  assert.match(panel.innerHTML, /Continuous presence detected; path unverified warning/);
   assert.match(panel.innerHTML, /\.zone-card\.has-warning[^}]+#d32f2f/);
 });
 

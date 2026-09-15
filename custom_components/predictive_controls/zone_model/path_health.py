@@ -194,10 +194,14 @@ class PathHealth:
                     self._warning(state, "sustained_flapping", expiry, None)
                 else:
                     self._warning(state, "sustained_flapping", at, cycles[-1])
-            self._states[state.node_id] = replace(state, completed_cycles=tuple(
+            retained_cycles = tuple(
                 completion for completion in cycles
                 if at - completion < QUICK_CYCLE_WINDOW
-            ))
+            )
+            if retained_cycles != cycles:
+                self._states[state.node_id] = replace(
+                    state, completed_cycles=retained_cycles,
+                )
 
     def _support(self, state: PathHealthState, at: datetime, covered: bool) -> None:
         start = state.unsupported_started_at
@@ -206,7 +210,8 @@ class PathHealth:
             self._warning(state, "unsupported_jump", at, None)
         elif start is None:
             start = at
-        state = replace(state, unsupported_started_at=start)
+        if start != state.unsupported_started_at:
+            state = replace(state, unsupported_started_at=start)
         self._states[state.node_id] = state
         due = None if start is None else start + UNSUPPORTED_ON_WINDOW
         self._warning(

@@ -4,11 +4,13 @@
 **Authority:** This file is the sole source of product and model requirements.
 **Supported occupants:** 0 through 2, with 2 as the primary operating profile.
 **Implementation status:** Repository version `0.2.6` implements the approved
-selected-path, presence-gated departure, diagnostic-health and durable-learning
-contracts and is locally conformant after full parallel coverage and the separate
-validation gates recorded on 2026-09-15. [Section 19.0](#current-local-conformance) records the evidence
-separately from historical failures. This is not a deployed-state claim: no
-deployment, live restart or physical-actuation verification is claimed.
+selected-path, presence-gated departure, diagnostic-health, durable-learning and
+strict modular panel contracts. The presentation-only occupied-room warning fix
+passes its frozen regression. Full Python/incident/scenario/frontend and static
+gates pass; **final conformance is blocked by standalone p99 performance** under
+the current loaded host, also reproduced with the original status code.
+[Section 19.0](#current-local-conformance) distinguishes current results from
+historical green. No deployment, live restart or physical actuation is claimed.
 
 ### Approved selected-path cutover contract — 2026-09-12
 
@@ -1844,11 +1846,49 @@ live episode-fault inference.
   occurrence exactly 24 hours old is excluded. The ledger is diagnostics only
   and never evidence, traversal, count, policy, or prediction authority.
 - **REQ-DIAG-007:** Reliability renders every active warning kind per physical node:
-  `Flapping`, `Suspected stuck on` and the distinct unsupported-spatial diagnostic.
+  `Flapping`, continuous presence without verified path support, and the distinct
+  unsupported-spatial diagnostic. User-approved presentation amendment2026-09-15:
+  a `suspected_stuck` row whose only reason is `assertion_timeout` is described
+  as **Continuous presence detected; path unverified**, not a proven/suspected
+  hardware fault. Keep the machine kind/reason, counts,600s qualification,
+  recovery, persisted records and model behavior unchanged. This wording applies
+  to active and retained cleared rows; mixed/legacy fault reasons retain their
+  existing descriptions. It does not assert a known restart or person location.
+  Both public Reliability summaries and panel labels honor the same rule.
   The Occupancy Graph derives current warnings from the same path-health projection,
   labels affected nodes, and gives red warning color precedence over active,
   frontier, border, shadow, and confidence-bar colors while preserving solid or
   dashed shape semantics. Cleared retained history does not keep a zone red.
+- **REQ-DIAG-008:** The panel displays selected anonymous slots directly above
+  the graph, preserving all zone cards and six existing workspaces. Derive route
+  membership from selected_paths.route, not visit unions, belief or old policy
+  authorizations. A current-presence occurrence requires branch_active, matching
+  physical node/zone/current episode and aggregate phase ON (not clearing).
+  All such occurrences have equal strength. Other retained occurrences are
+  history, including OFF/unknown endpoints. Candidate destinations are only one
+  outgoing configured hop from current-presence nodes. Aggregate strongest role
+  presence > history > candidate > neutral across nodes/slots/zones while keeping
+  all slot memberships and ordered revisit chips. Do not infer people, shorten
+  routes across missing intermediates, expand candidates recursively, or evict
+  endpoints by elapsed time. Provisional/confirmed badges do not change strength.
+  Warnings override colors, not textual roles or line shape. Count0/null slots,
+  malformed/unavailable/mismatched data are explicit; only absent selected_paths
+  permits a labeled legacy-frontier fallback, never present empty or malformed.
+- **REQ-DIAG-009:** Frontend sources are strict TypeScript with modular typed
+  view components and pure path/layout/map/format/YAML helpers. Enable strict,
+  noUncheckedIndexedAccess and exactOptionalPropertyTypes; no any, unchecked
+  casts, non-null assertions or suppression escape hatches. Decode unknown wire
+  inputs before use, preserve unknown map fields and YAML/alias types, escape
+  dynamic text, and scope styles to the panel. Preserve dirty edits, focused
+  controls and scroll during routine refresh; bound requests and prevent stale
+  async responses or disconnect/reconnect from corrupting current state. Keep
+  save and stale-entity preview/confirmation contracts with duplicate-write guards.
+- **REQ-DIAG-010:** HACS consumes prebuilt self-contained JavaScript inside the
+  integration; it never runs a source build. Retain the native custom element,
+  existing module_url/admin registration and version agreement. Locked development
+  dependencies produce deterministic artifacts; strict typecheck, nonwriting
+  freshness, pure/real-DOM unit tests and standalone bundle checks are blocking
+  frontend gates. No CDN, bare runtime import, missing chunk or Node requirement.
 
 ## 15. Performance and Determinism
 
@@ -1896,6 +1936,11 @@ live episode-fault inference.
   including nested dispatch and failure cleanup. Full audit materialization is
   reserved for startup restoration, explicit diagnostics, persistence, and
   operator status requests.
+  Health advancement reuses unchanged validated immutable records without
+  skipping deadline, warning-refresh or frontier-validation work. Audit row
+  sizing projects the flat immutable decision fields into fresh canonical JSON
+  values without deep-copying them; exact bytes, bounds, eviction and post-write
+  deferral ordering remain unchanged. No cross-operation cache is required.
 - **REQ-PERF-006:** Unsupported candidates may remain pending for their profile's
   bounded track-bootstrap window. If fast authorization arrives while pending,
   promotion uses `REQ-PERF-001`; it does not wait for the deadline.
@@ -2243,7 +2288,101 @@ references remain in [Section 19.5](#deferred-operational-obligations) and
 
 ### 19.0 Current local conformance — validation recorded 2026-09-15
 
-**Latest verification:** the first fresh process-parallel coverage attempt passed
+**Current warning-label and strict-panel qualification:** the user approved
+a presentation-only fix followed by a strict modular UX refactor. Approved
+read-only diagnostics/history in sibling Homelab's ignored
+tmp/occupied-room-warning-20260915 capture count2/U-U after incompatible-fingerprint
+restore rejection, both rooms legitimately ON per the report, and exact600s
+assertion_timeout frontiers17:34:15.769618/.791089UTC. Diagnostics SHA256
+`cc7d089dd4acd91d60ca82e2d8688d9eb826ce7759ea459f9272d18db7529162`;
+history SHA256`4a0fd2a1069504ae7cb1e16b87a7216df2a8cb7fb08006963752f6b35ca9529f`.
+Missing selected evidence caused the warning, not proof of hardware failure;
+warning and inactive policy independently followed missing path context. Time
+alone need not clear it. The disconfirming check was exact-node selected support
+or OFF/unknown recovery, preserved in neighboring tests. This does not reproduce
+an actual restart or prove physical actuation.
+
+The permanent [incident replay](tests/incidents/test_inc_2026_09_15_1724z_occupied_rooms_stuck_warning.py)
+retains12 exact observations/processing frontiers and real scheduled public
+Reliability writes. Pre-fix it failed only the no-stuck-label assertion
+(0.37s, repeated0.35s); immediately after the first Python label edit it passed
+(0.34s), with147 nearby diagnostic/status/inverse cases passing4.99s.
+Counts, reasons,600s warning timestamps and frozen replay inputs remain intact.
+The warning fix itself changes only status.py's label helper and summary call.
+Existing display-only expectations in test_status.py and the graph test adopt
+the approved wording; no other old test assertion/fixture/harness changed.
+
+Frontend uses19strict TypeScript modules including9typed view components.
+Selected paths/current-presence/history/candidate rules implement DIAG008, with
+all old workspaces/cards preserved.209frontend cases cover31baseline,
+117pure/layout/decoder/YAML,56shipped-bundle DOM and5artifact gates. Browser
+smoke at desktop/390px retains16zone cards,17Map nodes, no card overlap or page
+overflow, equal ON3 roles, retained first2OFF history and warning-red border/bar.
+Only local mock data was used. The self-contained0.2.6panel is336775bytes;
+compatibility panel has identical bytes; generated helpers7280bytes. CI installs
+locked dependencies and checks strict types and nonwriting freshness. No loader,
+inference, persistence or fingerprint changes. The larger asset includes the
+local YAML serializer instead of external runtime imports.
+
+| Current gate                                                 | Result after final code changes                                                                                                                                         |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Full Python `.venv/bin/pytest -q`                            | **3234 passed**,263.34s pytest /264.900s outer (4m25s); **100% statement/branch**,7874 statements/3002 branches, zero missing/partial |
+| Explicit `.venv/bin/pytest --no-cov -q tests -k 'test_inc_'` | **76 passed**,58.83s /59.038s outer |
+| Separate `.venv/bin/pytest --no-cov -q -m scenario`          | **104 passed**,37.35s /37.534s outer |
+| `npm run test:frontend`                                      | **209 passed**,4299.981228ms; zero failures/skips |
+| Ruff / mypy                                                  | Pass;161 source files |
+| Strict typecheck / build / freshness                         | Pass; deterministic self-contained artifacts and unchanged0.2.6registration                                                                                             |
+| Editor / diff / frozen-source preservation                   | Pass; all preexisting incidents/harnesses/benchmark unchanged; performance intake index4df4a32342f256f569547e9b4536c33494fa762c7a694a9cd4c27f1bdbe01e6f preserved |
+| Standalone100-event benchmark                                | **Pass**; positive worst p99 **3.728227ms**, max **3.860557ms**; rejected p99 **3.938146ms**, max **4.304092ms**; all qualification, count, fanout, timer and hard gates pass |
+
+Fresh final artifacts: `/tmp/callback-perf-20260915/` (rebuilt-* Python logs,
+final-frontend-rebuilt.log, final-performance.json and semantic/profile comparisons).
+Coverage is a fresh non-append run; all gates finished. The first frontend gate
+correctly rejected stale generated assets after intervening source formatting.
+The ordinary build regenerated only settings-callback formatting; strict freshness
+and all frontend tests passed, and Python/corpus/scenario gates were rerun after
+that final asset change. No failed attempt is counted as passing.
+
+**Performance blocker resolved without raising limits:** earlier UI qualification
+under observed unrelated CPU contention failed (positive p99 5.634570ms/rejected
+5.984307ms); CPU0 and original-status in-memory counterfactuals also failed.
+Those failures remain in `/tmp/strict-panel-20260915-final/`; they did not establish
+a label-induced regression. Fresh unmodified intake later passed at 4.097385ms /
+4.212224ms. Host variability is a contributor hypothesis, not a proven cause.
+The user explicitly requested optimization while retaining 5ms where feasible.
+
+Callback-only profiling of exactly1200 measured runtime observations isolated
+redundant unchanged health-state replacement and audit `asdict`/deepcopy work.
+Only [health advancement](custom_components/predictive_controls/zone_model/path_health.py)
+and [audit sizing](custom_components/predictive_controls/zone_model/policy.py)
+were optimized; no model decisions, call order, validation, timing or schema changed.
+The retained [computational regression](tests/incidents/test_inc_2026_09_15_2004z_callback_allocation.py)
+explicitly uses local report-intake time, not fabricated HA events. Before edits,
+its two work guards failed (200 redundant replacements/600 deepcopy calls), while
+four public-diagnostic/byte-boundary proofs passed; immediately after edits all6
+passed, with405 nearest tests green. It is not a host-independent latency replay.
+Independent raw captures for all five trace profiles, count0/1/2 and100events each
+(1500events) are exactly equal, including diagnostics, persisted state, strict
+restore and continuation. This disconfirms semantic drift in those traces.
+
+Matching instrumented callbacks reduced total calls from35,275,106 to23,402,306;
+dataclass replacements449800→77900 (82.7% fewer), health-state validation392900→
+21000, and audit `asdict` calls19400→0. Profile elapsed9.701→7.117s includes
+instrumentation and is not acceptance latency. Both optimized uninstrumented
+runs passed; the final authoritative result is in the table. All eleven positive
+workloads qualify100/100; rejection qualifies100/100 with zero acquired/ON writes.
+Unchanged5ms p99 and hard<10ms gates apply. No unrelated process was stopped.
+
+Independent preimplementation and final read-only reviews found no blocker.
+Canonical contracts and results are reconciled; the completed warning, UX and
+allocation working specs are removed, with both report regressions retained.
+The unresolved external-office working record remains separate. No deployment,
+restart, staging, commit or physical-light verification occurred.
+
+#### Earlier test-runtime optimization qualification (historical baseline)
+
+**Previous completed full-suite verification (before this UI/label work):**
+the first fresh process-parallel coverage attempt passed
 all **3217 unchanged tests** in **260.403s outer elapsed / 258.45s pytest elapsed**,
 below the user-requested **300s** local coverage-command target. Collection, worker
 startup, all fixtures, teardown, fresh coverage combination and JSON reporting were
@@ -2300,7 +2439,7 @@ checks totals **382.635s (6m23s)** in command time, not an under-five-minute cla
 for the whole redundant validation sequence. Standalone benchmark SHA256:
 `2cf75b622dd5a0a7d610afea27bda28507874ad8f1f13be9887d42414fc352ea`.
 
-The current intake index is
+The earlier tooling-optimization intake index was
 `1310bc69d61a1699ab1d1c80dc1f6a1d9293d60d066f2593e761bfd057cf4f10`;
 older index hashes below are historical. This tooling optimization changes only
 test configuration and current documentation; no deployment, staging or commit.

@@ -6,7 +6,7 @@ import json
 import math
 from collections import deque
 from collections.abc import Callable
-from dataclasses import asdict, replace
+from dataclasses import fields, replace
 from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import Any
@@ -100,7 +100,11 @@ class PolicyAuditLog:
 
     @classmethod
     def encoded_size(cls, row: PolicyDecision) -> int:
-        payload = cls._json_value(asdict(row))
+        # PolicyDecision has only primitive/time fields and tuples of strings.
+        # Build fresh JSON values without asdict's redundant immutable deepcopy.
+        payload = cls._json_value({
+            field.name: getattr(row, field.name) for field in fields(row)
+        })
         return len(
             json.dumps(
                 payload,

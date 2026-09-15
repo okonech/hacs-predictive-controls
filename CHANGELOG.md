@@ -2,14 +2,19 @@
 
 ## Unreleased
 
-The local implementation remains version `0.2.6`. These changes are validated
-locally, not a claim of a published release, deployment or physical-light
-verification. [SPECIFICATION.md](SPECIFICATION.md) owns current behavior and
+The local implementation remains version `0.2.6`. Functional, static and unchanged
+5ms p99 benchmark gates pass after equivalent health/audit allocation reductions.
+This is not a published release,
+deployment or physical-light verification. [SPECIFICATION.md](SPECIFICATION.md) owns current behavior and
 [validation evidence](SPECIFICATION.md#current-local-conformance); versioned
 entries below describe earlier releases and may contain superseded behavior.
 
 ### Changed
 
+- Replace handwritten panel JavaScript with strict TypeScript modules and typed
+	native components, retaining all six workspaces and shipping prebuilt HACS assets.
+- List selected anonymous paths above the graph, distinguish current presence,
+	retained history and one-hop candidates, and preserve endpoint/overlap semantics.
 - Track exactly N selected anonymous slots, including unlocated and overlapping
 	paths. Endpoint OFF or elapsed time alone does not retire selected occupancy;
 	actual movement may displace coverage without inventing sensor observations.
@@ -26,6 +31,15 @@ entries below describe earlier releases and may contain superseded behavior.
 
 ### Fixed
 
+- Avoid reconstructing unchanged immutable health records and deep-copying flat
+	audit decisions during byte sizing. Preserve exact warning frontiers, canonical
+	audit bytes, retention and model results; retain the computational regression.
+	Final worst positive/rejected p99 is3.728/3.938ms; the5ms limit is unchanged.
+- Describe assertion-timeout-only diagnostics as “Continuous presence detected;
+	path unverified” rather than a stuck-sensor fault. Machine fields,600s timing,
+	recovery, inference and persistence are unchanged; retain the reported regression.
+- Preserve dirty YAML/inspector edits, lossless map extensions, focus and scroll;
+	reject stale asynchronous responses and duplicate destructive requests.
 - Preserve independently authorized correlated tokens through support preparation
 	without restoring retired selected authority or enabling gap acquisition.
 - Publish committed metadata before callbacks, retry failed entity writes and
@@ -41,6 +55,9 @@ entries below describe earlier releases and may contain superseded behavior.
 
 ### Development
 
+- Add locked TypeScript/esbuild/YAML/DOM-test dependencies, strict typechecking,
+  deterministic build and nonwriting asset-freshness CI gates. All209frontend
+  tests pass, including the original31 and shipped-bundle interaction/race tests.
 - Run pytest in isolated processes with automatic worker selection capped at16,
 	small item-level scheduling chunks, no worker-crash retries and slow-test reports.
 	The first full uncached coverage qualification took4m20s versus28m32s serial on

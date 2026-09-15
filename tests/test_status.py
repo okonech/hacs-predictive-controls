@@ -137,7 +137,7 @@ def test_reliability_warning_projection_groups_reasons_at_exact_cutoff() -> None
     assert room["active"] is True
     assert room["cleared_at"] is None
     assert reliability_warning_summary(rows) == (
-        "office: suspected stuck [assertion_timeout]; "
+        "office: Continuous presence detected; path unverified [assertion_timeout]; "
         "room: flapping [impossible_cadence, sustained_flapping] (active)"
     )
 

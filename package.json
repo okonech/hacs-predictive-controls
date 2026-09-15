@@ -4,7 +4,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build:frontend": "node scripts/build_frontend.mjs",
+    "typecheck:frontend": "tsc --noEmit",
+    "build:frontend": "npm run typecheck:frontend && node scripts/build_frontend.mjs",
+    "check:frontend": "npm run typecheck:frontend && node scripts/build_frontend.mjs --check",
     "test:frontend": "node --test tests/frontend/*.test.js"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12",
+    "jsdom": "26.1.0",
+    "typescript": "5.9.3",
+    "yaml": "2.9.1"
   }
 }
