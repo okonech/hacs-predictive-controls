@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from custom_components.predictive_controls.confidence import ZoneConfidenceEngine
-from custom_components.predictive_controls.events import OccupancyEvent
+from custom_components.predictive_controls.occupancy_tracker import TrackerDiagnostics
 from custom_components.predictive_controls.status import (
     project_reliability_warnings,
     reliability_warning_summary,
@@ -15,7 +15,11 @@ from custom_components.predictive_controls.status import (
 )
 from custom_components.predictive_controls.zone_model.types import (
     ReliabilityWarningOccurrence,
+    SensorInput,
 )
+from tests.endpoint_count_fixture import advance_count_components, observe_count_sensor
+from tests.persistence_component_fixture import PersistenceComponents
+from tests.runtime_replay import ActiveEdge, RuntimeScenario
 from tests.test_confidence import event
 from tests.test_zone_model_count import conflict_map
 from tests.test_zone_model_engine import target_map
@@ -46,16 +50,28 @@ def runtime_with_target_state() -> SimpleNamespace:
 
 
 def test_runtime_status_payload_exposes_only_target_model_diagnostics() -> None:
+    """PATH001..004/DIAG001: actual selected pair, never a renamed legacy token."""
     payload = runtime_status_payload(runtime_with_target_state())
     diagnostics = payload["occupancy_diagnostics"]
 
     assert diagnostics["model"] == "zone_belief"
     assert diagnostics["policy"]["room"]["active"] is True
     assert diagnostics["beliefs"]["room"] >= 0.7
-    assert diagnostics["authorizations"][-1]["reason"] == (
-        "provisional_track_acquired"
-    )
+    authorization = diagnostics["authorizations"][-1]
+    assert authorization["reason"] == "selected_path"
+    assert authorization["provenance_kind"] == "selected_path"
+    assert authorization["track_confidence"] == "provisional"
+    assert authorization["path_node_ids"] == ["hall", "room"]
+    source = next(state for state in diagnostics["episodes"]
+                  if state["node_id"] == "hall")
+    assert source["episode_id"] is not None
+    assert authorization["selected_source_episode_ids"] == [source["episode_id"]]
+    assert authorization["authorized_at"] == (NOW + timedelta(seconds=2)).isoformat()
+    assert diagnostics["policy"]["hall"]["active"] is False
     assert diagnostics["recent_policy_events"][-1]["kind"] == "acquired"
+    assert diagnostics["recent_policy_events"][-1]["episode_id"] == (
+        authorization["target_episode_id"]
+    )
     assert "joint" not in diagnostics
     assert "zone_model_shadow" not in payload
 
@@ -153,6 +169,11 @@ def test_reliability_warning_projection_rejects_malformed_groups() -> None:
 
 
 def test_status_exposes_current_warning_and_bounded_occurrence() -> None:
+    """Historical ID; original single synthetic cycle is now the no-warning case.
+
+    HEALTH002/003 warning projection remains covered by the separately named
+    six-completed-cycle equivalent below, not removed with this obsolete threshold.
+    """
     runtime = runtime_with_target_state()
     runtime.confidence.observe(
         event("room", "room", "off", NOW + timedelta(seconds=10))
@@ -166,11 +187,68 @@ def test_status_exposes_current_warning_and_bounded_occurrence() -> None:
     room = next(
         item for item in diagnostics["episodes"] if item["node_id"] == "room"
     )
-    assert room["cadence_warning"] is True
-    assert room["cadence_warning_reason"] == "impossible_cadence"
-    assert diagnostics["health_warnings"] == ["room"]
-    assert diagnostics["reliability_warnings"][0]["kind"] == "flapping"
-    assert diagnostics["reliability_warning_occurrences"][0]["active"] is True
+    assert room["cadence_warning"] is False
+    assert room["cadence_warning_reason"] is None
+    assert diagnostics["health_warnings"] == []
+    assert diagnostics["reliability_warnings"] == []
+    assert diagnostics["reliability_warning_occurrences"] == []
+    assert diagnostics["policy"]["room"]["active"] is True
+
+
+def test_status_six_completed_quick_cycles_warn_without_occupancy_degradation() -> None:
+    """HEALTH002/003: extend the original synthetic one-cycle input, not an incident.
+
+    Five completed physical cycles cannot warn. The sixth OFF qualifies one
+    bounded diagnostic occurrence, without degrading or releasing the room.
+    """
+    runtime = runtime_with_target_state()
+    runtime.confidence.observe(
+        event("room", "room", "off", NOW + timedelta(seconds=10))
+    )
+    runtime.confidence.observe(
+        event("room", "room", "on", NOW + timedelta(seconds=12))
+    )
+    for seconds in (20, 30, 40, 50):
+        runtime.confidence.observe(
+            event("room", "room", "off", NOW + timedelta(seconds=seconds))
+        )
+        diagnostics = runtime_status_payload(runtime)["occupancy_diagnostics"]
+        assert diagnostics["reliability_warnings"] == []
+        assert diagnostics["reliability_warning_occurrences"] == []
+        assert diagnostics["policy"]["room"]["active"] is True
+        runtime.confidence.observe(
+            event("room", "room", "on", NOW + timedelta(seconds=seconds + 2))
+        )
+
+    runtime.confidence.observe(
+        event("room", "room", "off", NOW + timedelta(seconds=60))
+    )
+    diagnostics = runtime_status_payload(runtime)["occupancy_diagnostics"]
+    row, = diagnostics["reliability_warnings"]
+    assert (row["node_id"], row["kind"], row["active_reasons"]) == (
+        "room", "flapping", ["sustained_flapping"],
+    )
+    assert row["first_observed_at"] == (NOW + timedelta(seconds=60)).isoformat()
+    assert row["active"] is True
+    occurrence, = diagnostics["reliability_warning_occurrences"]
+    assert occurrence["reason"] == "sustained_flapping"
+    assert occurrence["first_observed_at"] == row["first_observed_at"]
+    assert occurrence["active"] is True
+    assert diagnostics["health_warnings"] == []
+    assert all(not episode["health_warning"] for episode in diagnostics["episodes"])
+    assert diagnostics["policy"]["room"]["active"] is True
+    assert diagnostics["policy"]["room"]["pending_release_since"] is None
+
+    runtime.confidence.refresh_active(NOW + timedelta(seconds=3609))
+    assert runtime_status_payload(runtime)["occupancy_diagnostics"][
+        "reliability_warning_occurrences"
+    ][0]["active"] is True
+    runtime.confidence.refresh_active(NOW + timedelta(seconds=3610))
+    recovered = runtime_status_payload(runtime)["occupancy_diagnostics"]
+    occurrence, = recovered["reliability_warning_occurrences"]
+    assert occurrence["active"] is False
+    assert occurrence["cleared_at"] == (NOW + timedelta(seconds=3610)).isoformat()
+    assert recovered["policy"]["room"]["active"] is True
 
 
 def test_runtime_status_omits_unavailable_latency() -> None:
@@ -180,8 +258,14 @@ def test_runtime_status_omits_unavailable_latency() -> None:
 
 
 def test_support_diagnostics_keep_only_exact_legacy_id_aliases() -> None:
+    """DIAG005: authentic legacy components, not selected engine count authority.
+
+    Original observations, supports, deadline and nonempty aliases remain. The
+    diagnostic envelope is a component specimen, never current-reader inference.
+    The separate current-runtime test below covers HEALTH003 on the same inputs.
+    """
     predictive_map = conflict_map()
-    confidence = ZoneConfidenceEngine(predictive_map, expected_occupants=2)
+    components = PersistenceComponents(predictive_map, 2, NOW)
     for node_id, seconds in (
         ("target_source", 0),
         ("target", 1),
@@ -193,30 +277,62 @@ def test_support_diagnostics_keep_only_exact_legacy_id_aliases() -> None:
         ("ds", 7),
     ):
         node = predictive_map.nodes[node_id]
-        confidence.observe(
-            OccupancyEvent(
+        observe_count_sensor(
+            components,
+            SensorInput(
                 f"binary_sensor.{node_id}",
-                node_id,
-                node.occupancy_zone,
-                node.floor,
-                node.role,
-                predictive_map.occupancy_behavior_for_node(node),
-                "motion",
                 "on",
                 NOW + timedelta(seconds=seconds),
-                node.reliability,
+                reliability=node.reliability,
             )
         )
-    deadline = confidence.diagnostics.count_conflicts[0].deadline
-    confidence.refresh_active(deadline)
+    pending, = components.conflicts.conflicts
+    assert pending.started_at == NOW + timedelta(seconds=7)
+    deadline = pending.deadline
+    assert deadline == NOW + timedelta(seconds=67)
+    result = advance_count_components(components, deadline)
+    snapshot = components.snapshot
+    specimen = TrackerDiagnostics(
+        expected_occupants=2,
+        requested_occupants=2,
+        unsupported_count=None,
+        beliefs={state.zone: state.probability for state in snapshot.belief_states},
+        policy_states={state.zone: state for state in snapshot.policy_states},
+        policy_decisions=result.policy_decisions,
+        policy_events=result.policy_events,
+        authorizations=result.authorizations,
+        episode_states=snapshot.episode_states,
+        traversal_tokens=snapshot.traversal_tokens,
+        retained_traversal_tokens=snapshot.retained_traversal_tokens,
+        pending_candidates=snapshot.pending_candidates,
+        anonymous_supports=snapshot.anonymous_supports,
+        support_token_bindings=snapshot.support_token_bindings,
+        latest_support_transition=components.supports.latest_transition,
+        count_conflicts=snapshot.count_conflicts,
+        reliability_warning_occurrences=snapshot.reliability_warning_occurrences,
+        sensor_reliability={
+            node.node_id: node.reliability for node in components.nodes
+        },
+        prediction_leases=components.prediction_manager.leases,
+        prediction_probabilities=components.prediction_manager.probabilities,
+        policy_audit=components.audit_rows,
+        event_disposition=result.disposition,
+        restore_status="not_attempted",
+        restore_reason=None,
+        lifecycle_counters={**components.diagnostic_counters, "restore_rejected": 0},
+    )
 
-    diagnostics = tracker_diagnostics_payload(confidence.diagnostics)
+    diagnostics = tracker_diagnostics_payload(specimen)
 
     assert "strong_fronts" not in diagnostics
     assert len(diagnostics["anonymous_supports"]) == 2
     assert diagnostics["support_token_bindings"]
     conflict = diagnostics["count_conflicts"][0]
     assert conflict["strong_front_ids"] == conflict["support_ids"]
+    expected_ids = [support.support_id for support in snapshot.anonymous_supports]
+    assert len(expected_ids) == 2
+    assert conflict["support_ids"] == expected_ids
+    assert conflict["degraded_at"] == deadline.isoformat()
     conflict_row = next(
         row
         for row in diagnostics["policy_audit"]
@@ -225,6 +341,7 @@ def test_support_diagnostics_keep_only_exact_legacy_id_aliases() -> None:
     assert conflict_row["count_conflict_front_ids"] == conflict_row[
         "count_conflict_support_ids"
     ]
+    assert conflict_row["count_conflict_support_ids"] == expected_ids
     counters = diagnostics["lifecycle_counters"]
     assert set(counters) == {
         "support_created",
@@ -240,3 +357,44 @@ def test_support_diagnostics_keep_only_exact_legacy_id_aliases() -> None:
     assert counters["support_created"] == 2
     assert counters["count_conflict_degraded"] == 1
     assert all(0 <= value <= 2**31 - 1 for value in counters.values())
+
+
+def test_current_selected_status_has_real_paths_without_legacy_count_degradation() -> (
+    None
+):
+    """HEALTH003: same eight observations, actual runtime/public diagnostic output."""
+    with RuntimeScenario(NOW) as scenario:
+        replay = scenario.create(conflict_map(), 2)
+        for node_id, seconds in (
+            ("target_source", 0), ("target", 1),
+            ("a", 2), ("am", 3), ("as", 4),
+            ("d", 5), ("dm", 6), ("ds", 7),
+        ):
+            replay.send(f"binary_sensor.{node_id}", "on",
+                        NOW + timedelta(seconds=seconds))
+        replay.advance(NOW + timedelta(seconds=67))
+        diagnostics = runtime_status_payload(replay.runtime)["occupancy_diagnostics"]
+        paths = diagnostics["selected_paths"]
+        assert len(paths) == 2 and all(path is not None for path in paths)
+        assert [path["endpoint"]["node_id"] for path in paths] == ["as", "ds"]
+        assert all(path["track_confidence"] == "confirmed" for path in paths)
+        assert diagnostics["unlocated_count"] == 0
+        assert "strong_fronts" not in diagnostics
+        assert diagnostics["anonymous_supports"] == []
+        assert diagnostics["support_token_bindings"] == []
+        assert diagnostics["count_conflicts"] == []
+        assert diagnostics["health_warnings"] == []
+        assert diagnostics["reliability_warning_occurrences"] == []
+        assert len(diagnostics["episodes"]) == 8
+        assert all(not episode["health_warning"] for episode in diagnostics["episodes"])
+        assert diagnostics["policy_audit"]
+        assert all(row["reason"] != "stuck_count_conflict"
+                   for row in diagnostics["policy_audit"])
+        assert diagnostics["lifecycle_counters"]["support_created"] == 0
+        assert diagnostics["lifecycle_counters"]["count_conflict_degraded"] == 0
+        assert replay.edges_for("target") == (
+            ActiveEdge(NOW + timedelta(seconds=1), "target", True),
+        )
+        assert replay.view().active("target")
+        assert replay.attributes["target"]["activation_provenance"] == "evidence"
+        assert diagnostics["policy"]["target"]["active"] is True

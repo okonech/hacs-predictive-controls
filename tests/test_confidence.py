@@ -28,6 +28,7 @@ def event(node: str, zone: str, state: str, at: datetime) -> OccupancyEvent:
 
 
 def test_confidence_facade_projects_target_belief_policy_and_diagnostics() -> None:
+    """PATH001..004: facade exposes the real leading-only selected pair proof."""
     confidence = ZoneConfidenceEngine(target_map(), 1)
     assert confidence.policy_events == ()
 
@@ -40,10 +41,21 @@ def test_confidence_facade_projects_target_belief_policy_and_diagnostics() -> No
     policy_events = confidence.policy_events
     assert policy_events
     assert policy_events[-1].zone == "room"
+    assert policy_events[-1].kind == "acquired"
+    assert policy_events[-1].event_at == NOW + timedelta(seconds=2)
     assert confidence.diagnostics.policy_states["room"].active is True
+    assert confidence.diagnostics.policy_states["hall"].active is False
     authorization = confidence.diagnostics.authorizations[-1]
-    assert authorization.reason == "provisional_track_acquired"
+    assert authorization.reason == "selected_path"
+    assert authorization.provenance_kind == "selected_path"
     assert authorization.track_confidence == "provisional"
+    assert authorization.path_node_ids == ("hall", "room")
+    source = next(state for state in confidence.diagnostics.episode_states
+                  if state.node_id == "hall")
+    assert source.episode_id is not None
+    assert authorization.selected_source_episode_ids == (source.episode_id,)
+    assert authorization.target_episode_id == policy_events[-1].episode_id
+    assert authorization.authorized_at == policy_events[-1].event_at
 
 
 def test_confidence_facade_ignores_unsupported_count_and_round_trips_target_state() -> (

@@ -78,9 +78,11 @@ class PredictiveControlsRuntime:
         self._bootstrap_total_ms = 0.0
         self._performance_budget_exceeded_count = 0
         self._invalid_authoritative_count = False
+        self._count_observation: tuple[int, datetime] | None = None
         self._restore_rejected = False
         self._safe_bootstrap_complete = False
         self._automation_summary_cache: dict[object, object] = {}
+        self._dispatch_depth = 0
 
     @property
     def chain(self) -> MarkovChain:
@@ -142,8 +144,16 @@ class PredictiveControlsRuntime:
     @property
     def problem_reasons(self) -> tuple[str, ...]:
         reasons: list[str] = []
-        if any(state.health_warning for state in self.confidence.episode_states):
+        if any(
+            occurrence.cleared_at is None and occurrence.kind != "unsupported_jump"
+            for occurrence in self.confidence.reliability_warning_occurrences
+        ):
             reasons.append("sensor_health_degraded")
+        if any(
+            occurrence.cleared_at is None and occurrence.kind == "unsupported_jump"
+            for occurrence in self.confidence.reliability_warning_occurrences
+        ):
+            reasons.append("unsupported_spatial_jump")
         if self._invalid_authoritative_count:
             reasons.append("invalid_authoritative_count")
         if self._restore_rejected:
@@ -154,6 +164,7 @@ class PredictiveControlsRuntime:
     def problem_sources(self) -> tuple[str, ...]:
         sources = {
             "sensor_health_degraded": "physical_sensor_episode",
+            "unsupported_spatial_jump": "selected_path_evidence",
             "invalid_authoritative_count": (
                 self.expected_occupants_entity or "configured_expected_occupants"
             ),
@@ -227,10 +238,14 @@ class PredictiveControlsRuntime:
         )
         self._safe_bootstrap_complete = True
         self._bootstrap_total_ms = (perf_counter_ns() - startup_started_ns) / 1_000_000
-        self._publish_update()
-        self._schedule_prediction_deadline(now)
-        if snapshot:
-            self.schedule_transition_count_save()
+        save = bool(snapshot)
+        try:
+            self._publish_update()
+        except Exception:
+            save = True
+            raise
+        finally:
+            self._finish_learning(now, save=save)
 
     async def async_stop(self) -> None:
         if callable(self._unsubscribe):
@@ -273,9 +288,17 @@ class PredictiveControlsRuntime:
             return
 
         if str(entity_id) == self.expected_occupants_entity:
-            if self._sync_expected_occupants(event_at, processing_at=now):
-                self.schedule_transition_count_save()
-            self._publish_update()
+            changed = False
+            try:
+                changed = self._sync_expected_occupants(
+                    event_at, processing_at=now, observed_state=new_state,
+                )
+                self._publish_update()
+            except Exception:
+                changed = True
+                raise
+            finally:
+                self._finish_learning(now, save=changed)
             return
 
         self.observe_entity(
@@ -288,21 +311,48 @@ class PredictiveControlsRuntime:
     @callback
     def _async_refresh_active_confidence(self, now: datetime) -> None:
         now = _as_utc(now)
-        self._sync_expected_occupants(now)
-        updates = self.confidence.refresh_active(now)
-        if not updates:
-            return
-        self.last_zone_update = updates[-1]
-        _LOGGER.debug("Refreshed %s active zone confidence states", len(updates))
-        self._publish_update()
+        changed = False
+        try:
+            changed = self._sync_expected_occupants(now)
+            warnings_before = {
+                (item.node_id, item.reason)
+                for item in self.confidence.reliability_warning_occurrences
+                if item.cleared_at is None
+            }
+            updates = self.confidence.refresh_active(now, defer_learning=True)
+            warnings_changed = warnings_before != {
+                (item.node_id, item.reason)
+                for item in self.confidence.reliability_warning_occurrences
+                if item.cleared_at is None
+            }
+            changed = changed or warnings_changed
+            if not updates and not warnings_changed:
+                return
+            # Later warning frontiers also advance the compared ZoneState timestamp.
+            self.last_zone_update = updates[-1]
+            _LOGGER.debug(
+                "Refreshed %s active zone confidence states", len(updates),
+            )
+            self._publish_update()
+        except Exception:
+            changed = True
+            raise
+        finally:
+            self._finish_learning(now, save=changed)
 
     @callback
     def _async_expire_transient_state(self, now: datetime) -> None:
         now = _as_utc(now)
-        if self.confidence.expire_transient_state(now):
-            self.schedule_transition_count_save()
-            self._publish_update()
-        self._schedule_prediction_deadline(now)
+        changed = False
+        try:
+            changed = self.confidence.expire_transient_state(now, defer_learning=True)
+            if changed:
+                self._publish_update()
+        except Exception:
+            changed = True
+            raise
+        finally:
+            self._finish_learning(now, save=changed)
 
     @callback
     def _async_prediction_deadline(self, now: datetime) -> None:
@@ -352,45 +402,68 @@ class PredictiveControlsRuntime:
         if occupancy_event is None:
             return
 
-        self._sync_expected_occupants(processing_at)
-
+        self.confidence._assert_mutation_allowed()
         self.last_occupancy_event = occupancy_event
-        self.last_zone_update = self.confidence.observe(
-            occupancy_event,
-            processing_at=processing_at,
-            emit_activation=process_prediction_actions,
-            defer_learning=True,
-            publication_callback=self._publish_update,
-        )
-        if occupancy_event.state == "on":
-            self._update_prediction_diagnostics(occupancy_event.node_id)
-        elapsed_ms = (perf_counter_ns() - started_ns) / 1_000_000
-        if elapsed_ms > RUNTIME_HARD_CEILING_MS:
-            self._performance_budget_exceeded_count += 1
-            _LOGGER.warning(
-                "Predictive Controls runtime update exceeded %.1f ms: %.3f ms",
-                RUNTIME_HARD_CEILING_MS,
-                elapsed_ms,
+        try:
+            self._sync_expected_occupants(processing_at)
+            self.last_zone_update = self.confidence.observe(
+                occupancy_event,
+                processing_at=processing_at,
+                emit_activation=process_prediction_actions,
+                defer_learning=True,
+                publication_callback=self._publish_update,
             )
-        _LOGGER.debug(
-            "Updated zone confidence %s: %.3f -> %.3f (%s, %s)",
-            self.last_zone_update.current.zone,
-            self.last_zone_update.previous.confidence,
-            self.last_zone_update.current.confidence,
-            self.last_zone_update.current.status,
-            self.last_zone_update.current.reason,
-        )
+            if occupancy_event.state == "on":
+                self._update_prediction_diagnostics(occupancy_event.node_id)
+            elapsed_ms = (perf_counter_ns() - started_ns) / 1_000_000
+            if elapsed_ms > RUNTIME_HARD_CEILING_MS:
+                self._performance_budget_exceeded_count += 1
+                _LOGGER.warning(
+                    "Predictive Controls runtime update exceeded %.1f ms: %.3f ms",
+                    RUNTIME_HARD_CEILING_MS,
+                    elapsed_ms,
+                )
+            _LOGGER.debug(
+                "Updated zone confidence %s: %.3f -> %.3f (%s, %s)",
+                self.last_zone_update.current.zone,
+                self.last_zone_update.previous.confidence,
+                self.last_zone_update.current.confidence,
+                self.last_zone_update.current.status,
+                self.last_zone_update.current.reason,
+            )
 
-        self._publish_update()
-        self._schedule_prediction_deadline(processing_at)
-        self.confidence.commit_prediction_learning()
-        self.schedule_transition_count_save()
+            self._publish_update()
+        finally:
+            # Accepted evidence is committed even when a subscriber raises.
+            # Preserve its deadlines and coalesced save before propagating failure.
+            self._finish_learning(processing_at, save=True)
 
     def observe_node(self, node_id: str, now: datetime) -> None:
         now = _as_utc(now)
-        self._sync_expected_occupants(now)
-        self._update_prediction_diagnostics(node_id)
-        self._publish_update()
+        changed = False
+        try:
+            changed = self._sync_expected_occupants(now)
+            self._update_prediction_diagnostics(node_id)
+            self._publish_update()
+        except Exception:
+            changed = True
+            raise
+        finally:
+            self._finish_learning(now, save=changed)
+
+    def _finish_learning(self, now: datetime, *, save: bool = False) -> None:
+        """Finish accepted statistical work only after publication has returned."""
+
+        self.confidence._assert_mutation_allowed()
+        try:
+            self._schedule_prediction_deadline(now)
+            save = self.confidence.commit_prediction_learning() or save
+        except Exception:
+            save = True
+            raise
+        finally:
+            if save:
+                self.schedule_transition_count_save()
 
     def _publish_update(self) -> None:
         """Invalidate projections and publish one coherent runtime update."""
@@ -400,8 +473,16 @@ class PredictiveControlsRuntime:
     def _dispatch_update(self) -> None:
         """Dispatch an update within the tracker's current projection scope."""
 
-        self._automation_summary_cache.clear()
-        async_dispatcher_send(self.hass, DISPATCH_UPDATE)
+        previous_cache = self._automation_summary_cache
+        self._automation_summary_cache = {}
+        self._dispatch_depth += 1
+        try:
+            async_dispatcher_send(self.hass, DISPATCH_UPDATE)
+        finally:
+            self._dispatch_depth -= 1
+            self._automation_summary_cache = (
+                previous_cache if self._dispatch_depth else {}
+            )
 
     def _schedule_prediction_deadline(self, now: datetime) -> None:
         if callable(self._unsubscribe_prediction_deadline):
@@ -478,28 +559,53 @@ class PredictiveControlsRuntime:
         now: datetime | None = None,
         *,
         processing_at: datetime | None = None,
+        observed_state: object | None = None,
     ) -> bool:
+        self.confidence._assert_mutation_allowed()
+        at = datetime.now(UTC) if now is None else _as_utc(now)
+        processed_at = at if processing_at is None else _as_utc(processing_at)
         resolved = self.configured_expected_occupants
+        changed_at: datetime | None = None
         if self.expected_occupants_entity:
-            state = self.hass.states.get(self.expected_occupants_entity)
-            authoritative = authoritative_occupants_from_state_value(
-                None if state is None else state.state
+            state = (
+                self.hass.states.get(self.expected_occupants_entity)
+                if observed_state is None else observed_state
             )
-            self._invalid_authoritative_count = authoritative is None
+            authoritative = authoritative_occupants_from_state_value(
+                getattr(state, "state", None)
+            )
             if authoritative is None:
+                self._invalid_authoritative_count = True
                 return False
             resolved = authoritative
-        else:
-            self._invalid_authoritative_count = False
+            last_changed = getattr(state, "last_changed", None)
+            if isinstance(last_changed, datetime):
+                if last_changed.tzinfo is None or last_changed.utcoffset() is None:
+                    raise ValueError("Count state last_changed must be timezone-aware")
+                changed_at = _as_utc(last_changed)
+        if changed_at is None:
+            # Timestamp-less adapters retain the initial observed frontier for
+            # this level. Polling/duplicate delivery must not mint a new identity.
+            previous = self._count_observation
+            changed_at = previous[1] if previous and previous[0] == resolved else at
+        if changed_at > processed_at:
+            raise ValueError("Count observation time exceeds processing time")
         if resolved == self.confidence.requested_expected_occupants:
+            self._count_observation = (resolved, changed_at)
+            self._invalid_authoritative_count = False
             return False
+        previous_count = self.confidence.requested_expected_occupants
         self.confidence.reconcile_expected_occupants(
             resolved,
-            _as_utc(now) if now is not None else datetime.now(UTC),
-            evidence_id="authoritative_occupant_count_change",
-            processing_at=processing_at,
+            changed_at,
+            evidence_id=f"authoritative_occupant_count:{changed_at.isoformat()}:{resolved}",
+            processing_at=processed_at,
+            defer_learning=True,
         )
-        return True
+        if resolved == self.confidence.requested_expected_occupants:
+            self._count_observation = (resolved, changed_at)
+        self._invalid_authoritative_count = False
+        return previous_count != self.confidence.requested_expected_occupants
 
 def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:

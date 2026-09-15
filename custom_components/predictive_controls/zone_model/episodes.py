@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import datetime
 
@@ -21,7 +22,12 @@ from .types import (
 class PhysicalEpisodes:
     """Maintain one bounded, correlated process per physical node."""
 
-    def __init__(self, nodes: tuple[PhysicalNode, ...]) -> None:
+    def __init__(
+        self, nodes: tuple[PhysicalNode, ...], *, diagnostic_warnings: bool = True,
+    ) -> None:
+        if not isinstance(diagnostic_warnings, bool):
+            raise ValueError("Episode diagnostic mode must be boolean")
+        self._diagnostic_warnings = diagnostic_warnings
         node_ids = [node.node_id for node in nodes]
         aliases = [alias for node in nodes for alias in node.aliases]
         if len(node_ids) != len(set(node_ids)):
@@ -75,6 +81,85 @@ class PhysicalEpisodes:
             ):
                 raise ValueError("Interaction episode snapshot is incompatible")
         self._states = restored
+
+    def reconcile_startup_snapshot(
+        self, events: Sequence[SensorInput], at: datetime,
+    ) -> tuple[EpisodeUpdate, ...]:
+        """Install complete alias aggregates without replaying startup OFF edges.
+
+        Callers first consume old deadline effects at the startup frontier. An
+        aggregate ON that was already ON retains its exact generation, even when
+        the asserted alias changes. Only an existing all-OFF clear can continue;
+        a mismatched baseline cannot start or later recover a clear deadline.
+        Newly ON aggregates keep bootstrap episode semantics, not live provenance.
+        """
+
+        require_utc(at, "Startup snapshot frontier")
+        raw = {event.entity_id: event for event in events}
+        if len(raw) != len(events):
+            raise ValueError("Startup snapshot repeats a physical alias")
+        for event in events:
+            if event.entity_id not in self._node_by_alias:
+                raise ValueError("Startup snapshot alias is not mapped")
+            if event.event_at != at:
+                raise ValueError("Startup snapshot must share one frontier")
+            if event.state == "pressed":
+                raise ValueError("Startup levels cannot contain physical presses")
+            node = self._nodes[self._node_by_alias[event.entity_id]]
+            if node.interaction_aliases and event.state not in {
+                "unknown", "unavailable",
+            }:
+                raise ValueError("Startup interaction levels must be neutral")
+
+        updates: list[EpisodeUpdate] = []
+        for previous in self.states:
+            if self._is_stale(previous, at):
+                raise ValueError("Startup snapshot cannot move backward")
+            state, effects = self._advance_state(previous, at)
+            aliases = tuple(
+                (alias, raw[alias].state if alias in raw else "unknown")
+                for alias, _ in state.alias_states
+            )
+            known_on = any(value == "on" for _, value in aliases)
+            all_off = all(value == "off" for _, value in aliases)
+            continues = (known_on and state.known_on) or (
+                all_off and state.status in {"clearing", "clear"}
+                and all(value == "off" for _, value in state.alias_states)
+            ) or (
+                state.status in {"baseline", "unavailable"}
+                and aliases == state.alias_states
+            )
+            state = replace(
+                state, alias_states=aliases, advanced_at=at,
+                last_event_at=(
+                    at if aliases != state.alias_states else state.last_event_at
+                ),
+            )
+            if continues:
+                disposition = "startup_continuation"
+            elif known_on:
+                reliability = next(
+                    raw[alias].reliability for alias, value in aliases if value == "on"
+                )
+                state, positive = self._start_episode(state, at, reliability)
+                effects = (*effects, *positive)
+                disposition = "startup_positive"
+            else:
+                state = replace(
+                    state, status="baseline" if all_off else "unavailable",
+                    clear_started_at=None, clear_deadline=None, clear_emitted=False,
+                    traversal_valid_until=None, degraded_at=None,
+                    degradation_reason=None, health_warning=False,
+                    cadence_run_started_at=None, cadence_last_transition_at=None,
+                    cadence_cycle_count=0, cadence_correlated=False,
+                    cadence_warning=False, cadence_warning_reason=None,
+                )
+                disposition = "startup_baseline"
+            self._validate_state(state)
+            updates.append(EpisodeUpdate(disposition, state, effects))
+        # No consumer can see the temporary per-alias unknown/OFF state of a swap.
+        self._states = {update.state.node_id: update.state for update in updates}
+        return tuple(updates)
 
     def observe(self, event: SensorInput) -> EpisodeUpdate:
         try:
@@ -166,6 +251,10 @@ class PhysicalEpisodes:
             if (
                 interaction_health_transition
                 or (was_known_on and not is_known_on)
+                or (
+                    state.profile_name == "stay_presence"
+                    and state.status == "clearing" and not is_known_on
+                )
                 or all_unavailable
             ):
                 state = replace(
@@ -213,7 +302,9 @@ class PhysicalEpisodes:
                         if impossible or count_degraded
                         else state.traversal_valid_until
                     ),
-                    cadence_warning=state.cadence_warning or impossible,
+                    cadence_warning=state.cadence_warning or (
+                        impossible and self._diagnostic_warnings
+                    ),
                     cadence_last_transition_at=(
                         event.event_at
                         if state.cadence_run_started_at is not None
@@ -221,13 +312,13 @@ class PhysicalEpisodes:
                     ),
                     cadence_warning_reason=(
                         "impossible_cadence"
-                        if impossible
+                        if impossible and self._diagnostic_warnings
                         else state.cadence_warning_reason
                     ),
                     clear_emitted=False,
                 )
                 assert state.episode_id is not None
-                if impossible:
+                if impossible and self._diagnostic_warnings:
                     effects.append(
                         EpisodeEffect(
                             state.node_id,
@@ -270,11 +361,20 @@ class PhysicalEpisodes:
                 )
         elif was_known_on:
             profile = self._profile(state)
+            known_clear = state.profile_name != "stay_presence" or all(
+                value == "off" for value in alias_states.values()
+            )
             state = replace(
                 state,
-                status="clearing",
-                clear_started_at=event.event_at,
-                clear_deadline=event.event_at + profile.stable_clear_window,
+                status="clearing" if known_clear else "unavailable",
+                clear_started_at=event.event_at if known_clear else None,
+                clear_deadline=(
+                    event.event_at + profile.stable_clear_window
+                    if known_clear else None
+                ),
+                traversal_valid_until=(
+                    state.traversal_valid_until if known_clear else None
+                ),
                 cadence_last_transition_at=(
                     event.event_at
                     if state.cadence_run_started_at is not None
@@ -734,7 +834,8 @@ class PhysicalEpisodes:
             )
             deadlines.append((quiet_deadline, 0, "cadence_quiet"))
         if (
-            state.cadence_run_started_at is not None
+            self._diagnostic_warnings
+            and state.cadence_run_started_at is not None
             and state.cadence_cycle_count > 0
             and state.cadence_warning_reason is None
             and profile.sustained_cadence_warning_window.total_seconds() > 0
@@ -755,7 +856,8 @@ class PhysicalEpisodes:
         ):
             deadlines.append((state.clear_deadline, 1, "stable_clear"))
         if (
-            state.status == "asserted"
+            self._diagnostic_warnings
+            and state.status == "asserted"
             and profile.role != "stay"
             and state.assertion_trust_until is not None
             and not state.health_warning

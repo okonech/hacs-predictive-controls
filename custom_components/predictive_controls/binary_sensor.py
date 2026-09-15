@@ -42,6 +42,8 @@ class RuntimeBinarySensor(BinarySensorEntity):
         self.runtime = runtime
         self.entry_id = entry_id
         self._published_signature: object | None = None
+        self._writing_signature: object | None = None
+        self._publication_revision = 0
 
     @property
     def update_signal(self) -> str:
@@ -56,10 +58,18 @@ class RuntimeBinarySensor(BinarySensorEntity):
     @callback
     def _handle_update(self) -> None:
         signature = self._state_signature()
-        if signature == self._published_signature:
+        if signature in (self._published_signature, self._writing_signature):
             return
-        self._published_signature = signature
-        self.async_write_ha_state()
+        revision = self._publication_revision
+        previous_writing = self._writing_signature
+        self._writing_signature = signature
+        try:
+            self.async_write_ha_state()
+            if self._publication_revision == revision:
+                self._published_signature = signature
+                self._publication_revision += 1
+        finally:
+            self._writing_signature = previous_writing
 
     def _state_signature(self) -> object:
         return bool(self.is_on), _freeze(self.extra_state_attributes)
@@ -134,7 +144,7 @@ class ZoneActiveSensor(RuntimeBinarySensor):
     @property
     def extra_state_attributes(self) -> dict[str, object]:
         state = runtime_automation_summary(self.runtime).zones[self.zone]
-        reason = self.runtime.zone_states[self.zone].reason
+        reason = self.runtime.confidence.state_for_zone(self.zone).reason
         policy = self.runtime.confidence.policy_states.get(self.zone)
         decisions = tuple(
             row

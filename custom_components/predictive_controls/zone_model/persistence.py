@@ -16,6 +16,13 @@ from .filter import (
     ARRIVAL_FROM_EMPTY_PROBABILITY,
     ARRIVAL_FROM_OCCUPIED_PROBABILITY,
 )
+from .path_health import (
+    QUICK_CYCLE_COUNT,
+    QUICK_CYCLE_MAX_ON,
+    QUICK_CYCLE_WINDOW,
+    UNSUPPORTED_ON_WINDOW,
+    decode_health,
+)
 from .policy import POLICY_CALIBRATIONS
 from .prediction import LEASE_DURATION
 from .profiles import (
@@ -24,6 +31,7 @@ from .profiles import (
     build_physical_nodes,
     profile_assignment_for_node,
 )
+from .selected_paths import decode_paths, decode_sources
 from .types import (
     PREDICTION_MATURITY_PROBABILITY,
     PREDICTION_MATURITY_SUPPORT,
@@ -38,8 +46,10 @@ from .types import (
     PolicyDecision,
     RefreshDedupEntry,
     ReliabilityWarningOccurrence,
+    SelectedPredictionGrant,
     SensorInput,
     SupportTokenBinding,
+    TraversalAuthorization,
     TraversalToken,
     ZoneBeliefState,
     ZoneModelSnapshot,
@@ -152,6 +162,21 @@ def _target_map_fingerprint_payload(
     }
     if not pre_feature:
         payload["settled_adjacent_transfer_version"] = 1
+        payload["support_departure_version"] = 1
+        payload["impossible_cadence_preservation_version"] = 1
+        payload["supported_gap_acquisition_version"] = 1
+        payload["settled_endpoint_release_version"] = 1
+        payload["selected_path_version"] = 1
+        payload["presence_gated_departure_version"] = 1
+        payload["selected_prediction_execution_version"] = 1
+        payload["unsupported_jump_diagnostics_version"] = 1
+        payload["deferred_prediction_learning_version"] = 1
+        payload["path_health_calibration"] = {
+            "unsupported_on_seconds": UNSUPPORTED_ON_WINDOW.total_seconds(),
+            "quick_cycle_window_seconds": QUICK_CYCLE_WINDOW.total_seconds(),
+            "quick_cycle_max_on_seconds": QUICK_CYCLE_MAX_ON.total_seconds(),
+            "quick_cycle_count": QUICK_CYCLE_COUNT,
+        }
     return payload
 
 
@@ -184,7 +209,7 @@ def serialize_target_state(
         "map_fingerprint": target_map_fingerprint(predictive_map),
         "snapshot": _json_value(asdict(snapshot)),
         "audit": [_json_value(asdict(row)) for row in engine.audit_rows],
-        "prediction": engine.prediction_manager.serialize(),
+        "prediction": engine.prediction_state,
     }
 
 
@@ -202,6 +227,8 @@ def restore_target_state(
     if fingerprint != target_map_fingerprint(predictive_map):
         raise ValueError("Target map fingerprint is incompatible")
     snapshot = _decode_snapshot(root.get("snapshot"))
+    if restore_at < snapshot.updated_at:
+        raise ValueError("Zone-model restore time predates stored state")
     audit_payload = root.get("audit")
     if not isinstance(audit_payload, list):
         raise ValueError("Target audit must be a list")
@@ -217,8 +244,8 @@ def restore_target_state(
         snapshot,
         audit,
         snapshot.updated_at,
+        prediction_state=prediction,
     )
-    candidate.restore_prediction_state(prediction, snapshot.updated_at)
     if restore_at > snapshot.updated_at:
         candidate.advance(restore_at, processing_at=restore_at, emit_events=False)
     return candidate
@@ -460,11 +487,35 @@ def _decode_snapshot(
             for item in _list(data, "reliability_warning_occurrences")
         )
     )
+    historical = legacy_v3 or pre_feature_v4
+    selected_paths = decode_paths(
+        data.get("selected_paths", []) if historical else _list(data, "selected_paths")
+    )
+    selected_sources = decode_sources(
+        data.get("selected_sources", [])
+        if historical else _list(data, "selected_sources")
+    )
+    path_health = decode_health(
+        data.get("path_health", []) if historical else _list(data, "path_health")
+    )
+    count = _decode_count(data.get("count_state"))
+    if not historical and (
+        len(selected_paths) != count.expected_count
+        or tuple(source.node_id for source in selected_sources)
+        != tuple(state.node_id for state in episodes)
+        or tuple(health.node_id for health in path_health)
+        != tuple(state.node_id for state in episodes)
+    ):
+        raise ValueError(
+            "Selected snapshot count or physical-node ledger is inconsistent"
+        )
     return ZoneModelSnapshot(
         updated_at=_datetime(data.get("updated_at"), "snapshot updated_at"),
         episode_states=episodes,
         belief_states=tuple(
-            _decode_belief(item) for item in _list(data, "belief_states")
+            _decode_belief(
+                item, historical=legacy_v3 or pre_feature_v4,
+            ) for item in _list(data, "belief_states")
         ),
         traversal_tokens=tuple(
             _decode_token(item) for item in _list(data, "traversal_tokens")
@@ -475,9 +526,11 @@ def _decode_snapshot(
         authorization_uses=tuple(
             _decode_use(item) for item in _list(data, "authorization_uses")
         ),
-        count_state=_decode_count(data.get("count_state")),
+        count_state=count,
         policy_states=tuple(
-            _decode_policy_state(item) for item in _list(data, "policy_states")
+            _decode_policy_state(
+                item, historical=legacy_v3 or pre_feature_v4,
+            ) for item in _list(data, "policy_states")
         ),
         pending_candidates=tuple(
             _decode_pending_candidate(item)
@@ -490,6 +543,52 @@ def _decode_snapshot(
         anonymous_supports=supports,
         support_token_bindings=bindings,
         reliability_warning_occurrences=occurrences,
+        selected_paths=selected_paths,
+        selected_sources=selected_sources,
+        path_health=path_health,
+        selected_prediction_grants=tuple(
+            _decode_prediction_grant(item) for item in (
+                _list(data, "selected_prediction_grants")
+                if not historical or "selected_prediction_grants" in data else []
+            )
+        ),
+    )
+
+
+def _decode_prediction_grant(value: object) -> SelectedPredictionGrant:
+    data = _mapping(value, "Selected prediction grant")
+    if set(data) != {
+        "authorization", "effect_kind", "prediction_target_node_id", "expires_at",
+    }:
+        raise ValueError("Selected prediction grant shape is invalid")
+    raw = _mapping(data["authorization"], "Selected prediction authorization")
+    if set(raw) != set(TraversalAuthorization.__dataclass_fields__) or (
+        raw.get("source_tokens") != [] or raw.get("new_uses") != []
+        or raw.get("settled_handoff") is not None
+        or raw.get("equivalent_confirmed_strength") is not False
+        or raw.get("authorized") is not True
+    ):
+        raise ValueError("Selected prediction authorization shape is invalid")
+    for key in ("target_node_id", "target_zone", "target_episode_id", "reason",
+                "track_confidence", "provenance_kind"):
+        if not isinstance(raw[key], str) or not raw[key]:
+            raise ValueError("Selected prediction authorization identity is invalid")
+    authorization = TraversalAuthorization(
+        _string(raw, "target_node_id"), _string(raw, "target_zone"),
+        _string(raw, "target_episode_id"),
+        _datetime(raw["authorized_at"], "Selected prediction authorization time"),
+        _boolean(raw, "authorized"), _string(raw, "reason"),
+        track_confidence=_string(raw, "track_confidence"),
+        path_node_ids=tuple(_strings(raw["path_node_ids"], "Selected grant path")),
+        provenance_kind=_string(raw, "provenance_kind"),
+        selected_source_episode_ids=tuple(_strings(
+            raw["selected_source_episode_ids"], "Selected grant sources",
+        )),
+    )
+    return SelectedPredictionGrant(
+        authorization, _string(data, "effect_kind"),
+        _string(data, "prediction_target_node_id"),
+        _datetime(data["expires_at"], "Selected prediction expiry"),
     )
 
 
@@ -611,15 +710,24 @@ def _decode_episode(
     )
 
 
-def _decode_belief(value: object) -> ZoneBeliefState:
+def _decode_belief(value: object, *, historical: bool = False) -> ZoneBeliefState:
     data = _mapping(value, "Target belief")
+    if not historical and "qualified_departure_at" not in data:
+        raise ValueError("Target belief qualified departure field is missing")
+    if not historical and "path_displaced_at" not in data:
+        raise ValueError("Target belief path displacement field is missing")
     outward_raw = data.get("outward_context")
     outward = None
     if outward_raw is not None:
         outward_data = _mapping(outward_raw, "Target outward context")
+        if not historical and "qualified_until" not in outward_data:
+            raise ValueError("Target outward qualification field is missing")
         outward = OutwardContext(
             _string(outward_data, "source_episode_id"),
             _datetime(outward_data.get("valid_until"), "outward expiry"),
+            _optional_datetime(
+                outward_data.get("qualified_until"), "qualified outward expiry"
+            ),
         )
     contributions = tuple(
         _decode_contribution(item) for item in _list(data, "contributions")
@@ -635,6 +743,10 @@ def _decode_belief(value: object) -> ZoneBeliefState:
         outward,
         _boolean(data, "health_warning"),
         contributions,
+        _optional_datetime(data.get("qualified_departure_at"), "qualified departure"),
+        _optional_datetime(data.get("path_displaced_at"), "path displacement"),
+        False if historical and "physical_hold" not in data
+        else _boolean(data, "physical_hold"),
     )
 
 
@@ -758,7 +870,9 @@ def _decode_count(value: object) -> CountState:
     )
 
 
-def _decode_policy_state(value: object) -> ZonePolicyState:
+def _decode_policy_state(
+    value: object, *, historical: bool = False,
+) -> ZonePolicyState:
     data = _mapping(value, "Target policy state")
     dedup = tuple(_decode_refresh(item) for item in _list(data, "refresh_dedup"))
     return ZonePolicyState(
@@ -800,6 +914,10 @@ def _decode_policy_state(value: object) -> ZonePolicyState:
                 data.get("activation_source_episode_ids"),
                 "activation source episode IDs",
             )
+        ),
+        retained_endpoint_hold=(
+            False if historical and "retained_endpoint_hold" not in data
+            else _boolean(data, "retained_endpoint_hold")
         ),
     )
 

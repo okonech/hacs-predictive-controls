@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .path_health import PathHealthState
+    from .selected_paths import SelectedPath, SelectedSource
 
 PROFILE_NAMES = frozenset(
     {"entry_boundary", "stay_pir", "stay_presence", "transition_fast"}
@@ -43,8 +49,13 @@ CADENCE_WARNING_REASONS = frozenset(
     {"impossible_cadence", "sustained_flapping"}
 )
 HEALTH_WARNING_REASONS = frozenset({"assertion_timeout", "count_conflict"})
-RELIABILITY_WARNING_KINDS = frozenset({"flapping", "suspected_stuck"})
-RELIABILITY_WARNING_REASONS = CADENCE_WARNING_REASONS | HEALTH_WARNING_REASONS
+SPATIAL_WARNING_REASONS = frozenset({"unsupported_jump"})
+RELIABILITY_WARNING_KINDS = frozenset(
+    {"flapping", "suspected_stuck", "unsupported_jump"}
+)
+RELIABILITY_WARNING_REASONS = (
+    CADENCE_WARNING_REASONS | HEALTH_WARNING_REASONS | SPATIAL_WARNING_REASONS
+)
 EPISODE_EFFECT_KINDS = frozenset(
     {
         "cadence_warning_cleared",
@@ -74,8 +85,10 @@ ACTIVE_EVIDENCE_REASONS = frozenset(
         "prediction_confirmed",
         "provisional_track_acquired",
         "same_zone_authorized",
+        "selected_path",
         "settled_endpoint_reacquired",
         "settled_adjacent_transfer",
+        "supported_gap_acquisition",
         "track_confirmed",
     }
 )
@@ -86,6 +99,22 @@ PREDICTION_MATURITY_SUPPORT = 5.0
 def require_utc(value: datetime, field: str) -> None:
     if value.tzinfo is None or value.utcoffset() != timedelta(0):
         raise ValueError(f"{field} must be timezone-aware UTC")
+
+
+def _physical_episode_reference(episode_id: str) -> tuple[str, int, datetime]:
+    """Read a canonical physical occurrence without importing either reducer."""
+
+    if not isinstance(episode_id, str):
+        raise ValueError("Physical episode reference must be a string")
+    match = re.fullmatch(r"(.+):([1-9][0-9]*):(\d{4}-\d{2}-\d{2}T.+)", episode_id)
+    if match is None:
+        raise ValueError("Physical episode reference is malformed")
+    node_id, generation, timestamp = match.groups()
+    origin = datetime.fromisoformat(timestamp)
+    require_utc(origin, "Physical episode origin")
+    if timestamp != origin.isoformat():
+        raise ValueError("Physical episode reference must be canonical")
+    return node_id, int(generation), origin
 
 
 def _finite_duration(value: timedelta) -> bool:
@@ -170,11 +199,16 @@ class OutwardContext:
 
     source_episode_id: str
     valid_until: datetime
+    qualified_until: datetime | None = None
 
     def __post_init__(self) -> None:
         if not self.source_episode_id:
             raise ValueError("Outward context episode ID must be non-empty")
         require_utc(self.valid_until, "Outward context expiry")
+        if self.qualified_until is not None:
+            require_utc(self.qualified_until, "Qualified outward expiry")
+            if self.qualified_until > self.valid_until:
+                raise ValueError("Qualified outward expiry exceeds outward validity")
 
 
 @dataclass(frozen=True)
@@ -215,8 +249,13 @@ class ZoneBeliefState:
     outward_context: OutwardContext | None = None
     health_warning: bool = False
     contributions: tuple[BeliefContribution, ...] = ()
+    qualified_departure_at: datetime | None = None
+    path_displaced_at: datetime | None = None
+    physical_hold: bool = False
 
     def __post_init__(self) -> None:
+        if type(self.physical_hold) is not bool:
+            raise ValueError("Physical hold must be boolean")
         if not self.zone:
             raise ValueError("Zone belief zone must be non-empty")
         if self.profile_name not in PROFILE_NAMES:
@@ -226,6 +265,25 @@ class ZoneBeliefState:
         require_utc(self.last_updated_at, "Zone belief update time")
         if self.context not in BELIEF_CONTEXTS:
             raise ValueError(f"Unknown belief context: {self.context}")
+        if self.qualified_departure_at is not None:
+            require_utc(self.qualified_departure_at, "Qualified departure time")
+            if (
+                self.qualified_departure_at > self.last_updated_at
+                or not self.generation_episode_id
+                or self.context != "cleared_with_outward"
+                or self.asserted_episode_id is not None
+                or self.outward_context is not None
+            ):
+                raise ValueError("Qualified departure is inconsistent with belief")
+        if self.path_displaced_at is not None:
+            if not isinstance(self.path_displaced_at, datetime):
+                raise ValueError("Path displacement time must be a UTC datetime")
+            require_utc(self.path_displaced_at, "Path displacement time")
+            if not self.generation_episode_id:
+                raise ValueError("Path displacement requires a belief generation")
+            _, _, origin = _physical_episode_reference(self.generation_episode_id)
+            if not origin <= self.path_displaced_at <= self.last_updated_at:
+                raise ValueError("Path displacement is outside its generation")
 
     @property
     def probability(self) -> float:
@@ -485,10 +543,11 @@ class ReliabilityWarningOccurrence:
     def __post_init__(self) -> None:
         if not self.node_id or not self.zone:
             raise ValueError("Reliability warning identifiers must be non-empty")
-        if self.kind not in RELIABILITY_WARNING_KINDS:
+        if (not isinstance(self.kind, str) or not isinstance(self.reason, str)
+                or self.kind not in RELIABILITY_WARNING_KINDS):
             raise ValueError("Reliability warning kind is invalid")
         expected_kind = (
-            "flapping"
+            "unsupported_jump" if self.reason in SPATIAL_WARNING_REASONS else "flapping"
             if self.reason in CADENCE_WARNING_REASONS
             else "suspected_stuck"
         )
@@ -666,6 +725,7 @@ class TraversalAuthorization:
     provenance_kind: str | None = None
     equivalent_confirmed_strength: bool = False
     settled_handoff: SettledAdjacentHandoff | None = None
+    selected_source_episode_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not (self.target_node_id and self.target_zone and self.target_episode_id):
@@ -673,6 +733,19 @@ class TraversalAuthorization:
         require_utc(self.authorized_at, "Traversal authorization frontier")
         if not isinstance(self.authorized, bool) or not self.reason:
             raise ValueError("Traversal authorization result is invalid")
+        if type(self.selected_source_episode_ids) is not tuple or any(
+            not isinstance(episode_id, str) or not episode_id
+            for episode_id in self.selected_source_episode_ids
+        ):
+            raise ValueError(
+                "Selected source episode IDs must be a tuple of identities"
+            )
+        if self.reason == "selected_path" or self.provenance_kind == "selected_path":
+            self._validate_selected_path()
+        elif self.selected_source_episode_ids:
+            raise ValueError(
+                "Selected source witnesses require selected-path authority"
+            )
         handoff = self.settled_handoff
         if (self.reason == "settled_adjacent_transfer") != (handoff is not None):
             raise ValueError("Settled handoff requires its dedicated authorization")
@@ -690,6 +763,44 @@ class TraversalAuthorization:
             or not self.equivalent_confirmed_strength
         ):
             raise ValueError("Settled handoff authorization is inconsistent")
+        if (
+            self.reason == "supported_gap_acquisition"
+            or self.provenance_kind == "supported_gap_acquisition"
+        ):
+            if (
+                not self.authorized
+                or self.reason != "supported_gap_acquisition"
+                or self.provenance_kind != "supported_gap_acquisition"
+                or self.track_confidence != "provisional"
+                or self.equivalent_confirmed_strength
+                or self.path_node_ids != (self.target_node_id,)
+                or len(self.source_tokens) != 1
+                or len(self.new_uses) > 1
+                or handoff is not None
+            ):
+                raise ValueError("Supported-gap authorization shape is invalid")
+            source = self.source_tokens[0]
+            if (
+                source.node_id == self.target_node_id
+                or source.zone == self.target_zone
+                or source.episode_id == self.target_episode_id
+                or source.role != "transition"
+                or source.provenance_kind != "settled_adjacent_transfer"
+                or source.track_confidence != "provisional"
+                or not source.equivalent_confirmed_strength
+                or len(source.path_node_ids) != 2
+                or source.path_node_ids[-1] != source.node_id
+                or source.continuity_reopened_at is not None
+                or not source.accepted_at < self.authorized_at < source.valid_until
+                or any(
+                    use.token_id != source.token_id
+                    or use.target_episode_id != self.target_episode_id
+                    or use.authorized_at != self.authorized_at
+                    or use.reason != self.reason
+                    for use in self.new_uses
+                )
+            ):
+                raise ValueError("Supported-gap source/use is invalid")
         if self.authorized:
             if self.track_confidence not in TRACK_CONFIDENCES:
                 raise ValueError("Authorized traversal requires track confidence")
@@ -706,6 +817,89 @@ class TraversalAuthorization:
             )
         ):
             raise ValueError("Rejected traversal cannot carry track provenance")
+
+
+    def _validate_selected_path(self) -> None:
+        if (
+            not self.authorized
+            or any(not isinstance(value, str) or not value for value in (
+                self.target_node_id, self.target_zone, self.target_episode_id,
+            ))
+            or self.reason != "selected_path"
+            or self.provenance_kind != "selected_path"
+            or type(self.source_tokens) is not tuple or self.source_tokens
+            or type(self.new_uses) is not tuple or self.new_uses
+            or self.settled_handoff is not None
+            or self.equivalent_confirmed_strength is not False
+            or type(self.path_node_ids) is not tuple
+            or not 1 <= len(self.path_node_ids) <= 3
+            or any(not isinstance(node, str) or not node for node in self.path_node_ids)
+            or self.path_node_ids[-1] != self.target_node_id
+            or len(self.selected_source_episode_ids) > 1
+        ):
+            raise ValueError("Selected-path authorization shape is invalid")
+        target_node, target_generation, target_at = _physical_episode_reference(
+            self.target_episode_id
+        )
+        if target_node != self.target_node_id or target_at != self.authorized_at:
+            raise ValueError("Selected-path target must match its observation frontier")
+        if not self.selected_source_episode_ids:
+            # Only an independently observed interaction may admit this singleton;
+            # policy validates its physical effect, since this type has no map.
+            if (
+                self.path_node_ids != (self.target_node_id,)
+                or self.track_confidence != "provisional"
+            ):
+                raise ValueError("Selected-path continuation requires a source witness")
+            return
+        source_node, source_generation, source_at = _physical_episode_reference(
+            self.selected_source_episode_ids[0]
+        )
+        if (
+            len(self.path_node_ids) < 2
+            or source_node != self.path_node_ids[-2]
+            or source_at > target_at
+            or (source_node == target_node and source_generation >= target_generation)
+        ):
+            raise ValueError("Selected-path source witness is inconsistent")
+
+
+@dataclass(frozen=True)
+class SelectedPredictionGrant:
+    """Independent, bounded issuance proof; never occupancy or learning input."""
+
+    authorization: TraversalAuthorization
+    effect_kind: str
+    prediction_target_node_id: str
+    expires_at: datetime
+
+    def __post_init__(self) -> None:
+        authorization = self.authorization
+        if not isinstance(authorization, TraversalAuthorization):
+            raise ValueError("Selected prediction requires an authorization")
+        require_utc(self.expires_at, "Selected prediction grant expiry")
+        if (
+            self.effect_kind != "positive"
+            or authorization.reason != "selected_path"
+            or authorization.provenance_kind != "selected_path"
+            or authorization.track_confidence != "confirmed"
+            or len(authorization.path_node_ids) < 2
+            or len(authorization.selected_source_episode_ids) != 1
+            or not isinstance(self.prediction_target_node_id, str)
+            or not self.prediction_target_node_id
+            or self.prediction_target_node_id in authorization.path_node_ids[-2:]
+            or self.expires_at != authorization.authorized_at + timedelta(seconds=10)
+        ):
+            raise ValueError("Selected prediction grant is invalid")
+
+    @property
+    def key(self) -> tuple[str, str, str, str]:
+        return (
+            self.authorization.path_node_ids[-2],
+            self.authorization.target_node_id,
+            self.prediction_target_node_id,
+            self.authorization.target_episode_id,
+        )
 
 
 @dataclass(frozen=True)
@@ -1023,12 +1217,22 @@ class ZonePolicyState:
     activation_path_node_ids: tuple[str, ...] = ()
     activation_provenance_kind: str | None = None
     activation_source_episode_ids: tuple[str, ...] = ()
+    retained_endpoint_hold: bool = False
 
     def __post_init__(self) -> None:
         if not self.zone or self.profile_name not in PROFILE_NAMES:
             raise ValueError("Policy state zone and profile must be valid")
         if not isinstance(self.active, bool):
             raise ValueError("Policy active state must be boolean")
+        if not isinstance(self.retained_endpoint_hold, bool):
+            raise ValueError("Retained-endpoint hold must be boolean")
+        if self.retained_endpoint_hold and (
+            not self.active
+            or self.phase != "active"
+            or self.activation_provenance != "evidence"
+            or self.pending_release_since is not None
+        ):
+            raise ValueError("Retained-endpoint hold requires evidence-active policy")
         if self.phase not in POLICY_PHASES:
             raise ValueError("Policy phase is invalid")
         require_utc(self.last_evaluated_at, "Policy evaluation time")
@@ -1135,6 +1339,22 @@ class ZonePolicyState:
                 )
             ):
                 raise ValueError("Evidence-active policy lacks acquisition evidence")
+            if (
+                self.activation_reason == "selected_path"
+                or self.activation_provenance_kind == "selected_path"
+            ):
+                assert self.activation_episode_id is not None
+                assert self.activation_at is not None
+                assert self.activation_reason is not None
+                TraversalAuthorization(
+                    self.activation_path_node_ids[-1], self.zone,
+                    self.activation_episode_id, self.activation_at, True,
+                    self.activation_reason,
+                    track_confidence=self.activation_track_confidence,
+                    path_node_ids=self.activation_path_node_ids,
+                    provenance_kind=self.activation_provenance_kind,
+                    selected_source_episode_ids=self.activation_source_episode_ids,
+                )
         elif (
             any(value is not None for value in activation_fields)
             or self.activation_path_node_ids
@@ -1329,9 +1549,22 @@ class ZoneModelSnapshot:
     anonymous_supports: tuple[AnonymousOccupancySupport, ...] = ()
     support_token_bindings: tuple[SupportTokenBinding, ...] = ()
     reliability_warning_occurrences: tuple[ReliabilityWarningOccurrence, ...] = ()
+    selected_paths: tuple[SelectedPath | None, ...] = ()
+    selected_sources: tuple[SelectedSource, ...] = ()
+    path_health: tuple[PathHealthState, ...] = ()
+    selected_prediction_grants: tuple[SelectedPredictionGrant, ...] = ()
 
     def __post_init__(self) -> None:
         require_utc(self.updated_at, "Zone-model snapshot time")
+        grant_keys = tuple(grant.key for grant in self.selected_prediction_grants)
+        if (
+            type(self.selected_prediction_grants) is not tuple
+            or len(grant_keys) > 64
+            or grant_keys != tuple(sorted(set(grant_keys)))
+            or any(not grant.authorization.authorized_at <= self.updated_at
+                   < grant.expires_at for grant in self.selected_prediction_grants)
+        ):
+            raise ValueError("Selected prediction grants are not bounded live proofs")
         for states, label in (
             (self.episode_states, "episode node"),
             (self.belief_states, "belief zone"),

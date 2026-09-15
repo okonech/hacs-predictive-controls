@@ -97,6 +97,11 @@ def test_s26_prediction_state_cannot_change_occupancy_or_policy() -> None:
 
 
 def test_s29_s30_elapsed_time_degrades_hall_but_preserves_held_stay() -> None:
+    """Historical ID; HEALTH001/003 now keep this supported pair warning-free.
+
+    Synthetic occupied_engine inputs and the two-hour retention checkpoint stay.
+    The named unsupported inverse in test_reliability retains warning coverage.
+    """
     engine = occupied_engine()
 
     result = engine.advance(NOW + timedelta(hours=2))
@@ -106,21 +111,49 @@ def test_s29_s30_elapsed_time_degrades_hall_but_preserves_held_stay() -> None:
         "room": True,
     }
     episodes = {state.node_id: state for state in result.snapshot.episode_states}
-    assert episodes["hall"].health_warning
+    assert not episodes["hall"].health_warning
     assert not episodes["room"].health_warning
+    assert result.snapshot.reliability_warning_occurrences == ()
+
+
+def test_selected_endpoint_off_and_time_cannot_release_active_room() -> None:
+    """Synthetic PATH002 equivalent; not a reconstructed historical S29 incident.
+
+    Only hall ON0, room ON2, room OFF3 are supplied. No selected onward movement
+    exists to displace the room endpoint. This extends the user-approved S29
+    no-movement expectation to two hours without claiming captured incident data.
+    """
+    engine = occupied_engine()
+    assert engine.snapshot.policy_states[1].active
+    cleared = engine.observe(
+        SensorInput("binary_sensor.room", "off", NOW + timedelta(seconds=3))
+    )
+    assert cleared.snapshot.policy_states[1].active
+    assert cleared.policy_events == ()
+
+    for at in (NOW + timedelta(minutes=12), NOW + timedelta(hours=2)):
+        result = engine.advance(at)
+        assert result.snapshot.policy_states[1].active
+        assert result.policy_events == ()
 
 
 def test_s29_elapsed_time_and_low_confidence_preserve_public_keep_on() -> None:
-    """Retained incident name; target behavior releases on belief plus dwell."""
+    """Synthetic S29: user-approved PATH002 retention amendment, 2026-09-13.
+
+    No sourced incident was established for the historical name. Preserve the
+    hall ON0, room ON2, room OFF3 sequence and original 12-minute checkpoint:
+    sensor OFF and elapsed time cannot remove the only selected endpoint.
+    """
 
     engine = occupied_engine()
     engine.observe(SensorInput("binary_sensor.room", "off", NOW + timedelta(seconds=3)))
 
     result = engine.advance(NOW + timedelta(minutes=12))
 
-    assert not {state.zone: state.active for state in result.snapshot.policy_states}[
+    assert {state.zone: state.active for state in result.snapshot.policy_states}[
         "room"
     ]
+    assert result.policy_events == ()
 
 
 def test_s30_asserted_local_motion_preserves_keep_on_through_expiry() -> None:

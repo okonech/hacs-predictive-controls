@@ -350,6 +350,7 @@ class ZonePolicy:
         below_threshold_since: datetime | None = None,
         pending_candidate: PendingAcquisitionCandidate | None = None,
         asserted_stay_hold: bool = False,
+        retained_endpoint_hold: bool = False,
         before_audit: Callable[
             [PolicyEvent, PolicyDecision, TraversalAuthorization | None], None
         ]
@@ -358,6 +359,8 @@ class ZonePolicy:
         processing_at = at if processing_at is None else processing_at
         if not isinstance(asserted_stay_hold, bool):
             raise ValueError("Asserted-stay hold flag must be boolean")
+        if not isinstance(retained_endpoint_hold, bool):
+            raise ValueError("Retained-endpoint hold flag must be boolean")
         self._validate_evaluation(at, processing_at, belief_before, belief_after)
         dedup = self._pruned_dedup(at)
         active_before = self._state.active
@@ -382,6 +385,17 @@ class ZonePolicy:
         activation_path_node_ids = self._state.activation_path_node_ids
         activation_provenance_kind = self._state.activation_provenance_kind
         activation_source_episode_ids = self._state.activation_source_episode_ids
+        if self._state.retained_endpoint_hold and not retained_endpoint_hold:
+            below_threshold_since = max(
+                below_threshold_since or at,
+                belief_after.qualified_departure_at or at,
+            )
+        if belief_after.path_displaced_at is not None:
+            below_threshold_since = max(
+                below_threshold_since or at, belief_after.path_displaced_at,
+            )
+            if pending is not None:
+                pending = max(pending, belief_after.path_displaced_at)
 
         if not active_before:
             pending = None
@@ -469,9 +483,15 @@ class ZonePolicy:
             else:
                 reason = "prediction_active"
         else:
-            if asserted_stay_hold:
+            if belief_after.physical_hold and provenance == "evidence":
                 pending = None
                 reason = "asserted_stay_hold"
+            elif asserted_stay_hold and belief_after.path_displaced_at is None:
+                pending = None
+                reason = "asserted_stay_hold"
+            elif retained_endpoint_hold and provenance == "evidence":
+                pending = None
+                reason = "retained_endpoint_hold"
             elif belief_after.probability <= self._calibration.off_threshold:
                 pending = (
                     below_threshold_since
@@ -519,6 +539,12 @@ class ZonePolicy:
                     )
                 dedup = self._remember_episode(dedup, episode_id, at)
 
+        held = bool(
+            retained_endpoint_hold
+            and active_after
+            and phase == "active"
+            and provenance == "evidence"
+        )
         self._state = ZonePolicyState(
             zone=self._state.zone,
             profile_name=self._state.profile_name,
@@ -539,9 +565,11 @@ class ZonePolicy:
             activation_path_node_ids=activation_path_node_ids,
             activation_provenance_kind=activation_provenance_kind,
             activation_source_episode_ids=activation_source_episode_ids,
+            retained_endpoint_hold=held,
         )
         if (
             event is None
+            and not held
             and local_effect is not None
             and local_effect.kind
             in {
@@ -814,6 +842,16 @@ class ZonePolicy:
         state: EpisodeState | None,
         authorization: TraversalAuthorization | None,
     ) -> bool:
+        if authorization is not None and authorization.reason == "selected_path":
+            authorization.__post_init__()
+            if (
+                state is None
+                or state.started_at != at
+                or state.last_event_at != at
+                or (not authorization.selected_source_episode_ids
+                    and state.status != "clearing")
+            ):
+                return False
         return bool(
             state is not None
             and authorization is not None
@@ -911,6 +949,8 @@ class ZonePolicy:
             return ()
         if authorization.settled_handoff is not None:
             return (authorization.settled_handoff.source_episode_id,)
+        if authorization.reason == "selected_path":
+            return authorization.selected_source_episode_ids
         return tuple(token.episode_id for token in authorization.source_tokens)
 
 

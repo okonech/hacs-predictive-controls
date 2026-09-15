@@ -39,6 +39,15 @@ Before changing behavior in a matched file:
    provenance. An older or same-day similar incident file never substitutes for
    the new report. Existing incident files and primary tests must be renamed to
    this convention when their retained evidence provides the event minute.
+   Every new incident file must start with a concise module docstring summarizing
+   the user-reported issue, their expected behavior, the observed behavior, and
+   the report/evidence source. Follow the `Incident summary comment` section in
+   the regression-review skill. Keep the original report distinct from diagnosis
+   and extra test expectations; never reconstruct a user quote from assertions.
+   When revisiting an older incident, backfill a missing summary from retained
+   evidence, explicitly marking anything unavailable. Read that summary before
+   proposing assertion changes and report any mismatch with agreed goals to the
+   user; a summary edit does not authorize changing a frozen test's behavior.
    If unchanged code does not reproduce the reported failure, stop before
    implementation and improve evidence or diagnostics.
 4. Implement from the hardened specification using

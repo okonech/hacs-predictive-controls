@@ -1148,7 +1148,7 @@ class PredictiveControlsPanel extends HTMLElement {
     const confidence = Math.round(Number(belief || 0) * 100);
     const active = Boolean(policy?.active);
     const frontier = this.occupancyPathContext().frontierTokens.find((token) => token.zone === zone.zoneId);
-    const warning = (model?.reliability_warnings || []).find(
+    const warnings = (model?.reliability_warnings || []).filter(
       (item) => item.active && item.zone === zone.zoneId,
     );
     const left = Number(zone.position.x ?? 80) - minX + 24;
@@ -1156,7 +1156,7 @@ class PredictiveControlsPanel extends HTMLElement {
     const width = Number(zone.size.width ?? 210);
     const height = Number(zone.size.height ?? 112);
     return `
-      <article class="zone-card status-${state.status}${active ? " is-active" : ""}${frontier ? " has-frontier" : ""}${warning ? " has-warning" : ""}" style="left:${left}px;top:${top}px;width:${width}px;min-height:${height}px" title="${escapeHtml(state.reason || "no evidence")}">
+      <article class="zone-card status-${state.status}${active ? " is-active" : ""}${frontier ? " has-frontier" : ""}${warnings.length ? " has-warning" : ""}" style="left:${left}px;top:${top}px;width:${width}px;min-height:${height}px" title="${escapeHtml(state.reason || "no evidence")}">
         <div class="zone-card-head">
           <strong>${escapeHtml(zone.label)}</strong>
           <span>${confidence}% belief</span>
@@ -1165,7 +1165,7 @@ class PredictiveControlsPanel extends HTMLElement {
         <div class="zone-belief-state"><strong>${active ? "Active" : "Inactive"}</strong><span>${escapeHtml(policy?.profile || "unprofiled")}</span></div>
         <small>${escapeHtml(labelFromValue(state.status || "rejected"))} · ${escapeHtml(labelFromValue(state.occupancy_behavior || zone.occupancyBehavior))} · ${escapeHtml(labelFromValue(zone.role))}</small>
         <small>${zone.nodeIds.length} ${zone.nodeIds.length === 1 ? "sensor" : "sensors"}${state.last_node_id ? ` · ${escapeHtml(state.last_node_id)}` : ""}</small>
-        ${warning ? `<small class="zone-warning-label">${escapeHtml(labelFromValue(warning.kind))} warning · ${escapeHtml(warning.node_id)}</small>` : ""}
+        ${warnings.map((warning) => `<small class="zone-warning-label">${escapeHtml(labelFromValue(warning.kind))} warning · ${escapeHtml(warning.node_id)} · active · ${escapeHtml(formatTimestamp(warning.last_observed_at))}</small>`).join("")}
         ${frontier ? `<small class="path-frontier-label">Anonymous path frontier · until ${escapeHtml(formatTimestamp(frontier.valid_until))}</small>` : ""}
       </article>
     `;

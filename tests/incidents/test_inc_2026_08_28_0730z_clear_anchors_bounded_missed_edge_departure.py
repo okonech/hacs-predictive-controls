@@ -1,12 +1,22 @@
+"""User-reported issue: original wording unavailable in the retained source.
+User expected: source lighting releases after departure (fixture reconstruction).
+Observed: retained kitchen-to-foyer missed-edge regression protects a stuck source.
+Source: frozen original in /tmp/black-box-migration-baseline.json; Section 16(25).
+Test scope: public source acquisition and one OFF by the original checkpoint, not
+physical actuation. Token/authorization/decay-context prerequisites are removed
+under the 2026-09-12 boundary migration; recorded inputs and deadlines are intact.
+"""
+
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from custom_components.predictive_controls.model import PredictiveMap
-from custom_components.predictive_controls.zone_model.engine import ZoneModelEngine
 from custom_components.predictive_controls.zone_model.types import SensorInput
+from tests.runtime_replay import ActiveEdge, RuntimeScenario
 
 
+@pytest.mark.scenario
 @pytest.mark.target_model
 def test_inc_2026_08_28_0730z_clear_anchors_bounded_missed_edge_departure() -> None:
     bridge_at = datetime(2026, 8, 28, 7, 30, 59, 556832, tzinfo=UTC)
@@ -41,36 +51,27 @@ def test_inc_2026_08_28_0730z_clear_anchors_bounded_missed_edge_departure() -> N
             }
         }
     )
-    engine = ZoneModelEngine(
-        predictive_map,
-        2,
-        bridge_at - timedelta(seconds=1),
+    expected_inputs = (
+        SensorInput("binary_sensor.bridge", "on", bridge_at),
+        SensorInput("binary_sensor.source", "on", source_at),
+        SensorInput("binary_sensor.source", "off", source_clear_at),
+        SensorInput("binary_sensor.destination", "on", destination_at),
     )
+    with RuntimeScenario(bridge_at - timedelta(seconds=1)) as scenario:
+        replay = scenario.create(predictive_map, 2)
+        states = [replay.observe(event) for event in expected_inputs]
+        # Destination 07:32:16.417206 precedes this 07:32:18.624443 checkpoint.
+        replay.advance(source_clear_at + timedelta(seconds=10))
+        final = replay.advance(observed_at)
 
-    engine.observe(SensorInput("binary_sensor.bridge", "on", bridge_at))
-    acquired = engine.observe(SensorInput("binary_sensor.source", "on", source_at))
-    engine.observe(SensorInput("binary_sensor.source", "off", source_clear_at))
-    departed = engine.observe(
-        SensorInput("binary_sensor.destination", "on", destination_at)
-    )
-    cleared = engine.advance(source_clear_at + timedelta(seconds=10))
-    final = engine.advance(observed_at)
-
-    assert [(event.zone, event.kind) for event in acquired.policy_events] == [
-        ("source", "acquired")
-    ]
-    authorization = departed.authorizations[0]
-    assert authorization.authorized
-    assert authorization.reason == "missed_edge_authorized"
-    assert authorization.source_tokens[0].zone == "source"
-    source_cleared = next(
-        state for state in cleared.snapshot.belief_states if state.zone == "source"
-    )
-    assert source_cleared.context == "cleared_with_outward"
-    source_policy = next(
-        state for state in final.snapshot.policy_states if state.zone == "source"
-    )
-    assert source_policy.active is False
-    assert [(event.zone, event.kind) for event in final.policy_events].count(
-        ("source", "released")
-    ) == 1
+        assert replay.normalized_inputs == list(expected_inputs)
+        assert states[1].active("source")
+        assert replay.input_edges_for("source")[:1] == (
+            ActiveEdge(source_at, "source", True),
+        )
+        assert not final.active("source")
+        edges = replay.edges_for("source")
+        assert len(edges) == 2, edges
+        assert edges[0] == ActiveEdge(source_at, "source", True)
+        # Full captured history, not a forced callback at the old advance time.
+        assert not edges[1].active and edges[1].at <= observed_at

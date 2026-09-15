@@ -285,6 +285,7 @@ def test_confirmed_stay_creates_one_settled_support_and_survives_token_expiry() 
 
 
 def test_low_belief_settled_endpoint_survives_only_without_outward_context() -> None:
+    """COUNT011 retains count support; POLICY013 release is a separate gate."""
     support_tracker, hall, hall_token, room, room_token = seeded_support()
     clear_at = NOW + timedelta(minutes=3)
     clear_room = replace(
@@ -313,6 +314,9 @@ def test_low_belief_settled_endpoint_survives_only_without_outward_context() -> 
     )
 
     assert support_tracker.supports
+    support, = support_tracker.supports
+    previous_transition = support_tracker.latest_transition
+    assert previous_transition is not None
     exact_target = episode(
         "room",
         profile_name="stay_presence",
@@ -340,9 +344,8 @@ def test_low_belief_settled_endpoint_survives_only_without_outward_context() -> 
         (),
         (),
     )
-    assert support_tracker.supports == ()
-    assert support_tracker.latest_transition is not None
-    assert support_tracker.latest_transition.reason == "outward_clear"
+    assert support_tracker.supports == (support,)
+    assert support_tracker.latest_transition == previous_transition
 
 
 def test_support_tracker_rejects_invalid_construction_restore_and_frontiers() -> None:
@@ -1278,6 +1281,7 @@ def test_source_set_merge_coalesces_before_transfer_and_split_cannot_clone() -> 
 
 
 def test_stable_clear_moving_expiry_cap_and_count_zero_are_conservative() -> None:
+    """COUNT011: retain rebound support independently of moving expiry/count0."""
     support_tracker = tracker(support_limit=1)
     room = episode(
         "room",
@@ -1384,6 +1388,8 @@ def test_stable_clear_moving_expiry_cap_and_count_zero_are_conservative() -> Non
         support_by_id,
         binding_by_token,
     ) == (current.support_id, False)
+    previous_transition = support_tracker.latest_transition
+    assert previous_transition is not None
 
     outward_belief = replace(
         belief(rebound),
@@ -1400,44 +1406,46 @@ def test_stable_clear_moving_expiry_cap_and_count_zero_are_conservative() -> Non
         (room_token, other_token),
         (),
     )
-    assert not support_tracker.supports
-    assert support_tracker.latest_transition is not None
-    assert support_tracker.latest_transition.reason == "outward_clear"
+    assert support_tracker.supports == (current,)
+    assert support_tracker.latest_transition == previous_transition
 
+    # The retained room still occupies cap1; qualify moving expiry separately,
+    # without inventing an invalidation to manufacture capacity for other_room.
+    moving_tracker = tracker(support_limit=1)
     later_other_token = replace(
         other_token,
         accepted_at=NOW + timedelta(seconds=6),
         valid_until=NOW + timedelta(minutes=2, seconds=6),
     )
     apply_token(
-        support_tracker,
+        moving_tracker,
         later_other_token,
         (other_room,),
         (belief(other_room),),
     )
     moving = replace(
-        support_tracker.supports[0],
+        moving_tracker.supports[0],
         state="moving",
         valid_until=NOW + timedelta(seconds=10),
         last_transition="advanced",
     )
-    support_tracker.restore(
+    moving_tracker.restore(
         (moving,),
-        support_tracker.bindings,
+        moving_tracker.bindings,
         NOW + timedelta(seconds=6),
     )
-    support_tracker.advance(
+    moving_tracker.advance(
         NOW + timedelta(seconds=10),
         (other_room,),
         (belief(other_room),),
         (),
         (),
     )
-    assert support_tracker.supports == ()
-    assert support_tracker.counters["support_expired"] == 1
+    assert moving_tracker.supports == ()
+    assert moving_tracker.counters["support_expired"] == 1
 
     apply_token(
-        support_tracker,
+        moving_tracker,
         replace(
             other_token,
             accepted_at=NOW + timedelta(seconds=11),
@@ -1446,10 +1454,10 @@ def test_stable_clear_moving_expiry_cap_and_count_zero_are_conservative() -> Non
         (other_room,),
         (belief(other_room),),
     )
-    before_clear = support_tracker.counters
-    support_tracker.clear(NOW + timedelta(seconds=12))
-    assert support_tracker.supports == ()
-    assert support_tracker.bindings == ()
-    assert support_tracker.counters == before_clear
-    assert support_tracker.latest_transition is not None
-    assert support_tracker.latest_transition.reason == "count_zero"
+    before_clear = moving_tracker.counters
+    moving_tracker.clear(NOW + timedelta(seconds=12))
+    assert moving_tracker.supports == ()
+    assert moving_tracker.bindings == ()
+    assert moving_tracker.counters == before_clear
+    assert moving_tracker.latest_transition is not None
+    assert moving_tracker.latest_transition.reason == "count_zero"

@@ -1,10 +1,22 @@
+"""User-reported issue: original message unavailable; evidence reconstruction.
+User expected: inferred from the retained regression, an asserted stay stays ON.
+Observed: retained Aug20 fixture records a false-release frontier at 21:23:02.849850Z
+after outside support loss at 21:17:07.784372Z; no physical actuation is replayed.
+Source: original source in /tmp/black-box-migration-baseline.json (Aug20 2113Z).
+Test scope: public target ON/no OFF through the original deadline. Generic map and
+the six one-second outside-path inputs are synthetic setup, not captured history.
+Original origin/count/map and every input remain; omitted SensorInput reliability
+means 1.0. Old support/conflict/recovery-reason assertions are retired, not guarded.
+No warning assertion substitutes for their unavailable public recovery semantics.
+"""
+
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from custom_components.predictive_controls.model import PredictiveMap
-from custom_components.predictive_controls.zone_model.engine import ZoneModelEngine
 from custom_components.predictive_controls.zone_model.types import SensorInput
+from tests.runtime_replay import ActiveEdge, InputDelivery, RuntimeScenario
 
 
 def conflict_map(
@@ -51,6 +63,7 @@ def conflict_map(
 
 
 @pytest.mark.target_model
+@pytest.mark.scenario
 def test_inc_2026_08_20_2113z_support_loss_recovers_asserted_stay_zone() -> None:
     target_on_at = datetime(2026, 8, 20, 21, 13, 22, 395673, tzinfo=UTC)
     conflict_started_at = datetime(2026, 8, 20, 21, 13, 27, 131114, tzinfo=UTC)
@@ -58,63 +71,48 @@ def test_inc_2026_08_20_2113z_support_loss_recovers_asserted_stay_zone() -> None
     support_lost_at = datetime(2026, 8, 20, 21, 17, 7, 784372, tzinfo=UTC)
     observed_release_at = datetime(2026, 8, 20, 21, 23, 2, 849850, tzinfo=UTC)
     setup_at = target_on_at - timedelta(minutes=1)
-    engine = ZoneModelEngine(
-        conflict_map(target_presence=True),
-        2,
-        setup_at,
-    )
-    for node_id, event_at in (
-        ("a", setup_at),
-        ("am", setup_at + timedelta(seconds=1)),
-        ("as", setup_at + timedelta(seconds=2)),
-        ("d", setup_at + timedelta(seconds=3)),
-        ("dm", setup_at + timedelta(seconds=4)),
-        ("ds", setup_at + timedelta(seconds=5)),
-        ("target_source", datetime(2026, 8, 20, 21, 13, 16, 5579, tzinfo=UTC)),
-        ("target", target_on_at),
-    ):
-        engine.observe(SensorInput(f"binary_sensor.{node_id}", "on", event_at))
-
-    acquired = engine.snapshot
-    engine.advance(conflict_started_at)
-    conflict = engine.snapshot.count_conflicts[0]
-    assert conflict.started_at == conflict_started_at
-    assert conflict.deadline == conflict_started_at + timedelta(minutes=2)
-    degraded = engine.advance(degraded_at)
-    engine.observe(
-        SensorInput(
-            "binary_sensor.ds",
-            "unavailable",
-            support_lost_at,
+    with RuntimeScenario(setup_at) as scenario:
+        replay = scenario.create(conflict_map(target_presence=True), 2)
+        for node_id, event_at in (
+            ("a", setup_at),
+            ("am", setup_at + timedelta(seconds=1)),
+            ("as", setup_at + timedelta(seconds=2)),
+            ("d", setup_at + timedelta(seconds=3)),
+            ("dm", setup_at + timedelta(seconds=4)),
+            ("ds", setup_at + timedelta(seconds=5)),
+            ("target_source", datetime(2026, 8, 20, 21, 13, 16, 5579, tzinfo=UTC)),
+            ("target", target_on_at),
+        ):
+            replay.observe(SensorInput(f"binary_sensor.{node_id}", "on", event_at))
+        acquired = replay.view()
+        conflict = replay.advance(conflict_started_at)
+        degraded = replay.advance(degraded_at)
+        recovered = replay.observe(
+            SensorInput("binary_sensor.ds", "unavailable", support_lost_at)
         )
-    )
+        retained = replay.advance(observed_release_at)
 
-    assert len(engine.snapshot.anonymous_supports) == 1
-    assert engine.snapshot.count_conflicts == ()
-    recovery_row = next(
-        row
-        for row in engine.audit_rows
-        if row.zone == "target" and row.reason == "stuck_conflict_cleared"
-    )
-    assert recovery_row.event_at == support_lost_at
-    assert recovery_row.count_conflict_support_ids == conflict.support_ids
-    assert recovery_row.reliability_result == "recovered"
-    retained = engine.advance(observed_release_at)
-    target = next(
-        state for state in retained.snapshot.episode_states if state.node_id == "target"
-    )
-    target_policy = next(
-        state for state in retained.snapshot.policy_states if state.zone == "target"
-    )
-
-    assert target.known_on
-    assert not target.health_warning
-    assert next(
-        state for state in acquired.policy_states if state.zone == "target"
-    ).active
-    assert target_policy.active
-    assert not any(
-        event.zone == "target" and event.kind == "released"
-        for result in (degraded, retained)
-        for event in result.policy_events
-    )
+        # Independent literal expansion of the frozen input sequence, including
+        # callback/receipt/occurrence identity and effective reliability 1.0.
+        expected_inputs = tuple(SensorInput(
+            entity, state, datetime.fromisoformat(at), reliability=1.0,
+        ) for entity, state, at in (
+            ("binary_sensor.a", "on", "2026-08-20T21:12:22.395673+00:00"),
+            ("binary_sensor.am", "on", "2026-08-20T21:12:23.395673+00:00"),
+            ("binary_sensor.as", "on", "2026-08-20T21:12:24.395673+00:00"),
+            ("binary_sensor.d", "on", "2026-08-20T21:12:25.395673+00:00"),
+            ("binary_sensor.dm", "on", "2026-08-20T21:12:26.395673+00:00"),
+            ("binary_sensor.ds", "on", "2026-08-20T21:12:27.395673+00:00"),
+            ("binary_sensor.target_source", "on", "2026-08-20T21:13:16.005579+00:00"),
+            ("binary_sensor.target", "on", "2026-08-20T21:13:22.395673+00:00"),
+            ("binary_sensor.ds", "unavailable", "2026-08-20T21:17:07.784372+00:00"),
+        ))
+        assert replay.deliveries == tuple(InputDelivery(
+            event.entity_id, event.state, event.event_at, event.event_at,
+            event.event_at, event, event, False, True,
+        ) for event in expected_inputs)
+        assert all(view.active("target") for view in (
+            acquired, conflict, degraded, recovered, retained,
+        )), replay.edges_for("target")
+        assert replay.edges_for("target") == (ActiveEdge(target_on_at, "target", True),)
+        assert replay.input_edges_for("target") == replay.edges_for("target")

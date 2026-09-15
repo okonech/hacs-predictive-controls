@@ -11,6 +11,7 @@ from .types import (
     BeliefProfile,
     OutwardContext,
     ZoneBeliefState,
+    _physical_episode_reference,
     require_utc,
 )
 
@@ -65,6 +66,14 @@ class ZoneBeliefFilter:
         restore_at: datetime | None = None,
         contribution_limit: int = DEFAULT_CONTRIBUTION_LIMIT,
     ) -> ZoneBeliefFilter:
+        # Validate the new witness before legacy committed-shape normalization
+        # discards its outward object. Normalization cannot hide expired proof.
+        if (
+            state.outward_context is not None
+            and state.outward_context.qualified_until is not None
+            and state.outward_context.qualified_until <= state.last_updated_at
+        ):
+            raise ValueError("Stored outward context is inconsistent")
         if (
             state.context == "cleared_with_outward"
             and state.outward_context is not None
@@ -106,6 +115,8 @@ class ZoneBeliefFilter:
             generation_episode_id=episode_id,
             asserted_episode_id=episode_id,
             outward_context=None,
+            qualified_departure_at=None,
+            path_displaced_at=at if before.path_displaced_at is not None else None,
             health_warning=False,
         )
         self._record("local_positive", before, episode_id)
@@ -144,6 +155,8 @@ class ZoneBeliefFilter:
             generation_episode_id=episode_id,
             asserted_episode_id=episode_id,
             outward_context=None,
+            qualified_departure_at=None,
+            path_displaced_at=at if before.path_displaced_at is not None else None,
             health_warning=False,
         )
         self._record("correlated_positive", before, episode_id)
@@ -168,6 +181,8 @@ class ZoneBeliefFilter:
             generation_episode_id=episode_id,
             asserted_episode_id=episode_id,
             outward_context=None,
+            qualified_departure_at=None,
+            path_displaced_at=at if before.path_displaced_at is not None else None,
             health_warning=False,
         )
         self._record("local_interaction", before, episode_id)
@@ -202,6 +217,13 @@ class ZoneBeliefFilter:
             ),
             asserted_episode_id=None,
             outward_context=None,
+            qualified_departure_at=(
+                at
+                if before.outward_context is not None
+                and before.outward_context.qualified_until is not None
+                and before.outward_context.qualified_until > at
+                else None
+            ),
         )
         self._record("stable_clear", before, episode_id)
         return self._state
@@ -283,6 +305,7 @@ class ZoneBeliefFilter:
             context="unavailable",
             asserted_episode_id=None,
             outward_context=None,
+            qualified_departure_at=None,
         )
         self._record("unavailable", before, before.generation_episode_id)
         return self._state
@@ -310,6 +333,12 @@ class ZoneBeliefFilter:
             generation_episode_id=episode_id,
             asserted_episode_id=episode_id,
             outward_context=None,
+            qualified_departure_at=None,
+            path_displaced_at=(
+                max(self._state.path_displaced_at,
+                    _physical_episode_reference(episode_id)[2])
+                if self._state.path_displaced_at is not None else None
+            ),
             health_warning=False,
         )
         return self._state
@@ -336,6 +365,7 @@ class ZoneBeliefFilter:
                 context="cleared_without_outward",
                 asserted_episode_id=None,
                 outward_context=None,
+                qualified_departure_at=None,
                 health_warning=False,
             )
             self._record("availability_clear", before, episode_id)
@@ -346,6 +376,7 @@ class ZoneBeliefFilter:
             context="cleared_without_outward",
             asserted_episode_id=None,
             outward_context=None,
+            qualified_departure_at=None,
             health_warning=False,
             contributions=(),
         )
@@ -356,9 +387,13 @@ class ZoneBeliefFilter:
         source_episode_id: str,
         valid_until: datetime,
         at: datetime,
+        *,
+        qualified: bool = False,
     ) -> ZoneBeliefState:
         self._require_episode_id(source_episode_id)
         require_utc(valid_until, "Outward context expiry")
+        if not isinstance(qualified, bool):
+            raise ValueError("Outward qualification must be boolean")
         self._advance_to(at)
         if self._state.generation_episode_id != source_episode_id:
             raise ValueError(
@@ -366,21 +401,31 @@ class ZoneBeliefFilter:
             )
         if self._state.context == "unavailable" or valid_until <= at:
             return self._state
-        if self._state.context == "cleared_with_outward":
-            return self._state
-        if self._state.context == "cleared_without_outward":
+        if self._state.context in {"cleared_with_outward", "cleared_without_outward"}:
             self._state = replace(
                 self._state,
                 context="cleared_with_outward",
                 outward_context=None,
+                qualified_departure_at=(
+                    self._state.qualified_departure_at
+                    or (at if qualified else None)
+                ),
             )
             return self._state
         current = self._state.outward_context
-        if current is not None and current.valid_until >= valid_until:
+        qualified_until = None if current is None else current.qualified_until
+        if qualified:
+            qualified_until = max(qualified_until or valid_until, valid_until)
+        outward = OutwardContext(
+            source_episode_id,
+            max(current.valid_until, valid_until) if current else valid_until,
+            qualified_until,
+        )
+        if current == outward:
             return self._state
         self._state = replace(
             self._state,
-            outward_context=OutwardContext(source_episode_id, valid_until),
+            outward_context=outward,
         )
         return self._state
 
@@ -402,12 +447,60 @@ class ZoneBeliefFilter:
         context = before.context
         if context == "cleared_with_outward":
             context = "cleared_without_outward"
-        self._state = replace(before, context=context, outward_context=None)
+        self._state = replace(
+            before, context=context, outward_context=None, qualified_departure_at=None
+        )
         self._record("outward_superseded", before, episode_id)
         return self._state
 
     def advance(self, now: datetime) -> ZoneBeliefState:
         self._advance_to(now)
+        return self._state
+
+    def set_physical_hold(self, held: bool, at: datetime) -> ZoneBeliefState:
+        """Change physical context only after advancing under the previous flag."""
+
+        if type(held) is not bool:
+            raise ValueError("Physical hold must be boolean")
+        self._advance_to(at)
+        if self._state.physical_hold != held:
+            self._state = replace(self._state, physical_hold=held)
+        return self._state
+
+    def displace_path(self, at: datetime) -> ZoneBeliefState:
+        """Withdraw selected coverage without changing raw truth or likelihood.
+
+        The first displacement frontier is stable within a generation. A fresh
+        unassigned observation inherits displacement, rebound to its own origin;
+        only the caller's qualified selected arrival may invoke restore_path.
+        """
+
+        if self._state.generation_episode_id is not None:
+            _, _, origin = _physical_episode_reference(
+                self._state.generation_episode_id
+            )
+            require_utc(at, "Path displacement time")
+            if at < origin:
+                raise ValueError("Path displacement precedes its generation")
+        self._advance_to(at)
+        if (
+            self._state.generation_episode_id is not None
+            and self._state.path_displaced_at is None
+        ):
+            self._state = replace(self._state, path_displaced_at=at)
+        return self._state
+
+    def restore_path(self, at: datetime) -> ZoneBeliefState:
+        """Clear displacement at a qualified selected arrival, adding no evidence.
+
+        The engine applies that observation's original typed likelihood once and
+        calls this only after assigning the arrival, never for coverage/timers.
+        Decay up to the arrival still uses the displaced calibration.
+        """
+
+        self._advance_to(at)
+        if self._state.path_displaced_at is not None:
+            self._state = replace(self._state, path_displaced_at=None)
         return self._state
 
     def threshold_crossed_at(
@@ -452,6 +545,9 @@ class ZoneBeliefFilter:
             generation_episode_id=None,
             asserted_episode_id=None,
             outward_context=None,
+            qualified_departure_at=None,
+            path_displaced_at=None,
+            physical_hold=False,
             health_warning=False,
             contributions=(),
         )
@@ -474,6 +570,16 @@ class ZoneBeliefFilter:
             self._record("context_expired", before, outward.source_episode_id)
         if self._state.last_updated_at < at:
             self._decay_to(at)
+        outward = self._state.outward_context
+        if (
+            outward is not None
+            and outward.qualified_until is not None
+            and outward.qualified_until <= at
+        ):
+            self._state = replace(
+                self._state,
+                outward_context=replace(outward, qualified_until=None),
+            )
 
     def _decay_to(self, at: datetime) -> None:
         before = self._state
@@ -484,7 +590,10 @@ class ZoneBeliefFilter:
             self._state = replace(before, last_updated_at=at)
             return
         elapsed = (at - before.last_updated_at).total_seconds()
-        calibration = self._profile.decay_for(before.context)
+        calibration = self._profile.decay_for(
+            "asserted" if before.physical_hold else "cleared_with_outward"
+            if before.path_displaced_at is not None else before.context
+        )
         survival = math.exp(-elapsed / calibration.time_constant.total_seconds())
         probability = (
             calibration.baseline_probability
@@ -529,6 +638,7 @@ class ZoneBeliefFilter:
         self._state = replace(self._state, contributions=contributions)
 
     def _validate_state(self, state: ZoneBeliefState) -> None:
+        state.__post_init__()
         if state.profile_name != self._profile.profile_id:
             raise ValueError(
                 "Stored belief profile does not match the configured profile"
@@ -569,6 +679,10 @@ class ZoneBeliefFilter:
         if state.outward_context is not None and (
             state.outward_context.source_episode_id != state.generation_episode_id
             or state.outward_context.valid_until <= state.last_updated_at
+            or (
+                state.outward_context.qualified_until is not None
+                and state.outward_context.qualified_until <= state.last_updated_at
+            )
             or state.context not in {"asserted", "degraded_asserted"}
         ):
             raise ValueError("Stored outward context is inconsistent")

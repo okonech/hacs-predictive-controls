@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import asdict
 from datetime import datetime, timedelta
 from typing import Any
 
+from .zone_model.selected_paths import SelectedPath
 from .zone_model.types import ReliabilityWarningOccurrence, require_utc
 
 
@@ -147,6 +149,17 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
         "requested_occupants": diagnostics.requested_occupants,
         "unsupported_count": diagnostics.unsupported_count,
         "beliefs": dict(diagnostics.beliefs),
+        "selected_paths": [
+            None if path is None else selected_path_payload(path)
+            for path in diagnostics.selected_paths
+        ],
+        "unlocated_count": sum(path is None for path in diagnostics.selected_paths),
+        "selected_sources": [
+            _json_value(asdict(source)) for source in diagnostics.selected_sources
+        ],
+        "path_health": [
+            _json_value(asdict(state)) for state in diagnostics.path_health
+        ],
         "policy": {
             zone: {
                 "active": state.active,
@@ -232,6 +245,7 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
                 "authorized": item.authorized,
                 "reason": item.reason,
                 "source_token_ids": [token.token_id for token in item.source_tokens],
+                "selected_source_episode_ids": list(item.selected_source_episode_ids),
                 "track_confidence": item.track_confidence,
                 "path_node_ids": list(item.path_node_ids),
                 "provenance_kind": item.provenance_kind,
@@ -345,9 +359,9 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
         "lifecycle_counters": dict(diagnostics.lifecycle_counters),
         "processing": dict(diagnostics.processing),
         "health_warnings": [
-            state.node_id
-            for state in diagnostics.episode_states
-            if state.health_warning or state.cadence_warning
+            row["node_id"]
+            for row in current_warnings
+            if row["kind"] == "suspected_stuck"
         ],
         "reliability_warnings": list(current_warnings),
         "reliability_warning_occurrences": [
@@ -377,6 +391,39 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
             )
         ],
     }
+
+
+def selected_path_payload(path: SelectedPath) -> dict[str, Any]:
+    """Expose bounded causal records, separating coverage from source eligibility."""
+
+    covered = tuple(
+        visit for visit in path.route
+        if visit.branch_active or visit == path.endpoint
+    )
+    return {
+        **_json_value(asdict(path)),
+        "endpoint": _json_value(asdict(path.endpoint)),
+        "updated_at": path.updated_at.isoformat(),
+        "covered_node_ids": sorted({visit.node_id for visit in covered}),
+        "covered_zones": sorted({visit.zone for visit in covered}),
+        "eligible_node_ids": sorted({
+            visit.node_id for visit in path.route
+            if visit.branch_active
+            or (visit == path.endpoint and path.endpoint_eligible)
+        }),
+    }
+
+
+def _json_value(value: Any) -> Any:
+    """Convert dataclass dictionaries to JSON-native containers and UTC strings."""
+
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {key: _json_value(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_json_value(item) for item in value]
+    return value
 
 
 def policy_decision_payload(row: Any) -> dict[str, Any]:

@@ -1,8 +1,11 @@
 """REQ-TRAV-018 immutable projections and prepublication proposal inverses.
 
-Valid support history comes from the event-driven handoff fixture. Deliberately
-inconsistent component projections below test validator boundaries, not reachable
-sensor histories or persistence acceptance. No frozen incident is reconstructed.
+Explicit component fixtures test validator boundaries, not selected-engine
+reachability or persistence acceptance. Every original malformed proposal first
+accepts its canonical baseline, rejects the unchanged mutation at prepare_handoff,
+and commits a valid continuation. Real selected-engine preparation failure and
+publication ordering are qualified separately in test_zone_model_handoff.
+No frozen incident is reconstructed.
 """
 
 from __future__ import annotations
@@ -16,9 +19,6 @@ from unittest.mock import patch
 
 import pytest
 
-from custom_components.predictive_controls.zone_model.profiles import (
-    build_physical_nodes,
-)
 from custom_components.predictive_controls.zone_model.supports import (
     AnonymousSupportTracker,
 )
@@ -34,16 +34,10 @@ from custom_components.predictive_controls.zone_model.types import (
     TraversalToken,
     ZoneBeliefState,
 )
+from tests.handoff_component_fixture import handoff_proposal
 from tests.test_zone_model_handoff import (
     EPSILON,
     _at,
-    _episode,
-    _handoff,
-    _input,
-    _map,
-    _policy,
-    _seed,
-    _token,
 )
 
 pytestmark = pytest.mark.target_model
@@ -155,27 +149,8 @@ def _proposal(*, correlated: bool = False) -> tuple[
     AnonymousSupportTracker, EpisodeEffect, TraversalAuthorization, TraversalToken,
     tuple[EpisodeState, ...], tuple[ZoneBeliefState, ...], tuple[TraversalToken, ...],
 ]:
-    """Re-use authentic pre-transfer support with immutable post-arrival inputs."""
-    predictive_map = _map()
-    engine = _seed(predictive_map, correlated=correlated)
-    before = engine.snapshot
-    result = _handoff(engine)
-    authorization, = result.authorizations
-    tracker = AnonymousSupportTracker(
-        predictive_map, build_physical_nodes(predictive_map).nodes,
-    )
-    tracker.restore(
-        before.anonymous_supports, before.support_token_bindings, before.updated_at,
-    )
-    effect = EpisodeEffect(
-        "b", "b", authorization.target_episode_id,
-        "correlated_positive" if correlated else "positive", _at(302),
-    )
-    return (
-        tracker, effect, authorization, _token(engine, "b"),
-        result.snapshot.episode_states, result.snapshot.belief_states,
-        result.snapshot.retained_traversal_tokens,
-    )
+    """Use independent component inputs; never substitute for engine ordering."""
+    return handoff_proposal(correlated=correlated)
 
 
 @pytest.mark.parametrize(
@@ -410,10 +385,31 @@ def test_unprepared_handoff_requires_effect_and_token_without_committing(
 def test_real_malformed_proposal_validation_precedes_policy_and_publication(
     correlated: bool, fault: str, message: str,
 ) -> None:
-    engine = _seed(_map(), correlated=correlated)
-    before = engine.snapshot
-    counters = engine._supports.counters
-    prepare = engine._supports.prepare_handoff
+    """TRAV018: exact18x2 mutations at the actual detached proposal boundary.
+
+    Historical ID retained. PATH-selected observations intentionally never issue
+    this transfer. The current-engine prepare-failure tests separately prove no
+    policy/commit/result callback/edge callback follows a preparation failure.
+    This test does not fabricate an engine or claim an uncalled policy proves it.
+    """
+    tracker, effect, authorization, token, episodes, beliefs, retained = _proposal(
+        correlated=correlated,
+    )
+    before = (tracker.supports, tracker.bindings, tracker.latest_transition,
+              tracker.counters)
+    inputs = (effect, authorization, token, episodes, beliefs, retained)
+    prepare = tracker.prepare_handoff
+    # First accept the exact baseline at both dedicated and full preparation
+    # boundaries. Nothing has committed, so malformed cases cannot pass merely
+    # because setup was already invalid or because the source was consumed.
+    accepted = prepare(effect.at, effect, authorization, token, episodes, beliefs,
+                       (token,))
+    baseline = tracker.prepare(
+        effect.at, effect, authorization, token, episodes, beliefs, (token,), retained,
+    )
+    assert baseline.transition == accepted
+    assert (tracker.supports, tracker.bindings, tracker.latest_transition,
+            tracker.counters) == before
 
     def malformed(
         at: datetime, effect: EpisodeEffect, authorization: TraversalAuthorization,
@@ -469,33 +465,30 @@ def test_real_malformed_proposal_validation_precedes_policy_and_publication(
             at, effect, authorization, token, episodes, beliefs, active_tokens,
         )
 
-    with (
-        patch.object(
-            engine._supports, "prepare_handoff", side_effect=malformed,
-        ) as checked,
-        patch.object(
-            engine, "_evaluate_policies", wraps=engine._evaluate_policies,
-        ) as policy,
-        patch.object(engine._supports, "apply", wraps=engine._supports.apply) as commit,
-        patch.object(engine, "_apply_count_conflicts") as count,
-    ):
+    with patch.object(tracker, "prepare_handoff", side_effect=malformed) as checked:
         with pytest.raises(ValueError, match=message):
-            engine.observe(
-                _input("b", "on", 302),
-                decision_callback=lambda *_: pytest.fail("invalid proposal published"),
+            tracker.prepare(
+                effect.at, effect, authorization, token, episodes, beliefs,
+                (token,), retained,
             )
         assert checked.call_count == 1
-        policy.assert_not_called()
-        commit.assert_not_called()
-        count.assert_not_called()
-    assert not _policy(engine, "b").active
-    assert engine.snapshot.anonymous_supports == before.anonymous_supports
-    assert engine.snapshot.support_token_bindings == before.support_token_bindings
-    assert engine._supports.counters == counters
-    assert _episode(engine, "a") == next(
-        state for state in before.episode_states if state.node_id == "a"
+    assert (tracker.supports, tracker.bindings, tracker.latest_transition,
+            tracker.counters) == before
+    assert (effect, authorization, token, episodes, beliefs, retained) == inputs
+    # The same receiver remains usable after rejection; the original prepared
+    # revision is still current. It commits exactly the accepted transition.
+    assert tracker.commit_prepared(baseline) == accepted
+    moved, = tracker.supports
+    original, = before[0]
+    assert (moved.support_id, moved.created_at) == (
+        original.support_id, original.created_at,
     )
-    assert not engine._pending_prediction_learning
+    assert moved.current_node_id == "b" and moved.updated_at == effect.at
+    assert tracker.bindings == (SupportTokenBinding(token.token_id, moved.support_id),)
+    assert tracker.counters["support_created"] == before[3]["support_created"]
+    assert tracker.counters["support_transferred"] == (
+        before[3]["support_transferred"] + 1
+    )
 
 
 @pytest.mark.parametrize("correlated", (False, True))

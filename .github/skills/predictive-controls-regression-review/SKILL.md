@@ -27,7 +27,8 @@ production behavior before Gates 1-5 are complete.
    Fetch current runtime data when
    it can distinguish causes. Home Assistant access is read-only through approved
    scripts in the homelab repository. Record provenance and never invent missing
-   timestamps or state.
+   timestamps or state. Capture the user's own report separately from the
+   diagnosis and test assertions using the `Incident summary comment` below.
 2. **Diagnose the root cause.** Locate the lowest controlling layer. State one
    falsifiable diagnosis, its supporting evidence, contributing conditions, and
    the cheapest check that could disprove it. Do not confuse deployment drift or
@@ -58,7 +59,9 @@ production behavior before Gates 1-5 are complete.
    and primary tests must be renamed when their retained evidence provides the
    event minute. Do not put a reported-incident replay in a shared test module,
    and do not combine separate reports in one file even when one generic fix
-   resolves both. Run the new file against
+   resolves both. Start each incident file with the required summary docstring;
+   retain it alongside the replay after the working specification is deleted.
+   Run the new file against
    unchanged controlling behavior; it must fail for the reported public outcome
    and diagnosed reason. Freeze its factual inputs, event ordering, and public
    expectations after proof, and record the command and observed failure
@@ -97,6 +100,43 @@ production behavior before Gates 1-5 are complete.
 If the hardened design conflicts with `SPECIFICATION.md`, obtain explicit user
 agreement and amend the conflicting authority before Gate 6. Gate 8 still
 performs final reconciliation against the implementation and validated evidence.
+
+## Incident summary comment
+
+Every new incident test file starts with a short module-level docstring, before
+imports, that explains the original user-facing problem without reading the
+replay. Use these labeled fields; a few sentences are sufficient:
+
+```python
+"""User-reported issue: <exact quote or explicitly labeled faithful paraphrase>.
+User expected: <reported intended behavior; label any inferred expectation>.
+Observed: <reported actual behavior, affected room/device, material time if known>.
+Source: <report date and retained message/evidence reference; note missing context>.
+Test scope: <public outcome protected; distinguish additional model assertions>.
+"""
+```
+
+- Capture the report at intake, before diagnosis. Use quotation marks only for
+   verified original wording. Do not infer what the user said from the test name,
+   current assertions, implementation, or the eventual root cause.
+- Keep a reported physical-light symptom distinct from a reconstructed model
+   result. A replay of `active` proves the control signal, not actual actuation.
+   Distinguish observed count/timings from synthetic inverse cases when relevant.
+- The summary belongs in the permanent incident file, not only the temporary
+   working spec. Preserve existing detailed evidence notes below it rather than
+   replacing them or duplicating a full diagnostic history in the header.
+- When revisiting or renaming an older incident without this summary, backfill it
+   from retained user messages or evidence. If the original report is unavailable,
+   say so explicitly and label any evidence-based reconstruction; never invent a
+   quote or present an internal diagnostic expectation as the user's request.
+- Preserve the original report when goals evolve. Record any explicitly approved
+   acceptance amendment separately with its date and rationale. Updating comments
+   must not change replay inputs, timing, assertions, or incident identity.
+- Before proposing an expectation change, compare the summary, public oracle,
+   supplementary model assertions, and current agreed goals. Tell the user which
+   assertion conflicts and why, distinguishing the original symptom from an added
+   diagnostic or mechanism constraint. Obtain the approval required by
+   `REQ-GOV-005`; a mismatch alone is not permission to weaken or delete the test.
 
 ## Evidence Record
 
@@ -212,8 +252,10 @@ Low raw sensor confidence or a timer alone is not an equivalent release model.
 
 ## Validation Expectations
 
-Preserve every report's exact regression test and run the nearest discriminating
-inverse or boundary cases while editing. Before handoff, run the complete
+Preserve every report's exact regression test and its sourced user-report summary,
+and run the nearest discriminating inverse or boundary cases while editing.
+Verify new or revisited incident files contain the summary before handoff.
+Before handoff, run the complete
 retained `test_inc_` corpus, adversarial matrix, full Python coverage, Ruff, mypy, frontend,
 applicable 100-event benchmarks, and diff/reference checks. The final report must
 name the evidence provenance, diagnosed cause, working-spec deletion, retained

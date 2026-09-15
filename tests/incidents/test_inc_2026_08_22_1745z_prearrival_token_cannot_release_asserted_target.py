@@ -1,16 +1,27 @@
+"""User-reported issue: original message unavailable; retained-test reconstruction.
+User expected: the first asserted target stays ON when the second target arrives.
+Observed: retained Aug22 source records a 17:54:58.884915Z false-release frontier;
+it does not supply a complete physical-light trace or exact historical state.
+Source: /tmp/black-box-migration-baseline.json, Aug22 1745Z original source.
+Test scope: generic graph and +0.1/+0.2/+0.3-second independent path are synthetic
+setup. Preserve both arrivals and all old checkpoints, including the +5-second
+suffix. Effective SensorInput reliability is 1.0 even for the 0.75 map weight.
+The old measured arrival q=0.7812030651163774 (tolerance 0.02) is provenance only;
+support/token/q assertions are retired, not replaced with private prerequisites.
+Public retained ON and second-target immediate ON remain binding, even when red.
+"""
+
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from custom_components.predictive_controls.model import PredictiveMap
-from custom_components.predictive_controls.zone_model.engine import ZoneModelEngine
-from custom_components.predictive_controls.zone_model.types import (
-    PolicyEvent,
-    SensorInput,
-)
+from custom_components.predictive_controls.zone_model.types import SensorInput
+from tests.runtime_replay import ActiveEdge, InputDelivery, RuntimeScenario
 
 
 @pytest.mark.target_model
+@pytest.mark.scenario
 def test_inc_2026_08_22_1745z_prearrival_token_cannot_release_asserted_target() -> None:
     bootstrap_at = datetime(2026, 8, 22, 17, 45, 13, tzinfo=UTC)
     predictive_map = PredictiveMap.from_mapping(
@@ -68,111 +79,64 @@ def test_inc_2026_08_22_1745z_prearrival_token_cannot_release_asserted_target() 
             }
         }
     )
-    engine = ZoneModelEngine(predictive_map, 2, bootstrap_at)
-    engine.observe(
-        SensorInput(
-            "binary_sensor.independent_entry",
-            "on",
-            bootstrap_at + timedelta(microseconds=100000),
-        )
-    )
-    engine.observe(
-        SensorInput(
-            "binary_sensor.independent_transition",
-            "on",
-            bootstrap_at + timedelta(microseconds=200000),
-        )
-    )
-    engine.observe(
-        SensorInput(
-            "binary_sensor.independent_stay",
-            "on",
-            bootstrap_at + timedelta(microseconds=300000),
-        )
-    )
-    engine.observe(
-        SensorInput(
-            "binary_sensor.route_entry",
-            "on",
-            datetime(2026, 8, 22, 17, 45, 15, 291907, tzinfo=UTC),
-        )
-    )
-    engine.observe(
-        SensorInput(
-            "binary_sensor.shared_transition",
-            "on",
-            datetime(2026, 8, 22, 17, 45, 16, 259573, tzinfo=UTC),
-        )
-    )
-    retained = engine.observe(
-        SensorInput(
-            "binary_sensor.retained_target",
-            "on",
-            datetime(2026, 8, 22, 17, 45, 22, 409954, tzinfo=UTC),
-        )
-    )
-    retained_support = next(
-        support
-        for support in retained.snapshot.anonymous_supports
-        if support.current_zone == "retained_target"
-    )
-    retained_belief = next(
-        belief
-        for belief in retained.snapshot.belief_states
-        if belief.zone == "retained_target"
-    )
-    second = engine.observe(
-        SensorInput(
-            "binary_sensor.second_target",
-            "on",
-            datetime(2026, 8, 22, 17, 45, 24, 33458, tzinfo=UTC),
-        )
-    )
+    retained_at = datetime(2026, 8, 22, 17, 45, 22, 409954, tzinfo=UTC)
+    second_at = datetime(2026, 8, 22, 17, 45, 24, 33458, tzinfo=UTC)
     conflict_at = datetime(2026, 8, 22, 17, 47, 28, 212891, tzinfo=UTC)
-    engine.advance(conflict_at)
     release_at = datetime(2026, 8, 22, 17, 54, 58, 884915, tzinfo=UTC)
-    policy_events: list[PolicyEvent] = []
-    timer_at = conflict_at + timedelta(seconds=5)
-    while timer_at < release_at:
-        policy_events.extend(engine.advance(timer_at).policy_events)
-        timer_at += timedelta(seconds=5)
-    historical_release = engine.advance(release_at)
-    policy_events.extend(historical_release.policy_events)
-    release_check = engine.advance(release_at + timedelta(seconds=5))
-    policy_events.extend(release_check.policy_events)
+    with RuntimeScenario(bootstrap_at) as scenario:
+        replay = scenario.create(predictive_map, 2)
+        for node, at in (
+            ("independent_entry", bootstrap_at + timedelta(microseconds=100000)),
+            ("independent_transition", bootstrap_at + timedelta(microseconds=200000)),
+            ("independent_stay", bootstrap_at + timedelta(microseconds=300000)),
+            ("route_entry", datetime(2026, 8, 22, 17, 45, 15, 291907, tzinfo=UTC)),
+            ("shared_transition", datetime(
+                2026, 8, 22, 17, 45, 16, 259573, tzinfo=UTC,
+            )),
+        ):
+            replay.observe(SensorInput(f"binary_sensor.{node}", "on", at))
+        retained = replay.observe(
+            SensorInput("binary_sensor.retained_target", "on", retained_at)
+        )
+        second = replay.observe(
+            SensorInput("binary_sensor.second_target", "on", second_at)
+        )
+        checkpoints = [retained, second, replay.advance(conflict_at)]
+        timer_at = conflict_at + timedelta(seconds=5)
+        while timer_at < release_at:
+            checkpoints.append(replay.advance(timer_at))
+            timer_at += timedelta(seconds=5)
+        checkpoints.append(replay.advance(release_at))
+        checkpoints.append(replay.advance(release_at + timedelta(seconds=5)))
 
-    retained_policy = next(
-        state
-        for state in release_check.snapshot.policy_states
-        if state.zone == "retained_target"
-    )
-    second_policy = next(
-        state
-        for state in second.snapshot.policy_states
-        if state.zone == "second_target"
-    )
-    moved_support = next(
-        support
-        for support in second.snapshot.anonymous_supports
-        if support.support_id == retained_support.support_id
-    )
-    historical_belief = next(
-        belief
-        for belief in historical_release.snapshot.belief_states
-        if belief.zone == "retained_target"
-    )
-    assert retained_policy.active
-    assert not any(
-        event.zone == "retained_target" and event.kind == "released"
-        for event in policy_events
-    )
-    assert retained_support.updated_at > datetime(
-        2026, 8, 22, 17, 45, 16, 259573, tzinfo=UTC
-    )
-    assert retained_belief.probability == pytest.approx(
-        0.7812030651163774,
-        abs=0.02,
-    )
-    assert historical_belief.probability >= 0.7
-    assert moved_support.current_zone == "retained_target"
-    assert second_policy.active
+        expected_inputs = tuple(SensorInput(
+            entity, "on", datetime.fromisoformat(at), reliability=1.0,
+        ) for entity, at in (
+            ("binary_sensor.independent_entry", "2026-08-22T17:45:13.100000+00:00"),
+              ("binary_sensor.independent_transition",
+               "2026-08-22T17:45:13.200000+00:00"),
+            ("binary_sensor.independent_stay", "2026-08-22T17:45:13.300000+00:00"),
+            ("binary_sensor.route_entry", "2026-08-22T17:45:15.291907+00:00"),
+            ("binary_sensor.shared_transition", "2026-08-22T17:45:16.259573+00:00"),
+            ("binary_sensor.retained_target", "2026-08-22T17:45:22.409954+00:00"),
+            ("binary_sensor.second_target", "2026-08-22T17:45:24.033458+00:00"),
+        ))
+        assert replay.deliveries == tuple(InputDelivery(
+            event.entity_id, event.state, event.event_at, event.event_at,
+            event.event_at, event, event, False, True,
+        ) for event in expected_inputs)
+        assert second.active("second_target")
+        assert replay.input_edges_for("second_target") == (
+            ActiveEdge(second_at, "second_target", True),
+        )
+        assert replay.input_edges_for("retained_target") == (
+            ActiveEdge(retained_at, "retained_target", True),
+        )
+        assert all(view.active("retained_target") for view in checkpoints), (
+            "Retained target must remain ON at every original checkpoint",
+            tuple((edge.at.isoformat(), edge.active)
+                  for edge in replay.edges_for("retained_target")),
+        )
+        assert replay.edges_for("retained_target") == (
+            ActiveEdge(retained_at, "retained_target", True),
+        )

@@ -493,6 +493,37 @@ test("occupancy graph gives active warning zones red precedence", async () => {
   assert.match(panel.innerHTML, /\.zone-card\.has-warning[^}]+#d32f2f/);
 });
 
+test("unsupported jump graph shows every active kind and excludes cleared history", async () => {
+  const Panel = await panelConstructor();
+  const panel = new Panel();
+  panel._status = {
+    zone_states: {},
+    occupancy_diagnostics: {
+      model: "zone_belief",
+      reliability_warnings: ["unsupported_jump", "flapping", "suspected_stuck"].map((kind) => ({
+        node_id: "target",
+        zone: "target",
+        kind,
+        active: true,
+        last_observed_at: "2026-09-13T00:00:22Z",
+      })),
+    },
+  };
+  const zone = { zoneId: "target", label: "Target", position: {}, size: {}, nodeIds: ["target"] };
+  const html = panel.renderZoneCard(zone, 0, 0);
+  assert.equal((html.match(/class="zone-warning-label"/g) || []).length, 3);
+  for (const label of ["Unsupported Jump", "Flapping", "Suspected Stuck"]) {
+    assert.ok(html.includes(`${label} warning`));
+  }
+  assert.match(html, /has-warning/);
+  assert.match(html, /active/);
+  for (const warning of panel._status.occupancy_diagnostics.reliability_warnings) {
+    warning.active = false;
+  }
+  const cleared = panel.renderZoneCard(zone, 0, 0);
+  assert.doesNotMatch(cleared, /has-warning|zone-warning-label/);
+});
+
 test("panel renders cross-floor zone adjacency as a graph edge", async () => {
   const Panel = await panelConstructor();
   const panel = new Panel();

@@ -10,6 +10,7 @@ from .events import OccupancyEvent
 from .markov import MarkovChain
 from .model import PredictiveMap
 from .zone_model.engine import ZoneModelEngine
+from .zone_model.path_health import PathHealthState
 from .zone_model.persistence import (
     LEGACY_EXACT_SCHEMA,
     LEGACY_V2_SCHEMA,
@@ -23,6 +24,7 @@ from .zone_model.persistence import (
     serialize_target_state,
 )
 from .zone_model.prediction import PredictionLease, TargetPredictionManager
+from .zone_model.selected_paths import SelectedPath, SelectedSource
 from .zone_model.types import (
     AnonymousOccupancySupport,
     CountConflictState,
@@ -113,6 +115,9 @@ class TrackerDiagnostics:
     unsupported_count: int | None
     lifecycle_counters: dict[str, int]
     processing: dict[str, float | int] = field(default_factory=dict)
+    selected_paths: tuple[SelectedPath | None, ...] = ()
+    selected_sources: tuple[SelectedSource, ...] = ()
+    path_health: tuple[PathHealthState, ...] = ()
 
 
 class OccupancyTracker:
@@ -136,6 +141,7 @@ class OccupancyTracker:
         )
         self._engine: ZoneModelEngine | None = None
         self._publishing_snapshot: ZoneModelSnapshot | None = None
+        self._publication_depth = 0
         self._predictions = TargetPredictionManager(predictive_map)
         self._legacy_seed: LegacySchema6Seed | None = None
         self._v2_seed: LegacyV2Seed | None = None
@@ -194,6 +200,15 @@ class OccupancyTracker:
 
         snapshot = self._current_snapshot()
         return () if snapshot is None else snapshot.episode_states
+
+    @property
+    def reliability_warning_occurrences(
+        self,
+    ) -> tuple[ReliabilityWarningOccurrence, ...]:
+        """Read qualified warning history without materializing diagnostic audit."""
+
+        snapshot = self._current_snapshot()
+        return () if snapshot is None else snapshot.reliability_warning_occurrences
 
     @property
     def traversal_tokens(self) -> tuple[TraversalToken, ...]:
@@ -329,6 +344,9 @@ class OccupancyTracker:
                 if self._engine is None
                 else len(self._engine.audit_rows),
             },
+            selected_paths=() if snapshot is None else snapshot.selected_paths,
+            selected_sources=() if snapshot is None else snapshot.selected_sources,
+            path_health=() if snapshot is None else snapshot.path_health,
         )
 
     def state_for_zone(self, zone: str) -> ZoneState:
@@ -352,6 +370,7 @@ class OccupancyTracker:
         defer_learning: bool = False,
         publication_callback: Callable[[], None] | None = None,
     ) -> ZoneUpdate:
+        self._assert_mutation_allowed()
         del emit_activation
         event = replace(event, event_at=_as_utc(event.event_at))
         processed_at = (
@@ -363,6 +382,10 @@ class OccupancyTracker:
             engine.observe(
                 self._sensor_input(event),
                 processing_at=processed_at,
+                result_callback=(
+                    None if publication_callback is None
+                    else lambda result: self._record_result(result, defer_learning=True)
+                ),
                 decision_callback=(
                     None
                     if publication_callback is None
@@ -381,13 +404,18 @@ class OccupancyTracker:
         self._recent_events = [*self._recent_events[-24:], event]
         return ZoneUpdate(event, previous, self.state_for_zone(event.zone))
 
-    def refresh_active(self, now: datetime) -> tuple[ZoneUpdate, ...]:
-        return self._advance(_as_utc(now))
+    def refresh_active(
+        self, now: datetime, *, defer_learning: bool = False,
+    ) -> tuple[ZoneUpdate, ...]:
+        return self._advance(_as_utc(now), defer_learning=defer_learning)
 
-    def expire_transient_state(self, now: datetime) -> bool:
+    def expire_transient_state(
+        self, now: datetime, *, defer_learning: bool = False,
+    ) -> bool:
+        self._assert_mutation_allowed()
         engine = self._ensure_engine(_as_utc(now))
         before = _transient_projection(engine)
-        self._record_result(self._ensure_engine(_as_utc(now)).advance(_as_utc(now)))
+        self._record_result(engine.advance(_as_utc(now)), defer_learning=defer_learning)
         return before != _transient_projection(engine)
 
     def reconcile_expected_occupants(
@@ -397,24 +425,32 @@ class OccupancyTracker:
         evidence_id: str = "occupant_count_change",
         *,
         processing_at: datetime | None = None,
+        defer_learning: bool = False,
     ) -> None:
+        self._assert_mutation_allowed()
         if expected_occupants < 0:
             raise ValueError("expected_occupants must be non-negative")
-        self._requested_expected_occupants = expected_occupants
         if expected_occupants > PRODUCT_MAX_OCCUPANTS:
+            self._requested_expected_occupants = expected_occupants
             self._unsupported_count = expected_occupants
             return
-        self._unsupported_count = None
-        self.config = TrackerConfig(expected_occupants)
         at = _as_utc(now)
         if self._legacy_seed is not None or self._v2_seed is not None:
+            self._requested_expected_occupants = expected_occupants
+            self._unsupported_count = None
+            self.config = TrackerConfig(expected_occupants)
             return
-        self._record_result(
-            self._ensure_engine(at).observe_count(
-                CountInput(evidence_id, expected_occupants, True, at),
-                processing_at=(at if processing_at is None else _as_utc(processing_at)),
-            )
+        event = CountInput(evidence_id, expected_occupants, True, at)
+        result = self._ensure_engine(at).observe_count(
+            event,
+            processing_at=(at if processing_at is None else _as_utc(processing_at)),
         )
+        if result.disposition == "accepted" or (
+            result.disposition == "duplicate"
+            and expected_occupants == result.snapshot.count_state.expected_count
+        ):
+            self._adopt_engine_count()
+        self._record_result(result, defer_learning=defer_learning)
 
     def reject_unsupported_count(
         self,
@@ -422,6 +458,7 @@ class OccupancyTracker:
         now: datetime,
         evidence_id: str = "unsupported_occupant_count",
     ) -> None:
+        self._assert_mutation_allowed()
         del now, evidence_id
         if expected_occupants <= PRODUCT_MAX_OCCUPANTS:
             raise ValueError("unsupported occupant count must be above two")
@@ -437,6 +474,7 @@ class OccupancyTracker:
         *,
         cold_start: bool,
     ) -> None:
+        self._assert_mutation_allowed()
         del cold_start
         normalized = tuple(
             replace(event, event_at=_as_utc(event.event_at)) for event in events
@@ -473,7 +511,9 @@ class OccupancyTracker:
             return
         if self._engine is not None:
             if at > self._engine.snapshot.updated_at:
-                self._record_result(self._engine.advance(at, emit_events=False))
+                self._record_result(
+                    self._engine.advance(at, emit_events=False), defer_learning=True,
+                )
             if self._restore_status == "restored":
                 self._engine.reconcile_restored_asserted_contexts(
                     sensor_snapshot,
@@ -499,6 +539,7 @@ class OccupancyTracker:
         return payload
 
     def restore_state(self, restored: object, now: datetime) -> bool:
+        self._assert_mutation_allowed()
         at = _as_utc(now)
         if isinstance(restored, dict) and restored.get("schema") == LEGACY_EXACT_SCHEMA:
             try:
@@ -544,9 +585,14 @@ class OccupancyTracker:
             self._restore_rejection_count + 1,
         )
 
-    def _advance(self, at: datetime) -> tuple[ZoneUpdate, ...]:
+    def _advance(
+        self, at: datetime, *, defer_learning: bool = False,
+    ) -> tuple[ZoneUpdate, ...]:
+        self._assert_mutation_allowed()
         before = self.states
-        self._record_result(self._ensure_engine(at).advance(at))
+        self._record_result(
+            self._ensure_engine(at).advance(at), defer_learning=defer_learning,
+        )
         after = self.states
         updates: list[ZoneUpdate] = []
         for zone in self._map.zones():
@@ -580,9 +626,11 @@ class OccupancyTracker:
             return self._publishing_snapshot
         return None if self._engine is None else self._engine.snapshot
 
-    def commit_prediction_learning(self) -> None:
+    def commit_prediction_learning(self) -> bool:
+        self._assert_mutation_allowed()
         if self._engine is not None:
-            self._engine.commit_prediction_learning()
+            return self._engine.commit_prediction_learning()
+        return False
 
     def publish_current_projection(self, callback: Callable[[], None]) -> None:
         """Publish one synchronous update against a coherent model snapshot."""
@@ -593,14 +641,14 @@ class OccupancyTracker:
         self, result: ZoneModelResult, *, defer_learning: bool = False
     ) -> None:
         self._last_result = result
-        if not defer_learning:
-            self.commit_prediction_learning()
         for decision in result.policy_decisions:
             self._policy_reason_by_zone[decision.zone] = decision.reason
             if decision.active_after and not decision.active_before:
                 self._active_since_by_zone[decision.zone] = decision.event_at
             elif not decision.active_after:
                 self._active_since_by_zone.pop(decision.zone, None)
+        if not defer_learning:
+            self.commit_prediction_learning()
 
     def _publish_fast_projection(
         self,
@@ -609,21 +657,17 @@ class OccupancyTracker:
         authorization: TraversalAuthorization | None,
         callback: Callable[[], None],
     ) -> None:
-        """Install coherent edge metadata before scheduling the entity write."""
+        """Reuse complete committed metadata, never replace it with one edge."""
 
-        engine = cast(ZoneModelEngine, self._engine)
-        snapshot = engine.snapshot
-        self._last_result = ZoneModelResult(
-            "publishing",
-            snapshot,
-            (event,),
-            (decision,),
-            () if authorization is None else (authorization,),
-        )
-        self._policy_reason_by_zone[decision.zone] = decision.reason
-        if decision.active_after and not decision.active_before:
-            self._active_since_by_zone[decision.zone] = decision.event_at
-        self._publish_with_snapshot(snapshot, callback)
+        del event, decision, authorization
+        assert self._last_result is not None
+        self._publish_with_snapshot(self._last_result.snapshot, callback)
+
+    def _assert_mutation_allowed(self) -> None:
+        if self._publication_depth:
+            raise ValueError("Model mutation is forbidden during publication")
+        if self._engine is not None:
+            self._engine.assert_mutation_allowed()
 
     def _publish_with_snapshot(
         self,
@@ -632,9 +676,11 @@ class OccupancyTracker:
     ) -> None:
         previous_snapshot = self._publishing_snapshot
         self._publishing_snapshot = snapshot
+        self._publication_depth += 1
         try:
             callback()
         finally:
+            self._publication_depth -= 1
             self._publishing_snapshot = previous_snapshot
 
     def _rebuild_policy_projection_cache(self) -> None:
@@ -753,6 +799,16 @@ def _transient_projection(engine: ZoneModelEngine) -> tuple[object, ...]:
         snapshot.traversal_tokens,
         snapshot.retained_traversal_tokens,
         snapshot.current_token_ids,
+        snapshot.selected_paths,
+        snapshot.selected_sources,
+        snapshot.path_health,
+        tuple(
+            (
+                occurrence.node_id, occurrence.kind, occurrence.reason,
+                occurrence.first_observed_at, occurrence.cleared_at,
+            )
+            for occurrence in snapshot.reliability_warning_occurrences
+        ),
         tuple(
             (state.node_id, state.status, state.health_warning)
             for state in snapshot.episode_states

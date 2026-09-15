@@ -64,6 +64,12 @@ def test_summary_and_facade_scalar_boundaries() -> None:
 
 
 def test_tracker_validation_bootstrap_advancement_and_transient_expiry() -> None:
+    """Synthetic facade validation; HEALTH001 replaces the old age-only expiry.
+
+    Keep the bootstrap/ON inputs. A lone held transition has no 120s fault;
+    test_tracker_unsupported_health_deadline_changes_projection_once retains the
+    positive expiry/change-notification guarantee at the approved 600s frontier.
+    """
     with pytest.raises(ValueError, match="non-negative"):
         OccupancyTracker(target_map(), TrackerConfig(-1))
     tracker = OccupancyTracker(target_map(), TrackerConfig(1))
@@ -86,10 +92,31 @@ def test_tracker_validation_bootstrap_advancement_and_transient_expiry() -> None
     )
     assert tracker.expire_transient_state(NOW + timedelta(seconds=2)) is False
     tracker.observe(event("hall", "hall", "on", NOW + timedelta(seconds=3)))
-    assert tracker.expire_transient_state(NOW + timedelta(minutes=2)) is True
+    assert tracker.expire_transient_state(NOW + timedelta(minutes=2)) is False
+    assert tracker.diagnostics.reliability_warning_occurrences == ()
 
     empty = OccupancyTracker(target_map(), TrackerConfig(1))
     empty.bootstrap_state((), cold_start=True)
+
+
+def test_tracker_unsupported_health_deadline_changes_projection_once() -> None:
+    """HEALTH001/003 current equivalent: no early fault, exact warning, idempotence."""
+    tracker = OccupancyTracker(target_map(), TrackerConfig(1))
+    on_at = NOW + timedelta(seconds=3)
+    tracker.observe(event("hall", "hall", "on", on_at))
+    assert tracker.expire_transient_state(on_at + timedelta(seconds=599)) is False
+    assert tracker.diagnostics.reliability_warning_occurrences == ()
+    deadline = on_at + timedelta(seconds=600)
+    assert tracker.expire_transient_state(deadline) is True
+    due = tracker.diagnostics
+    warning, = due.reliability_warning_occurrences
+    assert (warning.node_id, warning.reason) == ("hall", "assertion_timeout")
+    assert warning.first_observed_at == deadline
+    assert warning.cleared_at is None
+    assert tracker.expire_transient_state(deadline) is False
+    assert tracker.expire_transient_state(deadline + timedelta(seconds=1)) is False
+    assert all(not state.active for state in tracker.policy_states.values())
+    assert tracker.policy_events == ()
 
 
 def test_tracker_empty_store_schema6_migration_and_prediction_restore_failure() -> None:

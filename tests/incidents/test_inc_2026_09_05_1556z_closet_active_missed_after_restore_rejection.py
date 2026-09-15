@@ -1,14 +1,20 @@
+"""User-reported issue: closet missed after restore rejection; wording unavailable.
+User expected (approved amended acceptance): retained ON through sleep-off.
+Observed: fixture reconstructs background unavailability before a later closet miss.
+Source: frozen original in /tmp/black-box-migration-baseline.json; Section 17
+REQ-GOV-005's 2026-09-11 amendment requires retained ON, not timeout/reacquisition.
+Test scope: independent public continuous-ON live/restore branches, not actuation
+or disk durability. Support/status/snapshot assertions are removed under the
+2026-09-12 boundary migration. Save 07:53:47 and restore 07:54:05.919458 stay distinct.
+"""
+
 from datetime import UTC, datetime
 
 import pytest
 
 from custom_components.predictive_controls.model import PredictiveMap
-from custom_components.predictive_controls.zone_model.engine import ZoneModelEngine
-from custom_components.predictive_controls.zone_model.persistence import (
-    restore_target_state,
-    serialize_target_state,
-)
 from custom_components.predictive_controls.zone_model.types import SensorInput
+from tests.runtime_replay import ActiveEdge, RuntimeScenario
 
 
 def _at(value: str) -> datetime:
@@ -53,91 +59,86 @@ def _incident_map() -> PredictiveMap:
     )
 
 
+@pytest.mark.scenario
 @pytest.mark.target_model
 @pytest.mark.parametrize("authoritative_count", (1, 2))
 def test_inc_2026_09_05_1556z_closet_active_missed_after_restore_rejection(
     authoritative_count: int,
 ) -> None:
     predictive_map = _incident_map()
-    engine = ZoneModelEngine(
-        predictive_map,
-        authoritative_count,
-        _at("2026-09-05T01:16:29Z"),
-    )
-    for entity_id, state, event_at in (
+    initial_inputs = tuple(SensorInput(entity_id, state, _at(event_at)) for (
+        entity_id, state, event_at
+    ) in (
         ("binary_sensor.top", "on", "2026-09-05T01:16:30.919930Z"),
         ("binary_sensor.entrance", "on", "2026-09-05T01:16:40.028350Z"),
         ("binary_sensor.closet", "on", "2026-09-05T01:16:41.843671Z"),
         ("binary_sensor.closet", "off", "2026-09-05T01:20:19.951114Z"),
-    ):
-        engine.observe(SensorInput(entity_id, state, _at(event_at)))
-    released = engine.advance(_at("2026-09-05T02:11:41.735890Z"))
-
-    closet_policy = next(
-        state for state in released.snapshot.policy_states if state.zone == "closet"
-    )
-    assert closet_policy.active is False
-    assert [
-        (support.current_node_id, support.current_zone, support.state)
-        for support in released.snapshot.anonymous_supports
-    ] == [("closet", "closet", "settled")]
-
-    engine.observe(
-        SensorInput("binary_sensor.background", "on", _at("2026-09-05T07:53:40Z"))
-    )
-    engine.observe(
-        SensorInput(
-            "binary_sensor.background",
-            "off",
-            _at("2026-09-05T07:53:41Z"),
-        )
-    )
-    engine.advance(_at("2026-09-05T07:53:46Z"))
-    unavailable = engine.observe(
-        SensorInput(
-            "binary_sensor.background",
-            "unavailable",
-            _at("2026-09-05T07:53:47Z"),
-        )
-    )
-    background = next(
-        state
-        for state in unavailable.snapshot.episode_states
-        if state.node_id == "background"
-    )
-    assert background.status == "unavailable"
-
-    restored = restore_target_state(
-        predictive_map,
-        serialize_target_state(predictive_map, engine),
-        _at("2026-09-05T07:54:05.919458Z"),
-    )
-    incident_results = []
-    for state, event_at in (
+    ))
+    background_inputs = tuple(SensorInput(
+        "binary_sensor.background", state, _at(event_at),
+    ) for state, event_at in (
+        ("on", "2026-09-05T07:53:40Z"),
+        ("off", "2026-09-05T07:53:41Z"),
+        ("unavailable", "2026-09-05T07:53:47Z"),
+    ))
+    incident_inputs = tuple(SensorInput(
+        "binary_sensor.closet", state, _at(event_at),
+    ) for state, event_at in (
         ("on", "2026-09-05T15:55:09.320493Z"),
         ("off", "2026-09-05T15:56:13.538504Z"),
         ("on", "2026-09-05T15:56:54.026176Z"),
-    ):
-        incident_results.append(
-            restored.observe(
-                SensorInput("binary_sensor.closet", state, _at(event_at))
-            )
-        )
-    sleep_off = restored.advance(_at("2026-09-05T15:57:28.615217Z"))
+    ))
+    expected_inputs = (*initial_inputs, *background_inputs, *incident_inputs)
+    closet_at = initial_inputs[2].event_at
+    # Preserve the exact origin (not top_on minus one second), default unobserved
+    # startup, map and historical SensorInput reliability 1.0 in both branches.
+    with RuntimeScenario(_at("2026-09-05T01:16:29Z")) as scenario:
+        live = scenario.create(predictive_map, authoritative_count)
+        restored = scenario.create(predictive_map, authoritative_count)
+        branches = (live, restored)
+        states = {replay: [replay.view()] for replay in branches}
+        for event in initial_inputs:
+            for replay in branches:
+                states[replay].append(replay.observe(event))
+        live.advance(_at("2026-09-05T02:11:41.735890Z"))
+        for replay in branches:
+            states[replay].append(replay.view())
+        for event in background_inputs[:2]:
+            for replay in branches:
+                states[replay].append(replay.observe(event))
+        live.advance(_at("2026-09-05T07:53:46Z"))
+        for replay in branches:
+            states[replay].append(replay.view())
+        for replay in branches:
+            states[replay].append(replay.observe(background_inputs[2]))
 
-    acquisitions = [
-        event
-        for result in incident_results
-        for event in result.policy_events
-        if event.zone == "closet" and event.kind == "acquired"
-    ]
-    assert len(acquisitions) == 1
-    assert acquisitions[0].event_at == _at("2026-09-05T15:55:09.320493Z")
-    sleep_off_policy = next(
-        state
-        for state in sleep_off.snapshot.policy_states
-        if state.zone == "closet"
-    )
-    assert sleep_off_policy.active is True
-    assert sleep_off.snapshot.updated_at == _at("2026-09-05T15:57:28.615217Z")
-    assert sleep_off.snapshot.updated_at < _at("2026-09-05T15:57:50.057472Z")
+        # Capture exactly at 07:53:47, NOT at the later restore timestamp.
+        payload = live.checkpoint()
+        live.advance(_at("2026-09-05T07:54:05.919458Z"))
+        prefix_lengths = {replay: len(replay.edges) for replay in branches}
+        restored.restore(payload)
+        for replay in branches:
+            states[replay].append(replay.view())
+        for event in incident_inputs:
+            for replay in branches:
+                states[replay].append(replay.observe(event))
+        live.advance(_at("2026-09-05T15:57:28.615217Z"))
+        for replay in branches:
+            states[replay].append(replay.view())
+
+        for replay in branches:
+            assert replay.normalized_inputs == list(expected_inputs)
+            assert replay.input_edges_for("closet")[:1] == (
+                ActiveEdge(closet_at, "closet", True),
+            )
+            for state in states[replay][3:]:
+                assert state.active("closet"), (state.at, replay.edges_for("closet"))
+            assert replay.edges_for("closet") == (
+                ActiveEdge(closet_at, "closet", True),
+            )
+            assert states[replay][-1].at == _at("2026-09-05T15:57:28.615217Z")
+            assert states[replay][-1].at < _at("2026-09-05T15:57:50.057472Z")
+        assert states[restored] == states[live]
+        assert restored.edges[prefix_lengths[restored]:] == (
+            live.edges[prefix_lengths[live]:]
+        )

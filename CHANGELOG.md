@@ -1,5 +1,44 @@
 # Changelog
 
+## Unreleased
+
+The local implementation remains version `0.2.6`. These changes are validated
+locally, not a claim of a published release, deployment or physical-light
+verification. [SPECIFICATION.md](SPECIFICATION.md) owns current behavior and
+[validation evidence](SPECIFICATION.md#current-local-conformance); versioned
+entries below describe earlier releases and may contain superseded behavior.
+
+### Changed
+
+- Track exactly N selected anonymous slots, including unlocated and overlapping
+	paths. Endpoint OFF or elapsed time alone does not retire selected occupancy;
+	actual movement may displace coverage without inventing sensor observations.
+- Preserve genuine physical presence through stable clear before departure decay
+	and full release dwell. Ignored callbacks do not restart an eligible crossing.
+- Keep unsupported-ON, quick-cycle and unsupported-jump warnings diagnostic only.
+	An unobserved intermediate does not authorize target activation.
+- Execute mature selected-path prediction through bounded ten-second grants and
+	leases without learning selected-only transitions. Retain qualified adjacent
+	learning as bounded debt until publication completes and row leases end.
+- Require the exact current fingerprint and complete strict Store 7 / v4 state,
+	including deferred learning. Older v4 fingerprints and v3 inference reject;
+	schema-6/v2 seed import remains separate and conservative.
+
+### Fixed
+
+- Preserve independently authorized correlated tokens through support preparation
+	without restoring retired selected authority or enabling gap acquisition.
+- Publish committed metadata before callbacks, retry failed entity writes and
+	reuse bounded summaries without repeated whole-map projection.
+- Harden restore, count observation and benchmark qualification boundaries while
+	retaining unchanged coverage and performance limits.
+
+### Documentation
+
+- Remove completed migration plans, phase inventories and intermediate conformance
+	reports after reconciling permanent contracts, regression provenance and current
+	evidence. Retain unresolved operational work and factual incident fixtures.
+
 ## 0.2.6
 
 ### Fixed

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any
 
 POSSIBLE_STATUSES = frozenset({"possible", "probable", "confirmed"})
@@ -40,7 +42,9 @@ class AutomationSummary:
     diagnostic_predicted_next_zone: str | None
     diagnostic_predicted_next_probability: float | None
     explanation: str
-    zones: dict[str, ZoneAutomationState] = field(default_factory=dict)
+    zones: Mapping[str, ZoneAutomationState] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
 
 
 def runtime_automation_summary(runtime: Any) -> AutomationSummary:
@@ -97,7 +101,7 @@ def runtime_automation_summary(runtime: Any) -> AutomationSummary:
         diagnostic_predicted_next_zone=top_zone,
         diagnostic_predicted_next_probability=top_probability,
         explanation=_explanation(probable, top_zone, top_probability),
-        zones=zones,
+        zones=MappingProxyType(zones),
     )
     if isinstance(cache, dict):
         cache[cache_key] = summary

@@ -3,8 +3,144 @@
 **Status:** Normative
 **Authority:** This file is the sole source of product and model requirements.
 **Supported occupants:** 0 through 2, with 2 as the primary operating profile.
-**Implementation status:** Implemented by repository version `0.2.6`; current
-conformance snapshot is in Section 19.
+**Implementation status:** Repository version `0.2.6` implements the approved
+selected-path, presence-gated departure, diagnostic-health and durable-learning
+contracts and is locally conformant after the verified final2 gates on
+2026-09-14. [Section 19.0](#current-local-conformance) records the final evidence
+separately from historical failures. This is not a deployed-state claim: no
+deployment, live restart or physical-actuation verification is claimed.
+
+### Approved selected-path cutover contract — 2026-09-12
+
+The user approved implementing event-driven selected anonymous paths and the
+following diagnostic thresholds. This amendment takes precedence over conflicting
+age-bound traversal/endpoint-only and warning-coupled component clauses below.
+These are current requirements; [Section 19.0](#current-local-conformance) records
+their local validation. Frozen incident assertions remain retained.
+
+- **REQ-PATH-001:** Maintain one deterministic compatible multiset of exactly N
+  anonymous slots, U when unlocated, with same-zone overlap and no person identity.
+  One physical positive advances at most one slot. Count0 clears all selection;
+  count increase adds U; reduction removes U then weakest/oldest spatial evidence.
+- **REQ-PATH-002:** Keep at most4 observed visits and4 connected route occurrences
+  per track. The current-ON subset need not be connected. A->B->C survives B clear;
+  clearing prior B removes B-only branch authority, not route history or endpointC.
+  Endpoint OFF/time alone never evicts occupancy. New selected movement may replace
+  old coverage; rejected branches and U do not retain every possible room.
+- **REQ-PATH-003:** An ordinary live observed current generation may pair with a
+  distinct adjacent ordinary/correlated target without token-age expiry. Bootstrap
+  ON, aliases, duplicate events, timers and correlated origins do not seed a path.
+  Persist consumed origin state; retired ON cannot become a new source. Provisional
+  endpoints retain continuation authority independent of3/5minute timers. Optional
+  device timing is context, not required authority or occupancy expiry.
+- **REQ-PATH-004:** Selected coverage retains only already evidence-active zones;
+  it never retroactively acquires a source. Displaced generations use outward
+  decay/full dwell without fabricated OFF, likelihood or sensor-fault evidence,
+  subject to the presence gate below. Raw held assertions cannot resurrect retired
+  branches. Predictions remain
+  downstream, create no selected path, and do not learn selected-only transitions.
+- **REQ-PATH-005, user-approved presence gate (2026-09-12):** Selected movement
+  retires branch authority immediately but cannot start departure-induced local
+  confidence decay while genuine noninteraction presence remains asserted in that
+  zone. Physical `stay_presence` witnesses (not PIR/interaction/bootstrap-only
+  levels) protect through their existing stable-clear confirmation. Departure decay
+  and full release dwell begin only after protection ends; protected time never
+  counts toward release. Unknown/unavailable withdraws that witness without fake
+  OFF; another valid same-zone witness can still protect. Count0 remains immediate.
+  Fresh real presence may restore local protection, not selected path authority or
+  acquisition of an inactive output. The filter derives physical context without
+  policy/output feedback; policy uses it only to retain evidence-acquired activity.
+  This supersedes conflicting displaced-assertion decay/context/hold clauses in
+  belief and policy requirements. Normal asserted calibration is not frozen.
+  Persist one strict `physical_hold` Boolean per zone, validated against real live
+  episode provenance and aggregate alias state. No extra tracks or timers. Current
+  semantic fingerprint adds `presence_gated_departure_version:1`; old fingerprints
+  reject, isolated historical readers remain separate. Local validation is recorded
+  in [Section 19.0](#current-local-conformance), separately from deployment.
+- **REQ-HEALTH-001:** Report a diagnostic warning after600 uninterrupted observed
+  seconds ON without selected path support, starting at the later ON/support-loss
+  frontier. Recover on OFF/support; unknown intervals cannot count as known ON.
+- **REQ-HEALTH-002:** Warn at the sixth completed quick physical ON/OFF cycle in
+  `(now-3600s,now]`, not at five. Initial shared quick-cycle calibration is ON<=60s;
+  this is an implementation calibration, not a claimed device minimum. Count
+  aggregate physical edges, not aliases/duplicates/timers; retain last6 qualifying
+  completions. Recover when fewer than6 remain. No earlier low-count warning bypass.
+- **REQ-HEALTH-003:** These warnings do not evict selected occupancy, suppress
+  accepted movement, or change hardware. Correlation suppression remains separate.
+  This supersedes release-dwell/count-conflict health degradation in COUNT009 and
+  age-only health warnings in EVID005/TRAV004 for the cutover engine.
+- **REQ-PATH-STATE-001:** Selection, consumed live origins, timing frontiers and
+  diagnostic health ledger restore strictly and atomically under a new fingerprint.
+  Do not infer tracks from old supports or startup ON. Preserve historical readers,
+  authoritative configuration, count0 and physical evidence independence.
+
+### Approved unsupported-jump and release follow-up — 2026-09-13
+
+This user-approved amendment supersedes ordinary missed-edge and TRAV021 gap
+acquisition for the selected-path engine. Legacy component validators remain
+qualification-only, not current engine authority. Connected selected movement,
+held observed intermediate evidence, independent adjacent pairing, same-zone,
+boundary and mature prediction behavior remain valid.
+
+- **REQ-PATH-006:** Do not authorize an inactive target through an unobserved
+  intermediate. After legitimate paths fail, fresh noninteraction target evidence
+  two directed edges from an eligible selected endpoint/branch, but not directly
+  adjacent or same-zone, records `unsupported_jump` rather than inferred movement.
+  No source path/visit, target arrival, targetON, or prediction is manufactured.
+  The ordinary target may later be the origin of an independent fresh adjacent
+  pair; only the later leading zone acquires. Correlated targets cannot seed.
+  Initial isolated origins without selected context, startup, duplicates, aliases,
+  stale input, timers and count0 never create this occurrence. An actually
+  confirming unexpired predicted policy suppresses this diagnostic; an unselected
+  diagnostic lease does not. Missing connection is not proof of a sensor fault.
+- **REQ-HEALTH-004:** Surface `unsupported_jump` as its own warning kind/reason,
+  never flapping, suspected-stuck, or episode health degradation. Retain one latest
+  occurrence per physical target/reason, active while aggregate knownON without
+  selected coverage. OFF/noONunknown, bootstrap or accepted coverage clears it;
+  count0 alone does not clear history. Event-only occurrences retain their observed
+  timestamps across timers; clearing sets last/clear to the actual clear frontier.
+  Use existing strict24h cleared-history projection; active warnings remain visible.
+  Existing600s and sixthcycle diagnoses stay independent. Reliability/graph show
+  all active kinds, the diagnostic sensor retains history, and Problem identifies
+  unsupported spatial evidence separately from physical sensor health. No warning
+  changes occupancy, acquisition eligibility, learning or hardware.
+- **REQ-POLICY-014:** Evidence-active selected-displaced zones preserve their first
+  eligible lower-threshold crossing before duplicate/invalid/unavailable callbacks,
+  after selected-retention and physical-presence holds end. Full profile dwell is
+  mandatory; ignored input cannot restart it. Coarse/fine/restored continuations
+  agree at equal frontiers; stale input adds no advancement. No numeric timing
+  constant or shared calibration change is introduced.
+- **REQ-PERF-008:** Replace only the obsolete ordinary missed-edge acquisition
+  sample with a separately named rejected-jump diagnostic workload. All requested
+  samples must remain targetOFF, reject acquisition, produce the warning, and meet
+  p99<=5ms/hard<10ms dispatch-to-completed-rejection timing. This workload's presence,
+  sample completeness, correctness and latency gate top-level benchmark/CLI success.
+  Valid acquisition paths retain original public-ON qualification and budgets.
+
+New warning inference uses `unsupported_jump_diagnostics_version:1` in the semantic
+fingerprint, retaining Store7/v4. Unknown/mismatched occurrence types, future times,
+duplicates, active OFF/unknown or selected-covered warnings reject atomically.
+Historical fingerprint recipes exclude this later key without changing archived
+expected hashes. No proof is inferred from startup or old inference.
+
+### Current engine and retained component scope
+
+PATH001–006, HEALTH001–004, POLICY014, PRED008–009 and STATE013 govern the
+selected-path engine wherever older component clauses differ. Selected slots are
+not anonymous count supports; selected coverage is not a token lease; diagnostic
+warnings are not physical episode faults. The detailed token, support, count-conflict,
+cadence-warning and gap contracts remain genuine component/validator qualification
+boundaries, including strict accepted specimens and their rejection inverses.
+They are neither removed nor re-enabled as superseded live control gates.
+
+The live engine still uses valid same-zone, boundary and independently authorized
+token/support fallbacks after selection fails. Their finite authority remains
+strictly bounded. That does not impose token TTLs on selected endpoints or ordinary
+live origins, enable acquisition through an unobserved intermediate, or let count
+conflict and warning state evict occupancy. REQ-TRAV-019/STATE012's abandoned
+live-stay record plan is historical, not a missing current schema requirement.
+Section 16 retains existing acceptance text with its already-approved scope and
+amendments; this reconciliation creates no new oracle or authority.
 
 Code, tests, changelogs, issues, and user documentation describe or
 implement this specification but do not override it. If another repository file
@@ -25,8 +161,8 @@ per-zone control entity:
    given recent or current activity on the adjacency graph?
 3. **Acquisition:** Is the evidence sufficient to change an inactive zone's
    public `active` state without exposing ordinary local sensor false positives?
-4. **Retention:** Does the filtered zone belief justify keeping an already-active
-   zone on under asymmetric false-on and false-off costs?
+4. **Retention:** Do current endpoint evidence and filtered zone belief justify
+  keeping an already-active zone on under asymmetric false-on and false-off costs?
 
 The model may retain internal `inactive`, `pending`, `predicted`, and `active`
 policy phases, but ordinary automations consume only
@@ -36,36 +172,35 @@ a bounded track-bootstrap phase that remains publicly `off` until a compatible
 second observation establishes a graph-local track.
 
 Track confidence is intentionally graduated. Two distinct sequential adjacent
-physical nodes establish a `provisional` track: sufficient for immediate local
-activation at its leading edge, but insufficient for whole-home count conflict,
-sensor-health contradiction, route learning, or prediction. A third distinct
-sequential adjacent node promotes the track to `confirmed` for those broader
-uses.
+physical nodes establish a `provisional` track, sufficient for immediate local
+activation at its leading edge. A third distinct sequential adjacent node promotes
+it to `confirmed`; selected confirmation permits mature prediction execution under
+REQ-PRED-008, never selected-only learning or count-driven sensor degradation.
 
 Prediction is policy authorization, not occupancy evidence. A mature
 high-confidence graph-adjacent prediction may activate the same public `active`
 entity early, but it must never change zone belief, create traversal context, or
 learn from its own outcome.
 
-Adjacency evidence is derived only from raw physical-sensor episodes and their
-bounded internal traversal provenance. Public predictive `active` entities and
-actuator states are model outputs, never recursive evidence inputs. A raw
-sensor's current `on` state is likewise insufficient by itself: adjacency uses
-an authorized episode or bounded pending candidate, not an unproven level.
+Adjacency evidence is derived only from physical-sensor episodes and their bounded
+selected or independently authorized traversal provenance. Public predictive
+`active` entities and actuator states are outputs, never recursive evidence inputs.
+A raw sensor's current `on` state is insufficient: an ordinary live origin must
+match its observed generation and consumption ledger under REQ-PATH-003, not an
+unproven startup level or the historical REQ-TRAV-019 record plan.
 
 ## 2. Design Principles
 
 - **REQ-GOAL-001, local control:** A zone decision should depend primarily on
   evidence in that zone and its graph neighborhood. Unrelated weak or unresolved
-  activity elsewhere must not make a local result unavailable. A bounded count
-  conflict from distinct strong tracked fronts may reject disconnected local
-  evidence and eventually degrade the inference and traversal authority of a
-  contradicted stuck assertion, but it may not make a currently asserted stay
-  episode eligible for public release or delay graph-authorized or mature
-  prediction-authorized acquisition.
+  activity elsewhere must not make a local result unavailable. Selected movement
+  may displace old coverage within N slots; disconnected evidence alone does not
+  acquire. Diagnostic warnings neither degrade physical episodes nor veto valid
+  selected movement. Presence protection and full release dwell remain independent.
 - **REQ-GOAL-002, probability-driven policy:** The same declared zone belief must
-  inform both activation and release. Historical ownership must not override a
-  sufficiently low filtered belief indefinitely.
+  inform both activation and release. The selected-coverage retention exception
+  in REQ-POLICY-013 prevents clear/time-only false release without changing belief;
+  an eligible departure still releases through the lower threshold and dwell.
 - **REQ-GOAL-003, asymmetric safety:** For an inactive zone, preventing an
   unsupported false turn-on costs more than bounded waiting for graph support.
   For an already-active stay zone, preventing a false off costs more than a
@@ -77,14 +212,15 @@ an authorized episode or bounded pending candidate, not an unproven level.
 - **REQ-GOAL-005, graph plausibility:** Normal movement follows configured
   adjacency. A fresh track may bootstrap from any sequential pair of distinct
   adjacent sensor episodes; it does not require continuity with an older track.
-  Bounded missed-edge reacquisition remains possible without inventing a person
-  identity or an exact route. A lone local positive edge is not by itself
-  permission to turn on an inactive zone.
+  Observed held intermediate evidence remains usable, but an unobserved two-edge
+  jump is rejected under REQ-PATH-006, not filled with an inferred visit. A lone
+  local positive edge is not by itself permission to turn on an inactive zone.
 - **REQ-GOAL-006, multi-occupant tolerance:** Simultaneous activity fronts must be
   supported for authoritative counts 0, 1, and 2, including two occupants in one
   zone or on independent paths.
 - **REQ-GOAL-007, bounded state:** Every probability, traversal influence,
-  lease, hold, and diagnostic retention is bounded. Current asserted stay
+  lease, hold record, and diagnostic retention is bounded. A settled-endpoint
+  policy hold has bounded state, not a time-only expiry. Current asserted stay
   evidence may persist only while its physical sensor remains asserted; it
   cannot create permanent identity or neighboring authority.
 - **REQ-GOAL-008, deterministic replay:** Equal ordered inputs, map, profiles,
@@ -106,7 +242,8 @@ an authorized episode or bounded pending candidate, not an unproven level.
 ## 3. Non-Goals
 
 - Persistent or inferred person identity.
-- A globally unique anonymous movement assignment.
+- Proving a globally unique movement history. Selecting one deterministic
+  compatible N-slot set is required, not a claim that no alternative occurred.
 - Exact count-vector enumeration or injective proof that every occupant is
   supported outside a zone before that zone may release.
 - Treating a light state, prediction, policy output, timer callback, or repeated
@@ -181,6 +318,13 @@ zone and declares one role:
 ## 5. Physical Sensor Episodes
 
 Raw alias edges are collapsed into one deterministic episode per physical node.
+Correlation, hardware hold, stable clear and likelihood calibration below remain
+current. Legacy trust-horizon, impossible-cadence and sustained-cadence *warning*
+effects are retained component contracts: the live engine disables those episode
+diagnostics and uses HEALTH001–004 instead. Profile/token deadlines do not expire
+selected occupancy or ordinary live-origin pairing. Actual unknown/unavailable
+input still revokes the affected authority; diagnostics cannot fabricate it.
+
 Every sensor profile declares independently:
 
 1. `burst_correlation_window`: rapid clear/reassert edges that remain one flap
@@ -221,9 +365,11 @@ Every sensor profile declares independently:
   Duration influence may saturate but may not grow without limit.
 - **REQ-EVID-005:** When a transition or boundary assertion exceeds its trust
   horizon, its likelihood influence decays toward a finite profile floor and a
-  sensor-health warning is emitted. A stay assertion remains strong, bounded
+  sensor-health warning is emitted in the retained episode component contract.
+  Current engine warning behavior is exclusively HEALTH001–004, without age-only
+  episode degradation or a selected-path expiry. A stay assertion remains bounded
   local evidence for public retention while the device is currently asserted.
-  The persistent external contradiction in `REQ-COUNT-009` may health-degrade
+  In the legacy count-conflict qualification, `REQ-COUNT-009` may health-degrade
   its inference and traversal authority and remove its belief floor, but is not
   local absence and cannot start or continue public release dwell until stable
   clear or unknown/unavailable state. Elapsed wall time alone must not convert it
@@ -249,9 +395,12 @@ Every sensor profile declares independently:
   and the unchanged assertion do not add evidence. A later distinct adjacent
   episode may atomically use the candidate as provisional traversal context and
   authorize only the new leading target; independent same-zone, boundary,
-  missed-edge, or mature prediction context may immediately promote the pending
-  target itself. Count and reliability are context, not independent corroborating
-  observations. A deadline only rejects; it never turns a lone episode on.
+  mature prediction, or REQ-PATH-003 live-origin context may immediately
+  authorize the target. Count and reliability are context, not independent
+  corroborating observations. A deadline only rejects the candidate; it never
+  turns a lone episode on or erases the separately consumable live provenance
+  specified in REQ-PATH-003. Missed-edge acquisition is component-only under
+  REQ-PATH-006.
 - **REQ-EVID-009:** Current or unexpired transition context is direction-neutral
   unless the map explicitly declares a directional boundary. A hallway episode
   that remains asserted may authorize distinct departures, returns, and
@@ -260,8 +409,11 @@ Every sensor profile declares independently:
 - **REQ-EVID-010:** Repeated positive callbacks from one physical node can never
   corroborate that node or bootstrap a track, even across multiple episodes.
   Clear/reassert cycles faster than the declared hardware can reliably re-arm are
-  one correlated episode, add no likelihood or traversal authority, and emit a
-  sensor-health cadence warning. For a profile without cross-generation cadence,
+  one correlated episode and add no likelihood or traversal authority. Their
+  immediate cadence warning is component-only; live warnings use HEALTH002.
+  REQ-TRAV-020 may preserve only an already
+  authorized original historical token; the flap supplies no new authority.
+  For a profile without cross-generation cadence,
   stable clear closes that current warning at its exact frontier; a fresh
   independent episode that starts after the burst and hardware-hold windows but
   before stable clear closes it at the positive timestamp. Both retain bounded
@@ -293,7 +445,13 @@ Every sensor profile declares independently:
   cadence warning requires at least one completed linked cycle and begins exactly
   at the run start plus `sustained_cadence_warning_window` only while the run is
   still open. One continuously asserted stay sensor is never flapping from age
-  alone and retains the bounded local authority in `REQ-EVID-005`.
+  alone and retains the bounded local authority in `REQ-EVID-005`. The three-hour
+  warning is a retained component qualification, not the current HEALTH002 trigger.
+- **REQ-EVID-013:** An impossible-cadence warning still closes episode-level
+  traversal validity in the retained component contract. The sole preservation
+  exception is REQ-TRAV-020's original noncurrent token. Warning, aliases,
+  repeats and timers add no source likelihood, activation, refresh, support,
+  prediction or learning; warning clearance cannot resurrect deleted authority.
 
 ## 6. Per-Zone Belief Model
 
@@ -331,14 +489,16 @@ the profile's normal stable-clear lifecycle immediately, retains one bounded
 traversal token for outward-track evidence, and then uses the same profile decay,
 threshold, and release dwell as other evidence. Compatible outward evidence
 selects `cleared_with_outward` decay; absent outward evidence selects the slower
-`cleared_without_outward` fallback so a missed exit cannot latch occupancy
-indefinitely. Remote, voice, automation, or UI changes to a light or switch state
+`cleared_without_outward` fallback. Belief still decays, but an interaction-created
+settled endpoint protects evidence-active policy under REQ-POLICY-013 until
+qualified departure/transfer or an explicitly scoped invalidation. Fallback decay
+alone does not release that endpoint. Remote, voice, automation, or UI changes to a light or switch state
 are not interaction evidence.
 
 Graph authorization supplies a distinct arrival-state transition after the
 reliability-tempered local observation. For a trustworthy fresh physical target
-episode authorized by same-zone independent evidence, adjacency, adjacent-pair
-bootstrap, boundary evidence, or the bounded missed-edge rule, the current
+episode authorized by selected movement, same-zone independent evidence,
+adjacency, adjacent-pair bootstrap or boundary evidence, the current
 shared calibration is
 
 $$
@@ -365,7 +525,12 @@ $$
 
 where $\pi_z$ is the profile baseline and $\tau_z(c)$ is selected from declared
 context $c$. Context is a deterministic state machine; node role selects the
-shared parameter family and is not itself a competing state:
+shared parameter family and is not itself a competing state. In the selected
+engine, generation-bound `path_displaced_at` selects departure-conditioned decay
+only after genuine `physical_hold` ends (PATH004/005). This effective decay context
+does not fabricate OFF, an absence likelihood or a health fault. The following
+ordinary episode/outward transitions remain applicable when not superseded by
+that presence gate; trust-degradation transitions are component qualifications:
 
 1. an accepted positive selects `asserted` for its episode;
 2. expiry of a transition or boundary assertion's trust horizon selects
@@ -419,11 +584,13 @@ room-specific inactivity timers.
   applies a departure-conditioned decay profile to the source. An asserted or
   uncleared stay source receives weaker departure influence.
 - **REQ-BELIEF-004:** A current transition assertion is primarily traversal
-  context. It must not imply indefinite occupancy of the transition zone, even
-  when hardware remains on during several crossings.
+  context, not repeated movement evidence. Its local belief can decay while
+  selected coverage independently retains an evidence-active output; clear or
+  elapsed time alone cannot evict its selected endpoint.
 - **REQ-BELIEF-005:** A current stay assertion retains stronger local occupancy
-  meaning. Its duration influence saturates at a finite profile value, and its
-  traversal authority expires independently of that local meaning.
+  meaning. Its duration influence saturates at a finite profile value. Ordinary
+  token authority has finite expiry; selected endpoints/live origins use PATH003
+  instead, and genuine presence protection uses PATH005.
 - **REQ-BELIEF-006:** Wall time advances declared state survival and decay. It
   does not synthesize sensor edges, graph traversal, independent evidence, or
   route-learning observations.
@@ -445,7 +612,9 @@ room-specific inactivity timers.
   idempotent across eviction and restore. The pulse does not also apply ordinary
   positive likelihood or the supported-arrival matrix. It does not stack with
   repeated callbacks, bypass categorical count zero, alter thresholds or dwell,
-  or create a permanent occupancy floor; ordinary clear and decay can release it.
+  or create a permanent occupancy floor. Ordinary clear and decay lower belief;
+  public release additionally requires REQ-POLICY-013 eligibility when a settled
+  endpoint remains.
 - **REQ-BELIEF-011:** The ordinary first positive in a cadence run applies the
   configured positive likelihood under `REQ-BELIEF-009`. Each later
   `correlated_positive` applies the same configured reliability multiplied by
@@ -458,6 +627,36 @@ room-specific inactivity timers.
   not reduced to repair repeated completed cycles.
 
 ## 7. Traversal Frontier, Acquisition, and Reacquisition
+
+### 7.1 Current selected authority
+
+The engine maintains exactly N anonymous slots, including U, under PATH001–006.
+One real positive selects at most one compatible continuation or ordinary-live
+adjacent origin; source eligibility is evaluated on the deadline-reconciled
+pre-input generation. Four observed visits and four connected route occurrences
+bound each located slot. Held earlier branches may continue a route; clearing an
+intermediate withdraws its branch, not the observed connection or final endpoint.
+Unknown/mismatched endpoints retain location but cannot authorize neighboring
+movement until fresh eligible evidence. Raw levels and timers never rearm origins.
+Selection authorizes only the new target and issues no legacy token or count
+support; independently authorized ordinary fallback targets may be adopted without
+inventing their token history. Correlated targets cannot independently admit a slot.
+
+Ordinary missed-edge and REQ-TRAV-021 gap acquisition are disabled in the current
+engine. Failure of legitimate paths may record `unsupported_jump`, never inferred
+target acquisition; a later independent adjacent pair remains possible. Selected
+provisional continuation and ordinary live-origin pairing do not depend on 3/5-minute
+token ages. Finite token/pending fallbacks below remain bounded on their own terms.
+
+### 7.2 Retained traversal component contracts
+
+The following token/pending descriptions and REQ-TRAV clauses specify the genuine
+traversal/support qualification boundary. Same-zone, adjacency, boundary, exact
+endpoint and handoff fallbacks remain available where their actual predicates hold;
+this is not a legacy engine mode. Token TTLs never govern selected retention or
+live-origin pairing. Count-health gates, inferred missed-edge/gap acquisition and
+the unimplemented REQ-TRAV-019 plan do not override Section 7.1. Strict codecs,
+original mutation/lifetime inverses and historical provenance checks remain required.
 
 The model retains a bounded set of anonymous traversal tokens, not person
 tracks. A token identifies a physical episode, zone, role, accepted event time,
@@ -601,7 +800,9 @@ candidate used as the first half of an adjacent pair is removed atomically.
   Repeated reassertions cannot extend authority indefinitely. An episode that
   never received authorization has no lineage to reopen and remains
   `correlated_flap_ignored`. The reopened token can authorize only a fresh
-  distinct compatible target episode under the normal graph rules.
+  distinct compatible target episode under the normal graph rules. The
+  impossible-cadence preservation in REQ-TRAV-020 is not reopening, and a
+  previously reopened token is ineligible for that exception.
 - **REQ-TRAV-014:** A fresh-generation `correlated_positive` is target evidence
   and remains target-only by default. A dedicated path may authorize it from
   distinct trustworthy same-zone, adjacent, boundary, bounded missed-edge, or
@@ -620,9 +821,25 @@ candidate used as the first half of an adjacent pair is removed atomically.
   `REQ-TRAV-016` and consumable handoff in `REQ-TRAV-018` are the only other
   support mutations. An isolated correlated
   target and positive count alone remain unauthorized. A current cadence warning
-  blocks ordinary source authority but not this bounded support continuation or
+  blocks ordinary source authority except REQ-TRAV-020's original historical
+  transition token, and does not block this bounded support continuation or
   independently authorized target confirmation; health degradation remains a
   block. Ordinary distinct graph evidence remains valid.
+
+  **Current correlated-token lifecycle:** selected-consumption cleanup preserves
+  existing active/retained token authority only when source-ledger origin and
+  physical generation are correlated; physical/source/token node, episode and
+  original occurrence agree; provenance is `adjacent` or
+  `settled_adjacent_transfer`; and that exact episode is absent from every retained
+  selected visit and route. Remove other tokens normally, then apply ordinary
+  synchronization, expiry and availability rules. This is an exemption from that
+  cleanup only, not broadly pruning-free authority or new acquisition eligibility.
+  Never issue/reinsert a token, weaken support validation, adopt a selected slot or
+  rearm an origin from this exception. Selected success destroys its legacy authority;
+  later history eviction cannot reconstruct it. Same-event correlated selection
+  seeding, learning, prediction-source issuance, outward evidence and refresh remain
+  excluded; ordinary prediction cancellation still runs. Later distinct physical
+  traversal may consume independently authorized surviving authority.
 - **REQ-TRAV-015:** When a trustworthy non-interaction stay episode stably
   clears without a live source token, the engine may commit
   `cleared_with_outward` only from an independently confirmed three-node path
@@ -630,14 +847,18 @@ candidate used as the first half of an adjacent pair is removed atomically.
   was asserted. The unexpired one-node pending source, two-node provisional
   predecessor, and three-node confirmed leader must have an exact persisted
   authorization-use chain; all acceptance times must be monotonic and no later
-  than the physical source clear. The current belief generation must be either
+  than the physical source clear. The superseded REQ-TRAV-019 plan additionally
+  proposed that a consumed source
+  may prove departure through its exact current source episode, still-unexpired
+  pair-target token, and later third-distinct-node confirmed token with the exact
+  target-to-third authorization use. That alternative never fabricates a source
+  token or renews any deadline. The current belief generation must be either
   that source episode or a same-zone local-interaction episode accepted during
   it, and another trustworthy asserted or clearing same-zone stay episode vetoes
   the classification. This stable-clear-only rule neither authorizes a target,
-  extends token validity, reapplies likelihood, consults public active or belief
-  magnitude, nor adds durable state. Expiry equality and incomplete,
-  disconnected, repeated-node, stale, future, or out-of-order lineage fail
-  closed.
+  extends token validity, reapplies likelihood, nor consults public active or
+  belief magnitude. Expiry equality and incomplete, disconnected, repeated-node,
+  stale, future, or out-of-order lineage fail closed.
 - **REQ-TRAV-016:** One retained settled support may authorize a fresh
   trustworthy positive only at its exact node and zone. The authorization reason
   is `settled_endpoint_reacquired`; it applies the ordinary arrival transition
@@ -645,14 +866,16 @@ candidate used as the first half of an adjacent pair is removed atomically.
   may issue its ordinary bounded target token. A `correlated_positive` remains
   target-only and issues no token. The authorization creates no source-token use
   and is excluded from same-event prediction, route learning, support transfer,
-  and coalescence. Absent, moving, outward-cleared, unavailable, warned,
-  different-node, different-zone, ambiguous, or count-zero support cannot grant
-  this authority.
-  When the retained support has the transferred two-node shape, ordinary exact
-  endpoint reacquisition resets traversal to one fresh target node with
-  provisional, non-equivalent `settled_endpoint` provenance. Support identity
-  and count strength remain separate. It cannot recycle the expired pair into
-  confirmed traversal; fresh B -> C remains provisional and B -> C -> D confirms.
+  and coalescence. Absent, moving, unavailable, warned, different-node,
+  different-zone, ambiguous, or count-zero support cannot grant this authority.
+  Belief-only outward decay does not remove retained support under COUNT-011;
+  an actual qualified departure moves its endpoint and removes exact-source
+  reacquisition authority. When the retained support has the transferred two-node
+  shape, ordinary exact endpoint reacquisition resets traversal to one fresh
+  target node with provisional, non-equivalent `settled_endpoint` provenance.
+  Support identity and count strength remain separate. It cannot recycle the
+  expired pair into confirmed traversal; fresh B -> C remains provisional and
+  B -> C -> D confirms.
 - **REQ-TRAV-017:** An already-authorized different-zone target may register
   outward context on the current trustworthy same-zone belief generation when
   its source-token set contains the exact unexpired predecessor token recorded
@@ -697,10 +920,101 @@ candidate used as the first half of an adjacent pair is removed atomically.
   local belief/outward context or enter same-event prediction/learning. A later
   independent physical event may continue only fresh bounded traversal.
 
+- **REQ-TRAV-019, historical consumable live-stay plan (superseded by PATH003):**
+  The following is the earlier component design, not a live acquisition path or
+  a requirement to implement the abandoned record. After all existing
+  acquisition paths, including compatible pending, REQ-TRAV-018 and REQ-TRAV-021,
+  fail and before remembering a pending target, a fresh healthy reliable ordinary
+  or correlated noninteraction target may pair with exactly one directly adjacent
+  different-node, different-zone healthy known-on asserted noninteraction stay
+  source. Count must be positive; resolve due source-local count health before
+  selection. Source must hold available accepted live provenance under STATE-012.
+  Source age, belief magnitude/generation, public active, token and support are
+  not prerequisites. Bootstrap, aliases, flaps, health recovery and time alone
+  supply no authority. Zero or multiple eligible sources fail closed.
+  Freeze the actual current source episode, live origin, target episode and event
+  time in an operation-local `LiveStayAdjacentPair`. Reason and provenance are
+  `live_stay_adjacent_pair`, with actual source episode references and no
+  fabricated source tokens or authorization uses. Issue exactly one ordinary
+  target-lifetime token with direct pair, provisional confidence and false
+  equivalent strength, including for an eligible correlated target. Apply the
+  shared target arrival transition; never retroactively activate the source.
+  This acquisition cannot create/rebind/transfer support, change source outward
+  belief, prepare prediction or learn. Later real third-distinct graph evidence
+  may confirm normal traversal; two-node backtracking cannot. Prevalidate the
+  complete target and consumption before callback, commit source consumption
+  after callback including caught failure and before count. Read-only callbacks
+  remain legal; mutation reentry must reject before mutation. Preserve coalesced
+  persistence scheduling when committed publication failure is re-raised, without
+  claiming crash-durable exactly-once delivery before the Store write.
+
+- **REQ-TRAV-020, bounded original-token preservation:** On impossible cadence,
+  preserve only the exact already-authorized, non-reopened original transition
+  token still present in the unexpired frontier, matching the source's current
+  episode, node, profile, zone, accepted start and original calibrated expiry.
+  The source must remain raw known-on, asserted and free of health degradation,
+  with impossible_cadence warning and null episode traversal validity. Remove
+  physically-current status; leave token ID, accepted time, deadline, confidence,
+  path, provenance and existing uses unchanged. A later distinct compatible
+  target may use this noncurrent historical token through normal graph rules.
+  Count-support binding is not a prerequisite. The flap itself supplies no
+  source evidence, token issuance/renewal, reopening, refresh or support mutation.
+  Always remove warned pending candidates. Health/degraded/unavailable input,
+  including a live health callback on one alias while another remains on, raw
+  clear, generation mismatch, reopened/ineligible role, or original expiry
+  invalidates preservation. Never synthesize from raw assertion, create from
+  pending, resurrect removed state, or recover dormant lineage. Repeated flaps
+  cannot renew authority; a warned clear removes the token before reassertion.
+  Event, timer, count and restore advancement apply the same predicate and purge
+  expired warned lineage and its uses. Strict restore accepts only the eligible
+  noncurrent shape and atomically rejects warned current tokens, pending
+  candidates and ineligible warned lineage. Ordinary healthy historical
+  generations and all existing graph/support rules otherwise remain unchanged.
+
+- **REQ-TRAV-021, retained supported-gap component qualification only:** After existing legitimate
+  acquisition paths fail, a fresh healthy unwarned noninteraction ordinary or
+  correlated target may receive target-only authorization from exactly one
+  original, unexpired, non-reopened `settled_adjacent_transfer` transition token.
+  Count must be positive. Source must match its current healthy unwarned known-on
+  asserted episode and original calibrated token timing, provisional direct-pair
+  provenance and equivalent flag. Its exact moving support binding must match
+  endpoint, episode, path, provenance, acceptance/update time and token expiry.
+  Source and target are different-zone nonadjacent nodes connected by exactly
+  two directed edges through a noninteraction transition intermediate. The
+  intermediate supplies geography only, never evidence or renewed authority.
+  Each directed edge uses its configured duration or a shared 15-second fallback
+  when absent; total budget is capped at 30 seconds. Require positive elapsed
+  time strictly below that budget and original source expiry. Evaluate all
+  compatible intermediate paths; ambiguity is over source tokens, not paths.
+  This shared provisional calibration applies only to this dedicated rule.
+  Handoff provenance cannot use ordinary missed-edge traversal to bypass these
+  restrictions; other existing missed-edge behavior remains unchanged.
+  Reason/provenance is `supported_gap_acquisition`, confidence provisional,
+  path singleton target, equivalent strength false. Apply the shared arrival
+  transition and ordinary public policy; retain the actual source token/episode
+  and one bounded deduplicated use. Issue no target token or pending candidate,
+  mutate no support from the acquisition, and apply no outward source context,
+  prediction or learning. Distinct targets may use the fixed original window;
+  aliases/repeats never renew it and a gap target cannot chain source authority.
+  Ordinary episode deadline advancement resolves transition health before
+  selection. Historical policy/audit/use validation preserves actual source
+  references and original bounded timing/geography without requiring that source
+  or support still be live. A later reopening cannot retroactively invalidate a
+  valid earlier use. No gap-provenance traversal token or support is valid.
+
 ## 8. Authoritative Count
 
 Count is context, not identity and not a requirement to solve an exact whole-home
 assignment.
+
+In the current engine, count sets the exact selected-slot capacity (PATH001), not
+an exact number of active zones. COUNT001/002/005/006 and categorical empty-house
+behavior remain current. The strong-front, support-coalescence and COUNT009
+health-conflict descriptions below are retained count/support component contracts,
+not live count-driven sensor degradation or replacements for selected coverage.
+Genuine independently authorized fallback supports still obey their creation,
+transfer, binding and restore validators; a selected slot is never inferred from
+those supports. Same-zone selected paths may overlap without being coalesced away.
 
 For conflict and sensor-health evaluation, a strong tracked front is a bounded
 graph-connected group outside the target anchored by an authorized traversal
@@ -726,7 +1040,9 @@ may remain after ordinary token expiry.
   bypass this categorical empty-house state.
 - **REQ-COUNT-002:** A change to positive $N$ must not invent a room, movement,
   activation, or person identity. Boundary evidence may shape reacquisition.
-- **REQ-COUNT-003:** For $N>0$, count is a bounded soft regularizer over independent
+- **REQ-COUNT-003:** For $N>0$, current capacity changes add U or remove U then
+  weakest/oldest spatial evidence, without inventing movement or forcing N active
+  zones. In the retained component contract, count is a bounded soft regularizer over independent
   anonymous occupancy supports derived from confirmed traversal provenance. It
   may reduce mutually
   incompatible weak beliefs and flag a disconnected pending candidate as
@@ -745,11 +1061,16 @@ may remain after ordinary token expiry.
   interaction-derived support, coalesce rather than force another room active.
 - **REQ-COUNT-006:** Stale, duplicate, invalid, or unavailable count controls are
   ignored and diagnosed without changing the last valid count.
-- **REQ-COUNT-007:** Count conflict never delays an adjacent-token,
+- **REQ-COUNT-007:** Current count diagnostics never delay selected or independently
+  authorized acquisition while $N>0$. The following source-health qualifications
+  belong to retained components, not an engine count-fault gate. Count conflict never delays an adjacent-token,
   adjacent-pair bootstrap, same-zone independent, boundary, bounded missed-edge,
   local-interaction, or mature prediction authorization while $N>0$. Those paths
-  also include REQ-TRAV-018's uniquely supported consumable adjacent handoff.
-  They explain movement or establish a graph-supported front rather than inventing an
+  also include REQ-TRAV-018's uniquely supported consumable adjacent handoff and
+  REQ-TRAV-019's unique live-stay pair. A source whose count-conflict degradation
+  deadline has already matured is not a healthy source for a new pair; source
+  eligibility resolves due source-local health before selection. These paths
+  explain movement or establish a graph-supported front rather than inventing an
   isolated additional front.
 - **REQ-COUNT-008:** Support construction is anonymous, deterministic,
   reliability-aware, and bounded by `PRODUCT_MAX_OCCUPANTS`. A support begins
@@ -757,7 +1078,8 @@ may remain after ordinary token expiry.
   boundary/missed-edge equivalent already accepted by traversal, or one fresh
   unit-reliability `local_interaction` token. Local interaction is
   confirmed-equivalent only for creating one count-only support; the support
-  gains no belief, traversal, prediction, learning, or policy authority. Its ID
+  gains no belief, traversal, prediction, or learning authority. Its settled
+  endpoint may protect already evidence-active policy under REQ-POLICY-013. Its ID
   is derived from the first confirmed-equivalent target token. Accepted
   source-token mappings may select the same support for transfer only when each
   selecting token's `accepted_at` is at or after that support's `updated_at`
@@ -784,7 +1106,7 @@ may remain after ordinary token expiry.
   REQ-TRAV-018 is a separate selection-backed transfer branch, not support
   creation or source-token authority. Its provisional equivalent token is
   excluded from generic creation and confirmed-component coalescence.
-- **REQ-COUNT-009:** When at least $N>0$ independent count supports outside an
+- **REQ-COUNT-009, retained count-conflict component only:** When at least $N>0$ independent count supports outside an
   asserted target persist continuously for that target profile's release dwell,
   and the target receives no new independent episode or compatible traversal
   context, the count contradiction health-degrades that target episode. A count
@@ -797,7 +1119,7 @@ may remain after ordinary token expiry.
   count-degraded stay episode vetoes creation or continuation of public release
   dwell while it remains `degraded` or is `clearing` inside stable-clear
   confirmation. Stable clear or unknown/unavailable state removes that veto and
-  ordinary threshold plus a fresh full release dwell applies. Count zero remains
+  ordinary filter plus full release dwell applies. Count zero remains
   an immediate categorical release. A raw clear/reassert flap inside stable-clear
   confirmation returns to the same degraded episode, reopens no traversal, and
   accumulates no release dwell. Stable clear followed by a fresh trustworthy
@@ -810,34 +1132,40 @@ may remain after ordinary token expiry.
   observation, renewed traversal authority, or retroactive public edge. Ordinary
   policy then evaluates that restored belief in the same model update.
 - **REQ-COUNT-010:** A stuck-off or missed intermediate sensor cannot permanently
-  break acquisition elsewhere. An existing frontier may cross only the reviewed
-  bounded missed-edge path, while any later pair of adjacent distinct episodes
-  may bootstrap a new track without identity or continuity with the old frontier.
+  break acquisition elsewhere. Current unobserved jumps remain rejected under
+  PATH006, while a later pair of adjacent distinct episodes may bootstrap a new
+  track without identity or continuity with the old frontier. Bounded missed-edge
+  acceptance remains an isolated traversal-component qualification only.
 - **REQ-COUNT-011:** A support is `moving` until its current target token expires
   or `settled` at one trustworthy stay endpoint whose graph-local belief is at or
   above the on threshold when support is created. A settled support survives
-  finite clear debounce, completed weak clear, and subsequent no-outward belief
-  decay below the on threshold while no compatible outward context exists; a
-  later trustworthy positive at that same endpoint may rebind its episode
-  without creating or cloning support. Compatible outward clear, unavailability,
-  health/cadence warning, moving expiry, or $N=0$ removes it and cancels
-  dependent conflict dwell. Belief magnitude alone does not remove retained
-  settled support. Ordinary
-  traversal-token expiry does not remove a settled support. A compatible accepted
-  authorization advances it only when the complete source-token set contains a
-  current mapping to that support whose token is temporally eligible and occurs
-  before the target on the accepted authorization path. A token accepted before
-  the support's current `updated_at` frontier cannot prove departure from that
-  endpoint or select it for binding-derived coalescence; linked lineage outside
-  the selected target path cannot prove departure either. Remote graph activity
-  without an eligible mapped source cannot move, duplicate, or erase it.
-  The support-backed correlated continuation in `REQ-TRAV-014` uses this exact
-  temporal and path predicate and otherwise commits no support mutation.
-  REQ-TRAV-018 supplies the sole adjacent departure exception without a source
-  token, using current exact supported assertion rather than retained path age.
-  Creation, transfer, coalescence, removal, and mapping rewrite are validated and
-  committed atomically in event-time order. Cardinality or ambiguity may
-  decline/coalesce support but never invent another.
+  finite clear debounce, stable clear, and subsequent belief decay below the on
+  threshold, including belief-only `cleared_with_outward` context. A later
+  trustworthy positive at that same endpoint may rebind its episode without
+  creating or cloning support. Unavailability, health/cadence warning, moving
+  expiry, or $N=0$ removes it and cancels dependent conflict dwell. Neither belief
+  magnitude nor outward belief context alone proves support departure. A current
+  settled endpoint protects evidence-active policy under REQ-POLICY-013 without
+  acquiring an inactive zone. Ordinary traversal-token expiry does not remove settled support.
+  A compatible accepted authorization advances it only when the complete source
+  set contains a current support binding whose token is temporally eligible and
+  occurs before the target on the selected authorization path. A token accepted
+  before the support's `updated_at` frontier cannot prove departure or select it
+  for binding-derived coalescence; linked off-path lineage cannot prove departure
+  either. Qualified departure transfers the same support during the target event,
+  independently of source clear timing, rather than removing it before transfer.
+  Freeze the deadline-advanced source basis before authorization-side token
+  mutation; prepare the complete transfer before publication and commit after
+  callback return, including caught failure, before count work. Same-event pruning
+  cannot erase already selected authority; support invalid before the operation
+  is never resurrected. Final moving endpoints and bindings must remain valid
+  within token capacity. Remote activity without an eligible mapped source cannot
+  move, duplicate or erase support. TRAV-014 correlated continuation uses this
+  same predicate; TRAV-018 remains the separate consumable support departure
+  exception without a source token. TRAV-019 pairing never mutates support from
+  that acquisition. No deferred departure ledger or new support field is required.
+  Creation, transfer, coalescence, removal and mapping rewrite are validated and
+  committed atomically in event-time order; ambiguity never invents support.
 
 ## 9. Automation Policy
 
@@ -851,7 +1179,7 @@ active_z(t^+) =
 \begin{cases}
 1 & q_z\ge\theta_{on}\ \text{and evidence acquisition is authorized},\\
 1 & \text{a mature prediction authorization is current},\\
-0 & q_z\le\theta_{off}\ \text{and release dwell is satisfied},\\
+0 & q_z\le\theta_{off}\ \text{and release is eligible and dwell is satisfied},\\
 active_z(t^-) & \text{otherwise}.
 \end{cases}
 $$
@@ -872,22 +1200,24 @@ than replacing it with a separate proof system.
   human-interaction pulse is the sole source-free local-authorization exception
   and explicitly acquires immediately when $N>0$ and its bounded belief is above
   the ordinary on threshold. Its release uses the ordinary profile threshold and
-  dwell. Prediction acquisition instead requires the mature authorization in
+  dwell after the REQ-POLICY-013 eligibility gate. Prediction acquisition instead requires the mature authorization in
   Section 12. Existing `active`, waiting, light/output state, and timer callbacks
   are not acquisition evidence.
 - **REQ-POLICY-002:** Release occurs when filtered belief is at or below
   $\theta_{off}$ for the profile's release-confirmation dwell and no current
-  asserted-stay veto from `REQ-COUNT-009` applies. It does not require globally
+  physical-presence hold under PATH005 or selected-coverage hold under
+  `REQ-POLICY-013` applies. POLICY014 preserves eligible elapsed progress.
+  It does not require globally
   finalized movement, support certificates, or accounting for every occupant
   elsewhere.
 - **REQ-POLICY-003:** Current trustworthy stay evidence may floor $q_z$ or extend
   release confirmation according to profile calibration. While a stay sensor
-  remains asserted, assertion age alone cannot release the zone. The persistent
-  conflict in `REQ-COUNT-009` may remove the belief floor and close traversal,
-  but while the same episode remains count-degraded or is inside stable-clear
-  confirmation it cancels pending release time and vetoes release. Stable clear
-  or unknown/unavailable state removes that veto and ordinary filter plus full
-  release dwell applies. Count zero releases immediately.
+  remains asserted, assertion age alone cannot release the zone. Selected
+  displacement and genuine presence protection follow PATH004/005: motion/PIR or
+  interaction is not a presence witness. Hold loss permits ordinary decay and
+  full dwell, never reuse of protected time. The older count-degraded asserted-stay
+  veto remains a component qualification, not live count-health inference.
+  Count zero releases immediately regardless of either hold.
 - **REQ-POLICY-004:** Transition zones use shorter occupancy persistence and
   release dwell than stay zones. Their assertions may remain useful as bounded
   traversal context after transition-zone occupancy belief has decayed.
@@ -919,18 +1249,53 @@ than replacing it with a separate proof system.
   Conversion emits no second `off -> on` edge or `refreshed` event, and prediction
   outcome is not learning evidence.
 - **REQ-POLICY-011:** Ordinary evidence-acquired release semantics remain
-  probability-driven. A count-backed stuck-sensor diagnosis changes sensor health
-  and allows ordinary decay; it does not directly release the zone. Only an
+  probability-driven after the release-eligibility gates are met. Current health
+  diagnostics change neither those gates nor physical sensor health. Only an
   unconfirmed prediction lease has the shorter mandatory expiry described above.
 - **REQ-POLICY-012:** Policy distinguishes confirming evidence from refresh-
   eligible evidence. An independently authorized `correlated_positive` may
   acquire an inactive zone or confirm an existing mature predicted phase, but it
   cannot emit `refreshed`; only ordinary trustworthy positive or interaction
-  evidence is refresh eligible. While an already-active stay generation remains
-  cadence-correlated and `asserted` or inside stable-clear confirmation, it
+  evidence is refresh eligible. Under the current engine's selected-coverage and
+  physical-presence gates, an already-active stay generation that remains
+  cadence-correlated and `asserted` or inside stable-clear confirmation
   cancels pending release dwell and vetoes release without creating a public
-  refresh. Stable clear removes this hold and starts ordinary full release dwell;
-  authoritative count zero remains immediate.
+  refresh. Stable clear removes this asserted-state hold; the independent
+  REQ-POLICY-013 hold can still prevent release. Authoritative count zero remains immediate.
+- **REQ-POLICY-013, selected coverage and retained component endpoint:** Current
+  retention belongs to selected coverage under PATH002/004, including retained
+  endpoints after OFF and eligible earlier branches, not all historical visits
+  or the union of alternative supports. Coverage protects only already
+  evidence-acquired activity, never an inactive or merely predicted zone. Its
+  loss consumes the actual displacement frontier; PATH005 independently defers
+  departure decay through genuine presence protection, then POLICY014 requires
+  the first eligible threshold crossing and full dwell. Count0 remains immediate.
+
+  The following narrower settled-support contract remains a genuine component
+  qualification; it does not make live retention support-only or authorize a new
+  selected-track design. An evidence-active zone with a
+  current settled endpoint cannot release from sensor clear, low belief, token
+  expiry or elapsed time alone. Only the current endpoint is protective, not its
+  historical route. This is a narrow retention rule, not selected-N attribution.
+  Actual path/temporal-qualified support transfer (including TRAV-018) removes
+  source retention; use the validated prospective support result while preserving
+  post-publication commit. TRAV-015's exact confirmed departure or TRAV-017's
+  on-selected-path generation departure may commit release eligibility even if
+  count support stays at source. Weak or linked off-path outward is insufficient.
+  A different healthy asserted/clearing same-zone stay still vetoes that release.
+  While held, cancel pending release time. On loss of hold, lower-threshold dwell
+  starts no earlier than committed qualified departure, or the current observed
+  transfer/invalidation frontier when none exists; never reuse protected time.
+  For a qualified evidence-active settled endpoint, pre-input elapsed processing
+  preserves the original lower-threshold crossing even when the external input is
+  duplicate or an invalid/unavailable count. Such inputs add no evidence; they
+  cannot reset stored release progress. Coarse, repeated-input and restored
+  continuations agree at equal frontiers; stale input still makes no advancement.
+  Preserve count-zero release, existing health/unavailability support invalidation,
+  and unconfirmed prediction expiry. Invalid count is not departure. The hold
+  cannot acquire, change belief, create traversal, or make prediction evidence.
+  Selected supportless/moving-front retention and stronger-alternative displacement
+  are now governed by PATH001–005, not a pending extension of this component repair.
 
 Current shared policy calibration is:
 
@@ -949,13 +1314,20 @@ The supported profiles and current asserted-state calibration are:
 | ----------------- | ------------------------------------------------------------------------------------------- | ----------------------- | ------------------------ | ---------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | `transition_fast` | Use the shortest reliable device setting, initially 5-15 seconds where hardware supports it | 0.15                    | 45 seconds               | 45 seconds             | Short zone persistence; may be the first or second observation that bootstraps a new adjacent track                 |
 | `stay_pir`        | Start near 30 seconds; increase only if measured false clears are excessive                 | 0.90                    | 90 seconds               | 90 seconds             | Strong local retention evidence; a lone unsupported episode remains publicly off and creates no traversal authority |
-| `stay_presence`   | Use the device's shortest stable presence/absence reporting                                 | 0.95                    | 180 seconds              | 120 seconds            | Strong current presence evidence; acquisition still requires graph, pair, boundary, missed-edge, or prediction      |
+| `stay_presence`   | Use the device's shortest stable presence/absence reporting                                 | 0.95                    | 180 seconds              | 120 seconds            | Strong current presence evidence; acquisition still requires selected/graph, pair, boundary, or prediction          |
 | `entry_boundary`  | Use a short reliable reset consistent with the physical crossing                            | 0.10                    | 30 seconds               | 30 seconds             | Boundary reacquisition and count context, not long-lived room occupancy                                             |
 
 The hardware recommendations are deployment starting points. The asserted local
 baselines, traversal-context windows, and track-bootstrap windows are normative
 current shared calibration. Device settings must be recorded with the map
 profile because software timing must reflect actual hardware behavior.
+Traversal/bootstrap windows bound ordinary component tokens/candidates, not
+selected endpoint retention or ordinary live-origin pairing. The three-hour
+cadence-warning window below is a legacy component calibration, not the live
+sixth-cycle diagnostic trigger. Device-parameter discovery/adaptation is deferred;
+unknown device timing must not invalidate selected-path correctness.
+See [deferred operational obligations](#deferred-operational-obligations) for the
+retained timing research, historical evidence and unverified rollout requirements.
 
 - **REQ-PROFILE-001:** Transition hardware should clear faster than stay-room
   hardware when reliable. This improves endpoint observability but correctness
@@ -985,8 +1357,9 @@ profile because software timing must reflect actual hardware behavior.
   conclusive interaction profile is restricted to nodes with reliability exactly
   `1.0`; uncertain physical interactions use an ordinary tempered profile.
 - **REQ-PROFILE-009:** Track-bootstrap retention never delays or vetoes compatible
-  same-zone independent, adjacency, boundary, missed-edge, or mature prediction
-  authorization. Its expiry only removes the candidate's ability to pair later.
+  selected, same-zone independent, adjacency, boundary, or mature prediction
+  authorization. Its expiry removes only that candidate's authority, not a
+  separately valid ordinary live origin. Missed-edge qualification is component-only.
 - **REQ-PROFILE-010:** Cross-generation cycle correlation is enabled only for the
   shared `stay_presence` profile, with a ten-minute
   `cycle_correlation_window` and three-hour
@@ -1014,6 +1387,14 @@ activation was authorized by observed evidence or a mature prediction.
 - **REQ-PUBLIC-001:** Public edges are emitted once, in deterministic event-time
   order, with reason, belief, threshold, profile, evidence references, and
   evidence-acquired or prediction-authorized provenance.
+  Live result/edge callbacks read the completed accepted model frontier, including
+  all policy decisions and committed support bindings. Read-only projection and
+  strict save/restore are legal; mutation reentry rejects before mutation.
+  External callback failure retains the accepted transition and learning debt,
+  completes deferred cleanup and re-raises the failure. Local component
+  prepare/decision/commit qualification must not be mistaken for exposing torn
+  support state to a live subscriber. Learned counts remain unchanged until the
+  explicit postpublication drain under PRED009, including on timer/count paths.
 - **REQ-PUBLIC-002:** Bootstrap and compatible restore do not emit synthetic
   activation, release, refresh, arrival, prediction, or learning events.
 - **REQ-PUBLIC-003:** Normal control automations consume only `active`. They may
@@ -1090,7 +1471,8 @@ specification change.
   source episode may authorize at most one activation edge for a target. Distinct
   source episodes on the same route retain distinct leases.
 - **REQ-PRED-003:** Learning is anonymous, shared, bounded, restart-safe, and
-  accepts only confirmed-track transitions. It excludes provisional tracks,
+  accepts only qualified confirmed adjacent token transitions. Selected-path
+  confirmation enables execution under PRED008, not learning. Learning excludes provisional tracks,
   flaps, health-degraded or unavailable nodes, rejected untracked episodes,
   pending outcomes, predicted activations, and prediction confirmation or expiry.
 - **REQ-PRED-004:** Removing prediction disables early predicted activation but
@@ -1115,11 +1497,57 @@ specification change.
   from source preparation, pending learning and route commit. Existing mature
   predicted-target confirmation remains non-learning and creates no extra edge.
 
+- **REQ-PRED-008, approved selected execution separation (2026-09-13):** A fresh
+  ordinary positive selected arrival on a confirmed path may execute the mature
+  prediction contract independently of learning. Its actual selected authorization,
+  arrival episode and previous-source witness must match the operation's selected
+  route suffix and a real final graph edge. Inherited confirmation may retain an
+  actual two-node suffix; never fabricate a confirming triple or legacy token.
+  Selected-only transitions do not enter pending learning or route commit.
+  Each selected lease has an independent immutable `SelectedPredictionGrant` with
+  the actual authorization, `effect_kind == positive`, predicted target node and
+  original10second expiry. Both collections are bounded64 with a key composed of
+  previous source/current arrival node/predicted target/arrival episode. Historical
+  generation or four-visit eviction does not cancel a valid grant. Expiry, count0,
+  authorizing-current-node unavailability, accepted target evidence, actual confirmed
+  departure from that source and capacity eviction remove both records atomically.
+  Departure uses the actual selected source, not a displaced endpoint. Equal-time
+  accepted order governs cancellation; due expiry precedes duplicate classification.
+  Confirmation remains nonissuing/nonlearning; selection stays4visits/at most2slots.
+  Execution retains .85/support5, full-row statistics and existing health gates.
+  This is approved authority, not a claim that global validation has passed.
+
+- **REQ-PRED-009, approved durable learning (2026-09-14):** Already-qualified
+  confirmed adjacent learning survives publication failure, restart, count0 and
+  later source/history eviction without becoming new occupancy evidence or being
+  requalified. Selected-only, correlated and prediction-confirmation events remain
+  nonlearning. No learned count mutation precedes decision/result/edge, timer or
+  count publication. Retain at most one optional prospective final count per
+  configured directed edge, folded using the same per-observation capped addition
+  as committed Markov counts, including fractional counts and the1e6 ceiling.
+  Null denotes no effective increment. The latest bounded raw authorization batch
+  may remain for diagnostics; after publication fold older work into the matrix.
+  Writer projection includes both without mutation; restore retains only matrix
+  debt, never a second representation of the same observation.
+  An explicit postpublication drain commits a whole row only when no live lease
+  has that current node, including diagnostic/equal-time/competing-target leases.
+  Preparation alone cancels actual departures; historical learning cannot cancel
+  newer leases or rewrite published full-row statistics, grants or policy. Consume
+  debt only after successful atomic application; repeated restore/drain is inert.
+  Continuous leases may defer a row indefinitely; bounded retained state, not a
+  freshness deadline, is guaranteed. Count0 removes inference, not prior accepted
+  statistical debt. Preparation failure accepts no new learning; subscriber failure
+  retains accepted work. Runtime drains after publication in finally and preserves
+  coalesced saving on failure and on learning-only timer/count changes. Durability
+  begins at the completed Store write, not before unsaved operations reach disk.
+
 ## 13. Persistence and Restart
 
 Persist only state needed to reproduce the next decision:
 
 - map/profile fingerprint and authoritative count sequence;
+- exactly N selected slots, their bounded visits/routes, per-node observed-origin
+  and consumption records, displacement frontiers and per-zone physical holds;
 - per-node episode identity, accepted state, timestamps, applied influence, and
   sensor-health state;
 - per-zone filter state, last update time, public active state, acquisition phase
@@ -1129,7 +1557,8 @@ Persist only state needed to reproduce the next decision:
   leases;
 - anonymous occupancy supports and bounded token-to-support mappings needed to
   preserve moving/settled state, endpoint, lineage, and deadlines;
-- bounded route statistics, update sequence, and audit metadata; and
+- independent selected prediction grants paired with leases, bounded committed
+  route statistics and deferred learning matrix, update sequence and audit metadata; and
 - one bounded latest reliability-warning occurrence per configured physical
   node and warning reason.
 
@@ -1144,14 +1573,33 @@ Persist only state needed to reproduce the next decision:
   `REQ-STATE-002`.
   Evidence-acquired active state remains bound to its acquisition episode, time,
   reason, bounded path, and source episodes. A prediction lease remains bound to
-  the exact confirmed source token; its support must equal the retained target
+  the exact confirmed source token OR the independent selected prediction grant in
+  REQ-PRED-008, distinguished by required persisted `authority_kind`. Selected grants
+  and selected leases form a strict bijection, including diagnostic leases; missing,
+  orphan, duplicated, malformed, expired-at-stored-frontier or over-bound records
+  reject before pruning. Validate actual graph geometry, real current/historical
+  episode generations and selected-source ledger chronology without requiring
+  historical visits to remain selected. Equal-time older generations are allowed
+  only by selected-derived chronology, not by weakening legacy token validation.
+  Physical contribution/refresh and prediction-confirmed activation history use
+  actual generation ordering at equal timestamps even after selected-visit eviction;
+  these historical checks create no traversal, selection, lease or learning authority.
+  A grant's previous-source witness matching the latest selected ledger generation
+  must remain consumed; a newer ledger generation is not rewritten to describe an
+  older witness. Baseline all-known-OFF may retain a previously issued historical
+  grant, but cannot issue one. Unknown/unavailable revokes it.
+  No missing current proof defaults or reconstruction from selection/startup.
+  Every predicted policy matches exactly one mature retained lease; suppressed
+  mature leases need not have a predicted policy. Its support must equal the retained target
   route count and its probability must equal the raw full-route probability from
   all retained competing counts and priors. The fingerprint covers every
   behavior-affecting map input plus sensor, belief, and policy calibrations.
 - **REQ-STATE-002:** Invalid or incompatible state fails as a unit and bootstraps
   from current sensor/count snapshots without movement or public edges.
 - **REQ-STATE-003:** Restore advances decay, traversal, moving-support expiry, and
-  count-conflict dwell exactly once to the restore frontier. It must not reapply
+  selected/physical-hold, diagnostic and policy frontiers exactly once to the restore
+  frontier; count-conflict dwell remains a component qualification. Backward restore
+  rejects before mutation. It must not reapply
   historical observation likelihoods, including finite-ceiling interaction
   updates, or reconstruct support from belief. After advancement and only for
   positive authoritative count, current raw `on` nodes may reselect an already
@@ -1165,30 +1613,39 @@ Persist only state needed to reproduce the next decision:
   current sensor state is available, and a current valid authoritative count
   overrides the stored legacy count.
 - **REQ-STATE-005:** The current persisted inference schema is
-  `zone-belief-v4`. Interaction adds validated enum values to existing bounded
-  record shapes and no required field, so pre-interaction v4 snapshots with a
-  compatible current behavioral fingerprint remain readable. Readers that do not recognize interaction
-  provenance may reject inference state and cold bootstrap without modifying map,
-  entity, learned, or user configuration. Public restore rejects pre-handoff v4
-  and all v3 inference, even when relabeled with the current fingerprint.
+  `zone-belief-v4`, accepted only with the exact current behavioral fingerprint
+  and every required current record. Matching the schema name alone is insufficient.
+  Public restore rejects old-fingerprint v4 and all v3 inference; relabeling old
+  records cannot supply missing current proof. Unknown interaction provenance
+  rejects atomically without modifying configuration.
   Historical v3 decoding remains isolated and invents no support; it is not a
-  current inference compatibility path. A `zone-belief-v2` importer may retain compatible filter,
-  episode, traversal, and active state only when retained provenance verifies
-  that the active edge was not authorized by the legacy source-free path;
-  otherwise it must discard the active state. It reconstructs neither pending nor
-  prediction provenance. Older
-  `zone-belief-v1` state is incompatible and must cold bootstrap from current
+  current inference compatibility path. The separate `zone-belief-v2` importer
+  retains only a validated count and Boolean active seed whose latest retained
+  edge has allowed non-source-free provenance. It cold-builds from current raw
+  sensors; it imports no old filter, episode, token, support, selection, pending
+  or prediction state. Schema-6 likewise supplies only its validated compatibility
+  seed. Both defer to a valid current authoritative count and invent no live origin.
+  These paths are implemented by `decode_v2_seed`/`migrate_v2_seed` and
+  `decode_schema6_seed`/`migrate_schema6_seed` in
+  [persistence](custom_components/predictive_controls/zone_model/persistence.py),
+  selected by [the facade](custom_components/predictive_controls/occupancy_tracker.py).
+  Older `zone-belief-v1` state is incompatible and must cold bootstrap from current
   sensor/count snapshots. The canonical committed-outward belief shape is
   `context == cleared_with_outward` with a current generation and no pending
   outward object. A reader normalizes the legacy object-bearing committed shape
   only when its source equals that generation, no asserted episode remains, and
   its deadline is strictly later than the stored frontier; malformed legacy
-  shapes reject atomically. This changes no persisted field or schema version.
+  shapes reject atomically. REQ-POLICY-013 additionally stores optional qualified
+  pending-outward expiry and committed generation-local departure time. Qualification
+  uses its own half-open witness deadline, never a weak extension; committed time
+  survives expiry and resets with generation/context supersession.
+  Validate any pending qualified expiry against the stored frontier before legacy
+  committed-shape normalization can discard its object; equality is expired.
 - **REQ-STATE-006:** A currently asserted stay sensor observed during cold
   bootstrap seeds belief but cannot by itself turn on an inactive zone. It may
   restore evidence-acquired `active` only from validated compatible persistence,
   or acquire after current same-zone, adjacent-pair bootstrap, boundary,
-  missed-edge, or mature prediction authorization. Bootstrap emits no synthetic
+  selected movement, or mature prediction authorization. Bootstrap emits no synthetic
   public edge.
 - **REQ-STATE-007:** Restored pending and predicted phases remain bound to their
   original event-time deadlines. Restart cannot extend a track-bootstrap window,
@@ -1203,8 +1660,8 @@ Persist only state needed to reproduce the next decision:
   retain no binding after traversal retention expires. An inactive restored
   policy remains inactive when asserted context is reselected; current level
   alone cannot synthesize reacquisition. A later fresh trustworthy positive may
-  reacquire only through the exact retained endpoint contract in
-  `REQ-TRAV-016`, identically before and after restart.
+  reacquire through eligible selected authority or an independently qualified
+  fallback such as `REQ-TRAV-016`, identically before and after restart.
 - **REQ-STATE-009:** Every validity window is half-open: evidence is usable for
   `created_at <= event_at < expires_at`. At one timestamp, stored timer
   frontiers with deadline less than or equal to that timestamp are advanced
@@ -1217,9 +1674,10 @@ Persist only state needed to reproduce the next decision:
   and belief context are mutually compatible, including unit reliability for
   local-interaction provenance. New settled support requires belief at or above
   the on threshold; an existing settled support may restore below that threshold
-  only in no-outward clear context without health or cadence warning. A moving
-  support requires its mapped current target token; a settled support has no
-  deadline and may outlive all bindings.
+  in either valid cleared belief context without health or cadence warning.
+  Belief-only outward context is independent of support-qualified departure.
+  A moving support requires its mapped current target token; a settled support
+  has no deadline and may outlive all bindings.
   Dedicated handoff tokens require a direct different-zone pair, provisional
   confidence and equivalence; their exact-endpoint derivatives permit only a
   non-equivalent one-node provisional token. Current transferred support may
@@ -1245,30 +1703,87 @@ Persist only state needed to reproduce the next decision:
   uninterrupted execution: a token older than the mapped support's `updated_at`
   remains lineage but cannot select, coalesce, transfer, or target-rebind that
   support. Restore does not rewrite that binding or invent movement. Invalid or
-  unknown v4 interaction provenance rejects atomically. Before the first v4
-  primary write, an accepted v3 payload is copied once to a distinct immutable
-  rollback store; downgrade restores that payload or cold-bootstraps inference
-  without modifying map, entity, learned, or user configuration.
-- **REQ-STATE-011:** The Home Assistant Store version remains `7` and the current
-  inference schema remains `zone-belief-v4` while cadence run fields and bounded
-  reliability-warning occurrences are additive. The fingerprint includes both
-  new profile windows and the top-level integer
-  `settled_adjacent_transfer_version: 1` in the fingerprint payload, not the
-  serialized root or profile dictionary. The earlier pre-cadence v4 compatibility
-  window is superseded: current restore rejects old current-v4, actual
-  pre-cadence-v4 and v3 inference atomically before decoding. An old reader also
-  rejects new fingerprints before any handoff occurs. Historical fingerprint
-  recipes omit the new discriminator and remain isolated decoder-test helpers;
-  v2/schema-6 conservative seeds and immutable accepted-v3 rollback storage
-  retain their separate purpose. In isolated historical decoding, missing
-  cadence fields default to no open run, zero
-  cycles, and an uncorrelated generation. An existing current cadence warning
-  migrates to `impossible_cadence` at its exact last-event timestamp; existing
-  health degradation migrates at its exact degraded timestamp. Restore validates
-  UTC ordering, reason/kind mapping, configured node/zone identity, unique sorted
-  occurrence identities, and all half-open warning/quiet deadlines atomically.
-  Invalid or mixed state cold-bootstraps under `REQ-STATE-002` without synthetic
-  evidence or public edges.
+  unknown v4 interaction provenance rejects atomically. The historical accepted-v3
+  migration copied its payload once to a distinct immutable rollback store before
+  the first v4 primary write. The retained setup branch is conditional on successful
+  v3 restore; current strict restore rejects v3, so this is not a current migration
+  path or a promise of a new backup. Preserve existing rollback copies; downgrade
+  requires a matching backup or cold bootstrap, never fingerprint rewriting or
+  configuration destruction.
+  REQ-POLICY-013 policy state includes a boolean retained-endpoint hold, valid only
+  for evidence-active state with no pending release. Intrinsic component snapshot
+  validation must not equate prospective policy with not-yet-committed supports;
+  live callbacks instead read the fully committed frontier under PUBLIC001.
+  Current readers require hold/qualification fields; isolated historical readers
+  default them empty without inventing departure. Committed departure must be UTC,
+  no newer than its belief frontier, generation-scoped and cleared-with-outward.
+- **REQ-STATE-011:** Home Assistant Store remains `7`, inference remains
+  `zone-belief-v4`, and current restore requires the exact semantic fingerprint
+  from `_target_map_fingerprint_payload` in
+  [persistence](custom_components/predictive_controls/zone_model/persistence.py).
+  Alongside map, capability/profile, reliability, route-prior, belief, policy,
+  arrival and prediction calibration, its current top-level integer version keys
+  (all `1`) are `settled_adjacent_transfer_version`, `support_departure_version`,
+  `impossible_cadence_preservation_version`, `supported_gap_acquisition_version`,
+  `settled_endpoint_release_version`, `selected_path_version`,
+  `presence_gated_departure_version`, `selected_prediction_execution_version`,
+  `unsupported_jump_diagnostics_version` and `deferred_prediction_learning_version`.
+  `path_health_calibration` includes unsupported-ON duration, quick-cycle window,
+  maximum ON duration and completion count. Retained component keys do not enable
+  those components as current acquisition/health policy.
+
+  Required current state includes selected paths/sources, path health, displacement
+  and physical-hold fields, selected prediction grants, lease `authority_kind` and
+  deferred learning. Missing proof never defaults from startup or old inference.
+  Earlier v4 compatibility windows are superseded; mismatched fingerprints reject
+  before decoding. Historical recipes and archived expected hashes remain unchanged.
+  Only isolated historical decoders may default absent selected/grant/hold records
+  empty, or absent cadence state to no run, zero cycles and uncorrelated. Historical
+  cadence/health conversion retains actual event/degradation times. UTC ordering,
+  reason/kind, node/zone, unique sorted occurrences and half-open deadlines still
+  validate at their actual component boundary; that alone does not certify a current
+  engine snapshot. Separate v2/schema-6 seeds and pre-existing rollback copies are
+  not full inference compatibility. No fingerprint edits or synthetic edges.
+
+- **REQ-STATE-012, superseded live-stay plan and current provenance scope:**
+  The earlier REQ-TRAV-019 plan for nested `StayPairingState`, `live_observed`,
+  `origin_episode_id`, `available`, `last_use`, `clear_since` and fingerprint key
+  `live_stay_adjacent_pair_version` is historical and was superseded by PATH003
+  and PATH-STATE001. None is a required live field, missing implementation item,
+  or permission to reinstate one-consumption stay-only pairing/rearm rules.
+  `support_departure_version: 1` remains applicable to independent support
+  retention and atomic departure under COUNT011/STATE010.
+
+  Actual current origin authority is `SelectedSource(node_id, episode_id, at,
+  origin, consumed)` in
+  [selected paths](custom_components/predictive_controls/zone_model/selected_paths.py).
+  Only an unconsumed ordinary live generation seeds a pair; correlated and
+  interaction origins are accounted but cannot seed one. Interaction still has
+  its explicit local acquisition path. Bootstrap, aliases, timers, positive count
+  and history eviction cannot synthesize or replenish an origin. Current
+  node/generation/occurrence, canonical slot inventory and consumption chronology
+  are strict; missing, malformed, future or contradictory current records reject
+  atomically. Physical alias reconciliation may revoke but never reconstruct
+  authority. Independent historical episode validation remains in
+  [the engine](custom_components/predictive_controls/zone_model/engine.py) and
+  [snapshot validators](custom_components/predictive_controls/zone_model/validation.py);
+  old references do not require current ownership or invent removed tokens.
+
+- **REQ-STATE-013, durable learning matrix:** Current prediction state requires
+  `deferred_counts` with exactly the configured node and directed adjacency keys,
+  including empty rows. Each value is null or a finite nonboolean number satisfying
+  `committed < deferred <= 1e6`; a saturated committed edge requires null. Missing,
+  malformed, extra/missing-key, nonfinite or nonincreasing debt rejects atomically
+  before expiry/pruning. Debt is statistical state like learned counts, not proof
+  of occupancy. Existing strict count, lease/grant, stored-frontier, full-row
+  probability/support and predicted-policy validation is unchanged. Add only
+  current fingerprint discriminator `deferred_prediction_learning_version:1`,
+  retaining Store7/zone-belief-v4. Old current fingerprints reject before decode;
+  historical recipes exclude the later key without changing archived expected
+  hashes. No missing-current-field defaults or fingerprint rewriting are allowed.
+  Compatible save/restart at callbacks, before/after draining and after later
+  advancement preserves each accepted increment exactly once without extending
+  leases or replaying physical evidence.
 
 ## 14. Explainability and Diagnostics
 
@@ -1291,6 +1806,10 @@ anonymous supports, token bindings, selected conflict support IDs, latest bounde
 support transition, pending candidates, reliability calibration, and
 bounded audit retention. They do not need to serialize a whole-house exact
 assignment graph.
+Current diagnostics additionally expose selected paths/origins, displacement,
+physical presence holds and independent prediction grants/debt. Legacy support
+or conflict fields are component provenance, not current selected occupancy or
+live episode-fault inference.
 
 - **REQ-DIAG-001:** An operator can explain every public edge from one zone-local
   audit row plus referenced neighboring episodes.
@@ -1298,7 +1817,11 @@ assignment graph.
   constant-time FIFO eviction.
 - **REQ-DIAG-003:** A zone active longer than its profile expectation without
   current trustworthy evidence is directly observable as a diagnostic condition.
-- **REQ-DIAG-004:** Acquisition uses stable reason codes at minimum for
+- **REQ-DIAG-004:** Current selected acquisition uses `selected_path`; prediction
+  uses `prediction_authorized`. HEALTH001–004 project `assertion_timeout`,
+  `sustained_flapping` and `unsupported_jump` as distinct diagnostic reasons.
+  The following retained vocabulary applies only where its corresponding
+  fallback/component contract actually runs, not as mandatory live emissions:
   `same_zone_authorized`, `adjacent_authorized`, `boundary_authorized`,
   `missed_edge_authorized`, `prediction_authorized`, `track_bootstrap_pending`,
   `provisional_track_acquired`, `track_confirmed`, `untracked_expired`,
@@ -1307,30 +1830,31 @@ assignment graph.
   `prediction_unconfirmed`, plus `settled_adjacent_transfer` with its actual
   source episode and bounded support-transition explanation. A single local episode with only positive count is
   never labeled `source_free_corroborated`.
-- **REQ-DIAG-005:** A count-conflict audit row identifies the selected anonymous
-  support IDs, endpoint zones, and reliability result without claiming occupant
+- **REQ-DIAG-005:** A retained component count-conflict audit row identifies the
+  selected anonymous support IDs, endpoint zones, and reliability result without claiming occupant
   identities. Runtime status retains legacy ID arrays only as exact one-release
   aliases; v4 persistence contains no legacy front field names.
-- **REQ-DIAG-006:** Current reliability warnings include both cadence flapping
-  and suspected-stuck health state. The model retains at most one latest
+- **REQ-DIAG-006:** Current reliability warnings include quick-cycle flapping,
+  unsupported continuously-ON evidence and unsupported spatial jumps under
+  HEALTH001–004, not count-driven episode faults. The model retains at most one latest
   occurrence per `(node_id, reason)`, with exact UTC first, last, and optional
   clear timestamps. Recurrence replaces the cleared record for that identity.
   Status projects an occurrence when it is active or its last-observed time is
   strictly newer than 24 elapsed hours before the projection frontier; a cleared
   occurrence exactly 24 hours old is excluded. The ledger is diagnostics only
   and never evidence, traversal, count, policy, or prediction authority.
-- **REQ-DIAG-007:** Reliability renders every current cadence or health warning,
-  deduplicated by physical node and labeled `Flapping` or `Suspected stuck on`.
-  The Occupancy Graph derives current warnings from the same episode projection,
+- **REQ-DIAG-007:** Reliability renders every active warning kind per physical node:
+  `Flapping`, `Suspected stuck on` and the distinct unsupported-spatial diagnostic.
+  The Occupancy Graph derives current warnings from the same path-health projection,
   labels affected nodes, and gives red warning color precedence over active,
   frontier, border, shadow, and confidence-bar colors while preserving solid or
   dashed shape semantics. Cleared retained history does not keep a zone red.
 
 ## 15. Performance and Determinism
 
-- **REQ-PERF-001:** An adjacent-token, reopened correlated-continuity,
+- **REQ-PERF-001:** A selected-path, adjacent-token, reopened correlated-continuity,
   cadence-correlated target, adjacent-pair bootstrap, same-zone independent,
-  boundary, bounded missed-edge, local-interaction, or mature prediction
+  boundary, local-interaction, or mature prediction
   authorization produces its in-memory
   policy decision with p99 latency at or below 5 ms and hard latency below 10 ms
   on the 16-zone reference map at $N=2$. The retained 100-event benchmark must
@@ -1342,12 +1866,22 @@ assignment graph.
   update in which it receives the accepted evidence. No confirmation timer,
   blocking I/O, persistence, audit materialization, or learning update may
   precede that decision and schedule.
+  Retained historical workload names must explicitly qualify their current
+  selected/fallback equivalent, never a no-op or a reason string alone. Ordinary
+  missed-edge acquisition is replaced only by PERF008's rejected-jump workload.
 - **REQ-PERF-002:** Routine benchmark validation uses 100 events. Every benchmark
   entry point hard-rejects more than 1,000 requested events. A standalone CLI
   invocation with an output path writes the complete JSON result there. If that
   result fails any gate, the invocation also emits the identical report to
   stderr before exiting nonzero; a passing file-output invocation remains
   silent.
+  Evidence validation is strict without changing any limit: prediction proof
+  checks the complete competing route row as finite nonboolean counts in
+  `[0, 1e6]` before reconstruction; overflow cannot be silently discarded into
+  a qualifying probability. Latencies are finite nonnegative nonboolean numbers;
+  sample/output counters are actual integers, including required zero ON-write
+  and acquired-event counts for rejected jumps. Boolean summary flags cannot
+  substitute for complete measured samples, actual qualification or executed fanout.
 - **REQ-PERF-003:** Per-event work is bounded by configured nodes, local graph
   degree, active traversal tokens, and fixed audit limits; it must not enumerate
   whole-home occupant assignments.
@@ -1375,6 +1909,15 @@ assignment graph.
   come from the standalone benchmark process, not coverage instrumentation.
 
 ## 16. Acceptance Requirements
+
+**Scope reconciliation, 2026-09-14:** the existing requirements and named
+amendments below are preserved, not newly rewritten acceptance. PATH001–006,
+HEALTH001–004, POLICY014, PRED008–009 and STATE013 govern current selected/runtime
+behavior; superseded token/count-fault/gap expectations remain genuine separately
+qualified component contracts. All originally frozen scenarios, material inputs,
+numeric thresholds and public oracles remain unchanged in this completion pass.
+Earlier explicitly approved amendments retain their recorded scope; this note
+authorizes no further retiming, replacement oracle or relaxed qualification.
 
 The implementation is acceptable only when retained public-contract
 scenarios and adversarial tests demonstrate:
@@ -1422,8 +1965,9 @@ scenarios and adversarial tests demonstrate:
 16. a mapped unit-reliability physical event pulse acquires at the finite
   numerical ceiling in the same update for $N=1$ and $N=2$, never acquires for
   $N=0$, deduplicates by current episode generation across eviction and restore,
-  invalidates authority on either live alias health state, and releases through
-  outward-accelerated or fallback ordinary decay; and
+  invalidates authority on either live alias health state, retains a settled
+  evidence-active endpoint through fallback decay without departure, and releases
+  through ordinary decay/dwell after qualified outward departure or transfer; and
 17. the exact retained Shaila Office cadence incident remains below target
   belief `0.70`, inactive, and free of policy events without changing its
   timestamps or assertions;
@@ -1457,7 +2001,115 @@ scenarios and adversarial tests demonstrate:
   without renewing its still-valid token; and
 26. all retained production incident regressions pass at the public contract.
 
+### Public-timeline replay boundary
+
+**Named release/S29 amendment, 2026-09-13:** the86 synthetic endpoint-ordering
+qualifications retain physical inputs/maps/counts. Replace obsolete legacy
+support/token/qualified-departure premises with actual selected displacement and
+physical hold; unknown aliases are unavailable, not fabricated stable clears.
+The ordinary5s control crosses1046.484750s and releases1170s with unchanged120s
+dwell; require OFF by1200 for ignored-input variants and exact-deadline parity.
+Add restored checks around the new crossing while retaining original observations.
+`test_s29_elapsed_time_and_low_confidence_preserve_public_keep_on` retains hallON0,
+roomON2, roomOFF3/count1/checkpoint720 and now requires retainedON without onward
+evidence, consistent with PATH002. No sourced production report is asserted for
+these synthetic cases. Other incident outcomes remain frozen.
+
+**2026-09-12 user-approved migration:** all currently failing incident acceptance
+primaries move to black-box runtime/public-entity replay, preserving actual recorded
+inputs, timestamps, order, map/count/reliability and required public outcomes.
+Remove token/support/provenance/q prerequisites from these primary acceptance tests;
+do not merely rename old internal reasons. Captured latent marginals are not input
+events: retain sourced values and separately qualified seeded boundaries without
+injecting private state into the new black-box replay. Such seedless replays do not
+claim exact historical posterior equivalence. Synthetic donor composites and
+calibration/performance qualification remain outside incident acceptance, explicitly
+identified as legacy/internal coverage rather than silently deleted.
+Required newON at a particular detection, continuedON and requiredOFF by an original
+deadline remain binding; alreadyON does not silently replace an acquired-at-return
+requirement. Conflicting public outcomes stay red and must be reported.
+
+**Named health acceptance amendment, 2026-09-12:** the supported Aug23 0556 target
+must remain warning-free through610 seconds ON; add an explicitly synthetic
+unsupported target at599/600/610 seconds with warning qualified at600, observed
+through the actual sampled Reliability entity. The original retained-ON replay's
+captured events and original checkpoint remain. The Aug23 2318 original two-cycle
+sequence now expects no flap warning at its preserved checkpoints; explicitly
+distinguish no publication from an empty published snapshot. Add analogous
+synthetic five/six completed-cycle cases proving no warning atfive and a warning
+at the next actual publication aftersix, with sixth-OFF occurrence timestamp.
+Warnings remain diagnostic and do not activate/release lighting.
+
+**Named follow-up acceptance amendment, 2026-09-13:** September8's primary keeps
+all14 original inputs, effective reliability1.0, counts1/2, setup, and pre-return
+restore. Require closet input-phaseON12:13:34.142281 and uninterruptedON through
+return12:16:24.972720 and checkpoint12:16:56.291116, rather than forbidding earlier
+ON and requiring another ON while already active. Add a separately synthetic
+no-return case retaining the11-input prefix through closetOFF; omit the entire
+return/entrance/top suffix and prove eventual release under real runtime timers.
+The20 ordinary long-stay qualifications remain unchanged.
+
+The two synthetic endpoint tests formerly named
+`test_runtime_off_path_linked_outward_cannot_release_settled_endpoint` and
+`test_runtime_causal_transfer_of_low_belief_endpoint_starts_full_dwell` describe
+one selected path plusU, not two independently converged paths. Preserve their
+source0/hall1/room2/hall2at3 andOFF4..7 inputs (and latterhallON85); amend independent
+legacy support retention to roomON2 then ordinary branch-displacement release.
+Add an analogous genuinely converged two-path public scenario: one leaving must
+retain the other room endpoint despite all sensorsOFF/time. N1 andN2 without
+the independent second approach must release; restore must preserve each outcome.
+Count2 alone never places an unlocated slot in the former room.
+
+**Qualification migration approval, 2026-09-13:** comparator component fixtures
+may explicitly construct complete documents at both authorization locations;
+retain all240 location-parametrized mutation checks and genuine runtime capture
+integration, including selected-only empty learning. Benchmark acquisition
+fixtures must qualify actual current selected movement, initiallyOFF target,
+acquired decision and matching public write before accepting latency. Retired
+support/token and count-conflict timer premises get named current equivalents,
+not skipped checks or weaker timing limits. Seeded legacy component qualifications
+remain separate, with per-case named replacements and no invented historical state.
+
+The migrated primaries use
+[the shared runtime replay harness](tests/runtime_replay.py). Start at the
+retained fixture origin, preserve timestamped input/receipt ordering, and run the
+real runtime's registered recurring and one-shot callbacks against an aware UTC
+fake clock. Due timers run before external inputs at the same timestamp, with
+stable registration-order ties; this is a deterministic test convention, not a
+claim about uncaptured Home Assistant event-loop ordering. Elapsed callbacks
+must not synthesize physical observations.
+
+Assert captured public `ZoneActiveSensor` writes and the complete boolean edge
+timeline, not a forced engine evaluation at an assertion checkpoint. A checkpoint
+with no scheduled work reads the last published value. Initial platform writes
+are baseline, not acquisition; metadata-only writes are not boolean edges.
+An immediate observation-caused ON must be captured in the input-dispatch phase;
+a timer ON at the same timestamp cannot satisfy it. Delivery records distinguish
+raw transport, occurrence, callback and receipt times, including rejected inputs
+and count changes. Normalization is not proof of inference acceptance. Public
+write attributes are captured copies, not later live-property reads.
+These tests prove the public light-control signal, not downstream automation or
+physical light actuation. Internal storage/support/token checks belong in separate
+qualification suites, not prerequisites of migrated incident public oracles.
+Passing incident tests are not implicitly rewritten. Reliability incidents observe
+the actual sampled diagnostic entity, not internal warning state; no forced writes.
+
+Keep both original baseline origins, maps, counts, sensor cycles and effective
+observation reliabilities. September 5's historical `SensorInput` reliability
+is 1.0 despite lower map aliases; its explicit compatibility adapter overrides
+only the real normalizer's input reliability, not map-driven clear behavior.
+Native replay input uses map reliability. Inference restore uses the runtime
+storage API while retaining scheduler phase; it is not a full HA process restart.
+Independent harness tests must cover cancellation, equal-time ordering, rejected
+normalization, absent publication, distinct-state restoration and cleanup.
+
 ## 17. Change Governance
+
+The dated approvals below retain their original scope and chronology. Their
+then-pending/red implementation statements are historical, not current blockers
+or instructions to restart a completed design review; Section 19.0 owns current
+status. This documentation synchronization does not add a model amendment or
+repeat the already-completed exactly three hardening passes.
 
 - **REQ-GOV-001:** Amend this file and obtain explicit design agreement before a
   production change that conflicts with it.
@@ -1476,6 +2128,89 @@ scenarios and adversarial tests demonstrate:
   when independent evidence proves a factual input error. Tests may not be
   weakened, retimed, skipped, or moved to automation YAML to fit an
   implementation.
+  **Explicit completion repair approval (2026-09-13):** the user requests all
+  performance, test and static failures repaired with meaningful qualifications
+  aligned to the approved selected-path model, not coverage-only tests. This
+  opens a new bounded repair cycle after the prior blocked handoff. Preserve
+  incident files, numeric calibration, corruption mutations and parameter
+  matrices; map each obsolete nonincident premise to current public behavior or
+  its authentic isolated component guarantee before changing it. Performance
+  and coverage limits remain unchanged; coverage instrumentation is not a
+  wall-time acceptance environment under PERF007. Exact regression proof and
+  three hardened passes governed the completed generic publication/count/restore
+  fixes and necessary validator extraction. Their permanent
+  [proof and disposition](#completion-proof-history) retain the qualified boundaries.
+  No deployment, staging, compatibility relaxation or test exclusions are approved.
+  **Additional explicit approval (2026-09-13):** implement PATH006/HEALTH004 and
+  POLICY014/PERF008, the named release/S29 amendments above, and distinct warning
+  regressions. This authorizes a new scoped warning/release correction cycle,
+  not unbounded further prediction corrections. The working design completed three
+  independent critique/rewrite passes; its implemented authority is the
+  [warning/release amendment](#approved-unsupported-jump-and-release-follow-up--2026-09-13).
+  Existing gap component qualifications remain; current positive gap-engine
+  expectations require individually named negative/current replacements.
+  **Explicit selected-path follow-up approval (2026-09-13):** apply the named
+  September8 and two branch acceptance amendments in Section16, add converged
+  two-path and no-return inverses, and migrate comparator/performance/component
+  fixtures with preserved guarantees. Continue generic model repairs only after
+  exact regression proof and scoped design; mature prediction execution must be
+  separated from selected-only learning without fabricated persistence provenance.
+  This is a new correction cycle; previous exhausted cycles are historical.
+  Exactly3 initial hardening passes were completed for the follow-up. Later
+  prediction/gap designs required their own explicit gates, subsequently resolved
+  under [PRED008/009](#12-prediction-and-learning) and
+  [PATH006](#approved-unsupported-jump-and-release-follow-up--2026-09-13), not
+  implicitly approved by this earlier authorization.
+  **Explicit presence/health follow-up approval (2026-09-12):** implement PATH005
+  and the named health amendment in Section16. Keep Aug22 1745 observed inputs and
+  retainedON oracle unchanged. Amend only the valid retired-C still-ON control in
+  `test_strict_restore_rejects_null_displacement_for_retired_c` to retainedON; keep
+  malformed null-displacement rejection required and failing if unresolved.
+  Preserve the separately retained seeded Aug23 qualification and Sept8 oracle.
+  Historical fingerprint recipe tests may remove later discriminator keys when
+  reconstructing archived hashes, but must not change archived expected hashes.
+  This authorizes a scoped presence-gate correction cycle, not repairs to the
+  separately blocked prior-branch, startup-branch, corruption or prediction defects.
+  Exactly3 grounded full-spec hardening passes were completed; permanent authority
+  is [PATH005](#approved-selected-path-cutover-contract--2026-09-12), with
+  [retained presence qualifications](tests/test_presence_gated_departure.py).
+  **Explicit user-approved black-box migration (2026-09-12):** remove old model
+  internals from currently failing incident acceptance tests in favor of the public
+  entity boundary in Section16. Preserve recorded timestamps/order and public
+  lighting expectations. Label synthetic/seedless coverage and retain non-equivalent
+  scalar/composite/calibration/performance qualification separately with named
+  traceability. Relocations are not fixed failures. This grants no permission to
+  weaken public outcomes, xfail/skip reports, delete unrelated unit tests or repair
+  production behavior under a test migration. Exactly3 migration hardening passes
+  were completed; the permanent [public replay boundary](#public-timeline-replay-boundary)
+  and [qualification provenance](#permanent-qualification-provenance)
+  retain that scope.
+  **Explicit user-approved acceptance exception (2026-09-11):** only
+  [the 2026-09-05 0116Z closet replay](tests/incidents/test_inc_2026_09_05_0116z_settled_closet_reacquires_before_sleep_off.py),
+  for both count parameterizations, replaces its sensor-clear/elapsed-time-only
+  inactive expectation and dependent exactly-one later reacquisition with
+  continuous active and no subsequent acquired/released edges. Preserve every
+  captured input, timestamp, ordering, map/count setting, thirteen cycles, restart
+  continuation and unrelated assertion. This is an intentional acceptance-policy
+  correction, not a factual input correction or permission to modify any other
+  frozen test. It remained red until evidence-based endpoint retention was
+  implemented; the retained replay now passes in [final2](#current-local-conformance).
+  The separately requested public-runtime/fake-clock test-mechanism migration
+  preserves these outcomes and original inputs. It may expose an edge between
+  old checkpoints; it does not authorize retiming inputs or weakening an oracle.
+  **Additional explicit user approval (2026-09-11):** the separate
+  [1556Z restore-rejection replay](tests/incidents/test_inc_2026_09_05_1556z_closet_active_missed_after_restore_rejection.py)
+  also replaces its contradictory timeout-OFF and dependent forced reacquisition
+  with retained ON/no subsequent acquisition. Preserve every input, count branch,
+  background-unavailability sequence and storage continuation check. Do not delete
+  the incident or extend this exception to unrelated assertions.
+  **Additional explicit user approval after retention review (2026-09-11):**
+  [the August 22 physical-button incident](tests/incidents/test_inc_2026_08_22_0728z_physical_press_acquires_then_decays_normally.py)
+  applies the same endpoint-retention rule to its no-outward branch. Replace
+  only the 70-minute timeout-OFF expectation with retained ON and no release;
+  preserve the original interaction/map/times and the separate qualified-outward
+  departure/release branch. Interaction-created settled support is not exempt
+  from REQ-POLICY-013.
 - **REQ-GOV-006:** A merged change to model behavior, public entities/events,
   persistence compatibility, shared calibration, or acceptance gates updates the
   implementation-conformance snapshot in Section 19 and any directly conflicting
@@ -1496,210 +2231,377 @@ bounded data importer only and cannot execute retired inference.
 
 ## 19. Implementation Conformance Snapshot
 
-This section is the maintained current-state index for the implementation. It is
-descriptive evidence of conformance, not a second source of requirements. The
-numbered requirements above remain authoritative if a summary here is incomplete.
+[Section 19.0](#current-local-conformance) is the current local conformance result.
+[Permanent qualification provenance](#permanent-qualification-provenance) records
+the retained proof boundaries without intermediate implementation-stage ledgers.
+The preamble and Sections 1–18 remain governing authority, including every named
+acceptance/governance exception. Operational obligations and frozen textual
+references remain in [Section 19.5](#deferred-operational-obligations) and
+[Section 19.6](#retired-working-record-provenance).
 
-**Last conformance review:** 2026-09-08, independent final read-only review of
-the consumable settled-adjacent handoff completed
-**Repository version:** `0.2.6`
-**Home Assistant Store version:** `7`
-**Current inference schema:** `zone-belief-v4`
-**Known specification divergences:** none unresolved in the reviewed implementation.
-Code conformance is complete; no deployment or live actuator verification is claimed.
+<a id="current-local-conformance"></a>
 
-The current implementation satisfies `REQ-TRAV-018`: after ordinary authority
-fails, a fresh ordinary or correlated target can consume one uniquely eligible
-adjacent settled support from a healthy asserted stay source, independent of
-source entry age or public `active`. Frozen selection and complete transfer
-validation precede publication; the same support commits after callback return,
-including caught failure, with every old binding purged before count evaluation.
-The provisional equivalent target token preserves support strength without
-creating support or recycling historical traversal. Source local belief and
-outward context remain unchanged; same-event prediction and learning are excluded.
-Exact-endpoint reacquisition resets a transferred pair to fresh one-node
-provisional traversal: B -> C remains provisional and B -> C -> D confirms.
+### 19.0 Current local conformance — 2026-09-14, final2 verified
 
-Validation after the final code change: **1365 Python tests at 100.00%
-whole-package statement/branch coverage** (6293 statements, 2246 branches, zero
-misses or partial branches), **73 explicit incident tests** and **33 separately
-run scenarios**, without skips. Ruff, repository mypy (104 files), 30 frontend
-tests and frontend build pass. Independent final review found no unresolved
-correctness issue and verified the frozen proof hashes, 22 unchanged older
-incident files, all five semantic artifacts, and eight additional receiving-zone
-coalescence and inactive-public-source probes.
+The approved selected-path, presence, warning/release and selected-prediction
+contracts are implemented locally. Durable learning is also implemented:
+postpublication row-blocked debt, strict writer/restore projection and count0
+statistical retention follow PRED009/STATE013. It is no longer awaiting a production
+fix. Current token/support, cadence/count and gap component qualifications remain
+real boundaries, not re-enabled legacy control paths. All originally frozen
+scenarios and incident inputs/oracles remain unchanged in the completion work.
 
-The five 100-event profiles (`deterministic`, `correlated_burst`, `maximum_lag`,
-`out_of_order`, `all_episodes_active`) have zero unexplained semantic differences:
-identical input/receipt streams and equivalent public results, diagnostics,
-persisted state, strict restoration and next-event continuation. Original baseline
-and repeat hashes are unchanged. Comparison separates the behavioral fingerprint
-and normalizes only absent/null optional `TraversalAuthorization.settled_handoff`
-at `result.authorizations` and `diagnostics.pending_prediction_learning`; non-null
-values, order/cardinality and all other semantic fields remain exact. These short
-traces do not exercise fallback. Separate dedicated benchmarks qualify ordinary
-and correlated handoffs with **100/100 acquisitions and target writes each on all
-five profiles**. All 12 named fast paths meet p99 <= 5 ms and max < 10 ms; worst
-observed **p99 is 2.606777 ms, max is 2.779946 ms**. Core, timer and state-bound
-gates also pass; these are model/publication measurements, not actuator guarantees.
+The final correlated-token repair preserves only the exact independently
+authorized correlated generation outside all selected visit/route history under
+TRAV014's lifecycle clarification. Live callbacks can strictly read/restore the
+committed frontier; selected-only and same-event correlated learning remain excluded.
+Benchmark evidence now rejects overflowing prediction counts and Boolean numeric
+substitutes without changing limits. Permanent proof is retained in
+[engine contracts](tests/test_engine_completion_contracts.py),
+[benchmark evidence contracts](tests/test_benchmark_evidence_contracts.py) and
+[current-wire contracts](tests/test_current_wire_contracts.py).
+The exact original 489-byte `_supported_gap_source` helper and 100-byte import
+were restored for component qualification and frozen string-based interception
+compatibility; there are **zero production callers**. This does not re-enable
+unobserved-middle acquisition. A sole-field deletion of required
+`path_displaced_at` from an accepted current snapshot rejects strictly, preserves
+a populated receiver and supports unchanged real-observation/restore continuation.
 
-Current restoration is strict and atomic. The handoff fingerprint discriminator
-rejects pre-handoff v4 and all v3 inference; isolated historical decoders,
-conservative v2/schema-6 seeds and immutable accepted-v3 rollback storage retain
-their separate purposes, not public v3 restore acceptance. Coalesced supports
-preserve the least ID and minimum member creation time; the reader validates
-`created_at <= origin_at <= updated_at` and the retained origin's creation class,
-not origin-time equality or a history no longer retained.
+The following are the **previously verified final2 results**, not a fresh rerun
+for this documentation cleanup. All distinct final2 runs completed after that
+last engine restoration.
+Their XMLs contain zero failures, errors or skips; full coverage is measured from
+the complete run, not a focused union. Retained evidence uses
+`/tmp/full-green-final2-{incidents,scenarios,python,frontend,build,ruff,mypy,benchmark,semantic}.log`,
+the three corresponding Python-run XMLs, and the final2 coverage/benchmark JSONs.
 
-Operationally, incompatible inference cold-bootstraps without synthetic public
-edges and can lose inference-active continuity until fresh graph acquisition.
-Deployment requires preserved configuration and a separately labeled inference
-backup; downgrade uses a matching old backup or conservative cold bootstrap,
-never rewritten fingerprints or an overwritten immutable rollback copy. No
-deployment or Home Assistant restart was performed for this reconciliation.
+| Final2 gate                           | Verified result                                                                                                                           |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Explicit retained `test_inc_` corpus  | **69 passed**, 3148 deselected, **242.69s**                                                                                               |
+| Separately marked scenarios           | **103 passed**, 3114 deselected, **273.45s**                                                                                              |
+| Full Python / unchanged coverage gate | **3217 passed**, **1712.39s**; **7867 statements / 2996 branches all covered, 100%**, zero missing or partial branches                    |
+| Frontend tests / build                | **31 passed**, **72.872569ms**; build passed, **74425 bytes**                                                                             |
+| Repository Ruff / mypy                | Ruff clean; mypy clean in **157 source files**                                                                                            |
+| Standalone 100-event benchmark        | All gates pass: **11 positive / 1 negative / 2 timer workloads**, every workload complete at **100/100**                                  |
+| Positive acquisition latency          | Worst p99 **2.968193ms**, worst max **3.593307ms** across the 11 paths; each has 100 qualified acquisitions and 100 target writes         |
+| Mature prediction latency             | p99 **2.558397ms**, max **2.586536ms**; 100 qualified acquisitions / 100 target writes                                                    |
+| Rejected-jump workload                | p99 **3.281529ms**, max **3.300619ms**; 100 qualified rejections, **zero ON writes**                                                      |
+| Timer workloads                       | Pending-expiry max **0.282167ms**; unsupported-ON health-deadline max **1.433717ms**                                                      |
+| Core / bounded-state gates            | p95 **3.689646ms**, max **4.246241ms**; all core/state-bound/persistence gates pass                                                       |
+| Five-profile semantic comparison      | Each profile: **20 events, count 2, zero differences**, 21 allowed all-null matrix normalizations plus explicit fingerprint handling only |
+| Independent reviews                   | Code, contract, documentation and preservation reviews found no blocker within the reviewed local scope                                   |
 
-| Layer                     | Implemented contract                                                                                                                                                                                                                                                                                                                                                           | Owning implementation                                                                     |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
-| Map and profiles          | Physical aliases, reciprocal adjacency, directed timing overrides including the calibrated kitchen-dining-foyer path, reliability, capability-based shared profile assignment, and unit reliability for conclusive interaction nodes                                                                                                                                           | `model.py`, `yaml_config.py`, `zone_model/profiles.py`                                    |
-| Physical evidence         | Bounded sensor and interaction-pulse episodes, alias/flap deduplication, stable clear with writer-valid emitted-state markers, per-alias interaction health invalidation, hardware hold, trust horizons, and cadence health                                                                                                                                                    | `zone_model/episodes.py`                                                                  |
-| Zone belief               | Per-zone binary log-odds filtering, reliability-tempered likelihoods, generation-idempotent finite-ceiling interaction evidence, durable committed-outward decay, role/context decay, and supported-arrival transitions                                                                                                                                                        | `zone_model/filter.py`, `zone_model/calibration.py`                                       |
-| Traversal and acquisition | Bounded ordinary, pending-pair, interaction and correlated acquisition; continuity and outward classification; age-independent uniquely eligible settled-adjacent handoff only after existing authority fails, validated before publication; exact-endpoint rebind resets transferred pairs to fresh provisional traversal                                                     | `zone_model/traversal.py`, `zone_model/engine.py`                                         |
-| Anonymous supports        | Bounded moving/settled provenance, confirmed creation and no-outward retention; causal/path-bound ordinary transfer; single-use settled handoff transfers without creation after callback return, purges all old bindings, then permits ordinary receiving-zone coalescence; least-ID/minimum-creation identity and deterministic removal                                      | `zone_model/supports.py`                                                                  |
-| Count context             | Categorical count zero, positive-count validation, count-conflict dwell, health degradation, traversal closure, asserted-stay release veto, and recovery from immutable support projections                                                                                                                                                                                    | `zone_model/count.py`, `zone_model/engine.py`                                             |
-| Policy and public control | Shared 0.70/0.30 hysteresis, profile release dwell, asserted-stay pending-dwell cancellation, one `active` entity per zone, `home_active`, and optional deduplicated arrival events                                                                                                                                                                                            | `zone_model/policy.py`, `binary_sensor.py`, `event.py`                                    |
-| Prediction and learning   | Confirmed-route learning, fixed 0.85 maturity threshold, minimum five accepted transitions, and nonrenewing 10-second internal activation leases                                                                                                                                                                                                                               | `zone_model/prediction.py`, `markov.py`                                                   |
-| Persistence and migration | Atomic current v4 restoration with strict episode, handoff, historical-origin, policy and binding validation; handoff fingerprint rejects pre-handoff v4/all v3 inference; isolated historical decoders, conservative v2/schema-6 seeds and immutable accepted-v3 rollback storage remain separate compatibility mechanisms                                                    | `zone_model/persistence.py`, `zone_model/filter.py`, `storage.py`, `occupancy_tracker.py` |
-| Diagnostics and UI        | Bounded policy audit, beliefs, episodes, health, traversal, supports, conflicts, predictions, warning occurrence history/current projection, lifecycle counters, WebSocket status, and panels                                                                                                                                                                                  | `zone_model/policy.py`, `status.py`, `sensor.py`, `websocket.py`, `frontend/panel.js`     |
-| Runtime integration       | State and physical-interaction event normalization, authoritative count, deterministic timer advancement, edge-gated publication, one immutable current-state snapshot per synchronous update dispatch, delayed persistence, and final save                                                                                                                                    | `runtime.py`, `occupancy_tracker.py`, `__init__.py`                                       |
-| Validation                | 1365 Python tests at 100% statement/branch coverage, 73 explicit incident tests, 33 scenarios, Ruff, strict mypy, 30 frontend tests/build and completed independent final review; five-profile semantic equivalence with the qualifications above, dedicated handoff/public-write qualification and bounded performance gates; failed CLI results preserved in file and stderr | `tests/`, `benchmarks/occupancy_performance.py`                                           |
+Standalone report SHA-256:
+`bf79935e6147e1ee445d845cb3cbbbd642f9e39a45ba91de8f66e456f313a4ae`.
+Positive/rejection timing limits remain p99<=5ms and hard<10ms. All attempted
+reports, including earlier failures, remain evidence; no timing waiver or
+retry-selected success is claimed. Semantic profiles are `deterministic`,
+`correlated_burst`, `maximum_lag`, `out_of_order` and `all_episodes_active`;
+the retained comparison is `/tmp/durable-learning-semantic-comparison.json`.
+Only the declared all-null matrix representation and explicit fingerprint
+differences are normalized. Non-null differences, cardinality/order and other
+semantic fields remain visible; this is not blanket payload equivalence.
 
-The current implementation includes the retained 2026-08-20 office false-release
-repair: loss of a selected outside support clears an already-degraded count
-conflict, restores the same continuously asserted stay episode to normal local
-evaluation, and prevents release caused solely by an obsolete count
-contradiction. The exact production timestamps and public expectation are
-retained in `test_inc_2026_08_20_2113z_support_loss_recovers_asserted_stay_zone`.
+<a id="completion-proof-history"></a>
 
-The implementation also includes the retained 2026-08-22 pre-arrival support
-transfer repair. A source-token binding selects support only when the token is
-at least as new as the support mutation frontier and its node precedes the target
-on the accepted path. Linked off-path lineage remains bounded but cannot move or
-target-rebind support. Restart, callback failure, coalescence remapping, exact
-expiry, count-conflict inverse, and lifecycle-counter boundaries are retained in
-the target-model regression suites.
+#### Bounded completion proof and preservation
 
-The retained 2026-09-06 correlated-intermediate incident establishes that an
-independently graph-authorized `correlated_positive` may carry one existing
-anonymous support through a real intermediate only when a fresh selected
-source-token binding is on the accepted path. The continuation issues one
-ordinary bounded token, transfers/coalesces but never creates support, and may
-serve as graph context for a later distinct episode while remaining excluded
-from same-event prediction and learning. The exact bathroom, closet, entrance,
-top-of-stairs, Shaila Office, and Alex Office timestamps, public count-conflict
-projection, unbound/stale/off-path inverses, token bound, and restart equivalence
-are retained in
-`test_inc_2026_09_06_1931z_correlated_intermediate_splits_support_lineage` and
-the owning target-model suites.
+- Earlier full runs **2930 passed / 98.12%** and **3213 passed / 2 failed /
+  99.981585%** failed the unchanged acceptance gates; focused passes and coverage
+  unions did not establish conformance. The two failures were frozen helper-
+  interception tests. Exact helper/import restoration plus two sole-field/current-
+  wire controls preceded the distinct final2 **3217 passed / 100%** result above.
+  The last engine correction cycle exhausted **3/3**; cleanup grants no further
+  production correction authority.
+- The synthetic correlated-token lifecycle regression was **1 red before the
+  production edit → 1 green immediately afterward**, before subsequent test
+  expansion. It protects the exact nonselected authorized generation, not token
+  recreation, relaxed support validation or selected-only learning.
+- The four approved original qualification functions had **3 red / 1 pass** in
+  the focused baseline (the import-order defect also reproduced independently),
+  then **4 green** in0.56s; their three modules passed288cases in14.82s. The
+  84 additional benchmark evidence cases were **12 red / 72 green → 84 green**.
+  These were discriminating boundary repairs, not weakened timing/coverage oracles.
+- Final intake preservation: **all2930 original IDs retained +287 new =3217**;
+  **240 comparator IDs, nine bodies and23 assertions intact**. The223-path intake
+  hash audit found **211 unchanged /12 expected changed**, before deletion;
+  **121 original test files were untouched**. Only the four previously approved
+  functions in three original test files changed in the final qualification
+  correction; the remainder of those files was byte-identical to that intake.
+  These are scoped preservation facts, not a claim that all implementation files
+  were unchanged across the whole migration.
+- All14 protected configuration/reference-map/historical-report/instruction files
+  and the staged-entry digest
+  `64b7e69cd307c3ce5fb29923f2717a57be238f67b5ac7c2fbbb1ff07383e79ee`
+  remained unchanged. Unstaged `git diff --check` passed. **Cached diff checking
+  was not green:** it retained **eight preexisting EOF whitespace findings** in
+  the event-driven working record, September5/10 incidents, and count/restore,
+  presence, selected-path, unsupported-jump and gap tests. The exact unchanged
+  index establishes these were not introduced by that final2 reconciliation.
+  No staging, reset, scenario change or whitespace repair is implied.
 
-The retained 2026-09-08 master-suite return has a measured bathroom-to-closet
-interval of **120.928670 seconds**. Its immutable original replay preserves the
-exact timestamps, ordinary 180-second token assertion and one adjacent-authorized
-public closet acquisition before sleep-off for counts one and two. The reopened
-proof adds explicitly synthetic source ages of 3 minutes, 5 minutes, 30 minutes,
-2 hours and 24 hours, across ordinary/correlated targets, counts 1/2 and restart,
-plus isolated original-120-second-calibration probes of the measured sequence.
-Those 42 cases failed the public acquisition before the generic repair while
-the three original cases passed; all 45 now pass with frozen inputs and assertions.
-They establish age-independent consumable handoff, not a longer token as the
-correctness mechanism. The shared 180-second traversal window is retained
-provisionally as calibration; bootstrap remains 120 seconds. At exactly 180
-seconds the ordinary token still expires and cannot authorize, but that expiry
-does not reject an independently eligible settled-adjacent fallback. Token-boundary
-rejection tests isolate token authority from that fallback. Transfer without
-creation, binding purge, source immutability, prediction/learning exclusions,
-strict restart parity and exact-endpoint correlated reacquisition without a token
-remain covered in
-`test_inc_2026_09_08_1213z_stay_presence_authority_expires_before_closet_return`
-and the owning profile, traversal, support, persistence and engine suites. The
-long-age fixtures are synthetic, not additional measured production stays.
+**Documentation disposition:** the **38 completed/superseded working records**
+were already deleted after final2 canonical verification. This cleanup additionally
+removes **two obsolete historical ledgers**: the root migration plan and the test
+requirement matrix; these are not part of the prior 38. Their current guarantees
+remain in the governing requirements and permanent qualifications, with generic
+rollout/backout constraints retained in Section 19.5. Only the unresolved external-
+office working record remains. Factual scenario/test fixtures, frozen tests and
+the user's async-todo prose are retained, not rewritten as migration plans. The
+[frozen-reference map in Section19.6](#retired-working-record-provenance) retains
+historical comment provenance without editing tests or promising that deleted
+paths resolve. [Section19.5](#deferred-operational-obligations) preserves every
+deferred timing/physical-interaction/anonymous-support rollout obligation and the
+sole retained [external office issue](#unresolved-external-office-incident).
+This cleanup changes documentation only, not production, tests or staged entries.
+Repository conformance is not deployment approval, a live HA restart, physical-
+actuation verification or external-incident closure.
 
-The implementation also includes the retained 2026-08-23 Master Bathroom
-asserted-stay repair. Positive count conflict may health-degrade the current stay
-episode, remove its belief floor, and close traversal, but it cannot start or
-retain public release dwell while that same episode remains asserted or inside
-stable-clear confirmation. Stable clear and unknown/unavailable restore ordinary
-full-dwell release eligibility; authoritative count zero remains immediate. The
-exact production timestamps, degraded and release-frontier beliefs, public edge,
-clear/reassert, pending-dwell, count-zero, neutral-availability, and restart
-boundaries are retained in the target-model regression suites.
+<a id="permanent-qualification-provenance"></a>
 
-The retained 2026-08-23 reliability incident establishes that a
-same-generation impossible-cadence warning on a profile without cross-generation
-cadence becomes historical at stable clear, or at a fresh independent positive
-when that arrives first. The diagnostic sensor preserves bounded 24-hour history,
-while its active count and active-only summary drive the daily Home Assistant
-notification so recovered warnings do not produce a current-fault alert.
+### 19.1 Permanent qualification and provenance
 
-The retained 2026-08-28 release incident establishes that valid outward evidence
-is finite traversal authority but, once stable clear consumes it, selects durable
-`cleared_with_outward` decay until return or a new positive supersedes that
-context. Bounded two-hop missed-edge timing may start at an exact matching source
-clear frontier while token expiry remains unchanged. Exact bathroom and kitchen
-timestamps, release edges, timing boundaries, inverse source states, restore,
-and incomplete directed-map timing are retained in the target-model suites.
+The removed intermediate ledgers supplied no additional current model requirement
+beyond the preamble and Sections 1–18. Earlier failed gates remain failed evidence,
+not retrospectively passing runs; only the distinct final2 results above establish
+the recorded local conformance. Exactly-three-pass design reviews and narrowly
+approved acceptance changes retain their original scope under
+[GOV005](#17-change-governance); deleting ledgers grants no new test amendment.
 
-The retained 2026-08-28 master wake-up incident establishes that an independently
-authorized fresh-generation `correlated_positive` applies the shared supported-
-arrival transition after its reliability-tempered local likelihood and before
-policy in the same update. Isolated correlated targets remain unauthorized, and
-authorized targets without eligible fresh on-path support remain excluded from
-target-token and support behavior. Every correlated target remains excluded from
-pending, same-event prediction/learning, outward-context, and refresh behavior.
-The exact production timestamps, reliability, pre-arrival belief, public
-acquisition, sleep-off retention frontier, and unauthorized inverse are retained in
-`test_inc_2026_08_28_1545z_authorized_correlated_closet_acquires_before_sleep_off` and
-`test_unauthorized_correlated_target_does_not_apply_arrival_transition`.
+- **Public replay, not inferred historical state:** the approved migration of
+  17 failing incident files preserved sourced inputs, receipt/occurrence order,
+  effective reliability and public outcomes except the separately named approvals
+  in [Section 16](#public-timeline-replay-boundary). The
+  [runtime harness](tests/runtime_replay.py), [scheduler qualifications](tests/test_runtime_replay.py)
+  and [transport qualifications](tests/test_runtime_replay_transport.py) exercise
+  actual registered 5/60/30-second callbacks, prediction deadlines, dispatch and
+  copied public writes, including absent publication and sampled Reliability.
+  Storage continuation preserves timer phase; it proves neither full HA restart
+  nor disk durability. Seedless replay cannot reconstruct captured latent marginals.
+  Separately retained [0326 seeded](tests/test_legacy_incident_0326_seeded.py),
+  [2055 seeded](tests/test_legacy_incident_2055_seeded.py),
+  [Aug23 seeded](tests/test_legacy_incident_aug23_seeded.py),
+  [Aug28 seeded](tests/test_legacy_incident_aug28_seeded.py),
+  [Sept8 composite](tests/test_legacy_incident_sept8_qualification.py) and
+  [publication](tests/test_legacy_incident_publication.py) suites preserve
+  non-equivalent qualification; relocation was not a production fix.
+- **Selected authority and presence:** [selected-path boundaries](tests/test_selected_path_cutover_boundaries.py),
+  [follow-up state](tests/test_selected_path_followup_state.py) and
+  [presence qualifications](tests/test_presence_gated_departure.py) retain all six
+  clear orders, count1/2, consumed-origin and prior-branch generation ordering,
+  startup mismatch, null-displacement rejection and immediate mixed-alias strict
+  roundtrips. Aggregate startup levels cannot mint movement or protection; hold
+  loss uses its actual frontier and never charges protected time to release.
+  PATH001–006 govern selection/retention; no device-timeout polling is implied.
+- **Scoped red-to-green proof:** the unchanged
+  [Aug22 retained-presence incident](tests/incidents/test_inc_2026_08_22_1745z_prearrival_token_cannot_release_asserted_target.py)
+  was **1 red → 1 green**, eliminating the reproduced 17:50:43Z public OFF.
+  Synthetic [unsupported-jump warnings](tests/test_unsupported_jump_warning.py)
+  were **2 red → 2 green** immediately after the first production batch; no sourced
+  never-observed-middle production incident was established. Ignored-input release
+  proof was **20 red / 10 passed → 30 passed** immediately after the first edit:
+  [86 original ordering cases](tests/test_zone_model_endpoint_retention_ordering.py)
+  retain inputs/IDs and full120s dwell, with [20 public controls](tests/test_selected_release_public.py),
+  exact deadline1166.484750, 5s-timer OFF1170 and coarse OFF1200. These proofs do not
+  substitute for the final full suites or authorize other public-oracle changes.
+- **Component guarantees remain genuine:** [traversal](tests/test_zone_model_traversal.py),
+  [supports](tests/test_zone_model_supports.py), [handoff](tests/test_zone_model_handoff.py),
+  [gap](tests/test_zone_model_supported_gap_acquisition.py),
+  [count](tests/test_zone_model_count.py) and [cadence](tests/test_zone_model_cadence_preservation.py)
+  retain accepted specimens, original mutations, numeric boundaries and inverse
+  continuations at their actual production-component/validator boundary. This
+  includes causal on-path support transfer, least-ID/min-created coalescence,
+  age-independent qualified handoff, bounded original-token preservation,
+  exact-endpoint reacquisition, generation-bound outward context and count-conflict
+  recovery/held-stay dwell cancellation. These are not selected slots, time-only
+  occupancy expiry, live count-driven faults or current unobserved-gap acquisition.
+  Current callbacks observe fully committed state under PUBLIC001, not the old
+  component prepare/callback/commit arrangement as live publication authority.
+- **Strict persistence, not historical compatibility:** [persistence](tests/test_zone_model_persistence.py),
+  [component validators](tests/test_persistence_component_validation.py),
+  [count/restore](tests/test_count_restore_completion.py) and
+  [current-wire tests](tests/test_current_wire_contracts.py) cover accepted current
+  snapshots, atomic rejection and real continuation. Store7/v4 still requires
+  every current record and exact fingerprint; old-fingerprint v4 and all v3
+  inference reject. Historical readers and v2/schema6 compatibility seeds stay
+  isolated, never supply missing selected proof, and never rewrite archived hashes.
+  `clear_emitted` consistency and coalesced-origin chronology remain strict.
+- **Execution is not learning:** [selected prediction](tests/test_selected_prediction.py)
+  qualifies independent grants, mature same-entity activation, no duplicate
+  confirmation edge, nonrenewing10s expiry and strict lease/grant restore.
+  [Deferred learning](tests/test_deferred_learning.py) and the unchanged
+  [publication regression](tests/test_learning_publication_completion.py) retain
+  postpublication exactly-once debt under PRED009/STATE013. Only the explicitly
+  approved supplementary same-row nonincident oracle changed from immediate
+  learning to retained debt until row leases cancel/expire. Selected-only movement
+  and same-event correlated evidence do not teach routes; count0 retains statistics.
+- **Measurement boundaries:** [publication contracts](tests/test_publication_completion.py)
+  and [benchmark qualification](tests/test_occupancy_performance_benchmark.py)
+  require actual committed callbacks, complete fanout and initially-OFF target
+  acquisition/write, not a reason string or no-op. All240 comparator mutations at
+  both authorization locations remain; optional absent/null normalization is
+  field/location-specific, never a blanket payload exemption. Diagnostic prediction
+  execution is distinct from learning; rejected jumps have their own mandatory
+  zero-ON workload. [Evidence validation](tests/test_benchmark_evidence_contracts.py)
+  preserves strict counts, Boolean rejection and unchanged timing/coverage gates.
+  Final2's five-profile comparison and allowed normalization remain exactly as
+  recorded above; component equivalence is not a new selected-engine equivalence claim.
 
-The retained 2026-09-05 master-bathroom incident establishes that a confirmed
-closet-to-entrance-to-hallway path completed before a distinct, still-asserted
-bathroom presence episode cleared is bounded outward evidence even when an
-intervening same-zone interaction owns the current belief generation. Exact
-physical and interaction timestamps, missing-use, timing, adjacency, competing-
-stay, generation, expiry, counts 1 and 2, and restore-before-clear boundaries
-are retained in
-`test_inc_2026_09_05_0530z_confirmed_track_before_source_clear_marks_outward` and the
-owning traversal and engine suites. Count zero retains its existing immediate
-empty-house behavior.
+<a id="deferred-operational-obligations"></a>
 
-The retained 2026-09-05 closet wake-up incident establishes that a confirmed
-settled stay endpoint survives ordinary no-outward belief decay below policy
-threshold and may authorize only a fresh trustworthy positive at that exact node
-and zone. Reacquisition rebinds one support, creates no source use, and remains
-excluded from same-event prediction and learning; correlated target evidence
-using only settled-endpoint reacquisition still issues no token. All thirteen
-observed post-release cycles, counts 1 and 2, restart, one public reacquisition
-edge before sleep-off, outward removal, exact-endpoint rejection, and the earlier
-isolated-closet false-activation incident are retained in
-`test_inc_2026_09_05_0116z_settled_closet_reacquires_before_sleep_off` and the
-owning support/traversal suites.
+### 19.5 Deferred operational obligations
 
-The retained 2026-09-05 closet restore-rejection incident establishes that both
-known physical-episode transitions away from stable `clear` reset
-`clear_emitted` before serialization. Correlated reassertion and all-alias
-unknown/unavailable snapshots round-trip through strict restore, while an
-inconsistent external or historical payload still rejects atomically. The
-observed restore rejection, representative invalid-writer path, counts 1 and 2,
-restored settled support, and public closet reacquisition before sleep-off are
-retained in
-`test_inc_2026_09_05_1556z_closet_active_missed_after_restore_rejection` and the
-owning episode and persistence suites.
+These are carried-forward, deferred research and operational obligations, not new
+model or policy requirements. Repository-green validation neither performs nor
+closes them. Documentation cleanup authorizes no deployment, device-setting change,
+new polling implementation, calibration amendment or external-incident closure.
+[Section 19.0](#current-local-conformance) records previously verified final2
+results; those local results do not close the obligations below.
 
-The retained 2026-09-05 upstairs-bathroom incident establishes that a current
-same-zone generation inherits outward context only when an already-authorized
-different-zone target consumes the exact predecessor token recorded by its
-persisted `same_zone_authorized` use row. The transfer creates no authority and
-fails closed on mismatch or expiry. Exact bathroom-interaction, reassertion,
-hallway, office, stable-clear, public release, counts 1 and 2, and restart
-frontiers are retained in
-`test_inc_2026_09_05_0626z_upstairs_bathroom_same_zone_generation_releases` and the
-owning traversal suite.
+<a id="deferred-device-timing"></a>
+
+#### Device timing research — deferred
+
+- No timing-discovery/cache adapter is implemented. The deferred proposal prefers
+  available cached configuration at startup, configuration-change subscriptions
+  and nonblocking availability/reconnect handling. Repeated radio polling is not
+  the default; any refresh fallback needs a supported adapter and an explicitly
+  bounded policy. Disabled-value access still requires an approved read-only
+  script extension; cleanup permits neither enabling entities nor ad hoc live
+  Home Assistant access.
+- Bind context to the physical node/device/endpoint/parameter, never room names
+  or guessed entity suffixes. Preserve raw value, verified unit/meaning, normalized
+  value, source/model/firmware, observation timestamp and known/unknown/stale status.
+  Observation time does not prove hardware application time. Version effective
+  timing separately from shared policy; preserve open-episode interpretation across
+  restart without retroactively rewriting accepted movement. Mid-episode changes
+  and unavailable configuration need explicit design; unknown timing uses a labeled
+  conservative fallback without compromising selected-path correctness.
+- **Historical cached evidence, not current hardware verification:** the approved
+  registry lookup at **2026-09-12T07:22:51.996928Z** found six parameter entities.
+  Hallway Stay Life/Detection Timeout and Bedroom Entrance Reset Cycle/Timeout
+  Duration were disabled; the closet's two timing entities were enabled. Subsequent
+  approved cached reads returned closet Stay Life **300** and Detection Timeout
+  **30**. Under the **archived September 5 VZW32** definitions only, parameter108
+  uses **50 ms/unit**, so 300 represents **15 seconds**; parameter114 uses seconds,
+  so 30 represents **30 seconds**, described as delay before a no-presence report.
+  Definitions came from the September 5 diagnostic capture, not a current hardware
+  interview or verified applied setting. Registry presence does not prove a readable
+  or current value. Do not infer additive composition, exact departure or GE/Enbrighten
+  motion-report versus local-load semantics from parameter names; model/firmware
+  enumeration and exceptions require verification.
+- A hardware latch may retrigger without another ON edge. Configuration reads and
+  retriggers are not independent movement, cycles or occupancy evidence. Never turn
+  settings into occupancy/adjacency TTLs, subtract them to invent departure, or
+  rewrite shared profiles per device. Do not silently change the **600-second**
+  unsupported-ON or **sixth-cycle** health rules; handling a genuinely long hardware
+  latch under the unsupported-ON warning remains deferred, not an approved exception.
+- Retain the future proof matrix: all six A/B/C clear orders; unequal/equal/unknown
+  holds; retrigger without ON; middle-node flap/unavailability; restart before/after
+  clear; mid-episode parameter changes; overlapping tracks; no polling-created
+  traversal; retained endpoint without departure; and fresh side-branch detection
+  after its authority is withdrawn. Use public runtime replay edges and path
+  diagnostics, not only private token assertions. This remains a timing-adaptation
+  proof obligation, not a claim that that matrix has run. Implemented route/history
+  continuity and branch withdrawal already belong to
+  [REQ-PATH-002/003](#approved-selected-path-cutover-contract--2026-09-12), not the
+  superseded union proposal; they are not reopened by this research transfer.
+
+<a id="deferred-physical-interaction-rollout"></a>
+
+#### Physical-interaction rollout — unverified
+
+After a separately authorized deployment, observe **at least one physical press,
+one outward transition, one missed-outward continuation and one restart**. Preserve
+the missed-outward observation, not its superseded timeout-only OFF oracle:
+without qualified departure, retained ON is expected under current PATH retention;
+assess eventual release only when current
+[REQ-POLICY-013](#9-automation-policy)/[REQ-POLICY-014](#approved-unsupported-jump-and-release-follow-up--2026-09-13)
+eligibility applies, including the
+[REQ-PATH-005](#approved-selected-path-cutover-contract--2026-09-12) presence gate.
+Back out on output-state false acquisition, replayed startup presses, failure of an
+**eligible** release, duplicate supports, restore loops or latency-budget breach.
+
+Deploy code before or atomically with its interaction map. Older code may retain
+interaction nodes only when verified to ignore event timestamps; otherwise remove
+only those nodes before starting that version. Preserve configuration and compatible
+inference backups. Cold bootstrap must not replay retained timestamps or synthesize
+movement/public edges.
+
+<a id="deferred-anonymous-support-rollout"></a>
+
+#### Anonymous-support rollout and rollback — unverified
+
+Observe support/conflict diagnostics during representative **two-occupant movement
+and at least one normal long stay** before operational acceptance. Require expected
+transitions without false target degradation, duplication, restore-rejection loops
+or performance breach; do not re-enable historical count-health inference to conduct
+the observation. Prior repository review and conditional backup behavior did not
+perform this still-outstanding production observation.
+
+For a separately approved rollout, validate the retained corpus and performance
+gates, use a maintenance window, and walk representative valid paths after startup,
+including shared areas, reversals and quiet stays. Agree observation/acceptance
+criteria before activation; a conservative cold bootstrap may leave a previously
+active zone off until fresh graph-supported acquisition. These generic safeguards
+survive the obsolete v3 rollout checklist; they neither mandate a v3 shadow switch
+nor assert that any live observation or rollout has occurred.
+
+Preserve configuration, a separately labeled pre-upgrade inference backup and a
+usable downgrade/cold-bootstrap procedure. Retain the matching backup through a
+stable release and the agreed observation period before considering its removal;
+existing immutable rollback copies must not be overwritten.
+Accepted-v3 backup creation was historical and conditional; current strict restore
+rejects v3. Keep existing immutable copies, but promise no fresh v3 backup under
+current code. Under [REQ-STATE-005/010/011](#13-persistence-and-restart), restore a
+backup compatible with the rollback release or cold-bootstrap only incompatible
+inference. Never rewrite fingerprints or delete map/options, entities, registry or
+learned/user configuration. Disclose lost unsaved/post-upgrade inference continuity;
+the completed-write durability boundary remains
+[REQ-PRED-009](#12-prediction-and-learning), not a rollout guarantee.
+
+Two retained operational cautions also remain: stale-input prevention cannot
+retroactively distinguish old false interaction likelihood from a genuine press,
+so it authorizes no historical belief subtraction/reset or synthetic reacquisition;
+warning consumers stay disabled during rollback until their actual entity ID,
+numeric state and [current contract](#11-public-contract) are verified.
+
+<a id="unresolved-external-office-incident"></a>
+
+#### External office incident — unresolved
+
+The [retained office incident record](docs/spec/INC-2026-09-05-1707Z-office-light-reverted-after-correct-active-edge.md)
+remains unchanged and open. Capture recurrence-time **node 282 Z-Wave command/value
+evidence** through approved read-only access to distinguish local load action,
+firmware action or an unsolicited/incorrect report. Correct public acquisition
+does not explain the physical OFF. No unconditional retry or override of intentional
+manual OFF is authorized.
+
+<a id="retired-working-record-provenance"></a>
+
+### 19.6 Retired working-record provenance map
+
+This map preserves provenance for the 38 completed/superseded records deleted
+after final2 validation and canonical reconciliation. Literal working-record references
+in the **15 retained test modules** below identify historical pre-edit provenance,
+not live documentation dependencies after disposition. Their comments/docstrings,
+inputs and oracles remain unchanged. The labels are conceptual ledger stems, not
+links to retiring paths; only retained tests and canonical requirement owners are
+linked. These prose destinations do not make deleted filesystem paths resolve:
+frozen textual references remain intentional, not "zero remaining references."
+Disposition does not recreate superseded engine authority.
+
+| Historical ledger label            | Retained referring tests                                                                                                                                                                     | Permanent contract / qualification owner                                                                                                                                                                                                                                                                                                                           |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| selected-path-completion           | [Count/restore](tests/test_count_restore_completion.py#L1), [learning publication](tests/test_learning_publication_completion.py#L1), [publication](tests/test_publication_completion.py#L1) | [COUNT006](#8-authoritative-count) identity and [STATE001/003](#13-persistence-and-restart) atomic restore; [PRED009](#12-prediction-and-learning) postpublication learning; [PUBLIC001](#11-public-contract)/[PERF005](#15-performance-and-determinism) committed public frontier/cache behavior.                                                                 |
+| completion-learning-mapping        | [Deferred learning](tests/test_deferred_learning.py#L1)                                                                                                                                      | [PRED009](#12-prediction-and-learning)/[STATE013](#13-persistence-and-restart): the historical callback blocker is addressed by durable row debt, not premature count mutation.                                                                                                                                                                                    |
+| completion-legacy-mapping          | [0326 seeded](tests/test_legacy_incident_0326_seeded.py#L1), [2055 seeded](tests/test_legacy_incident_2055_seeded.py#L1)                                                                     | Preserve **L0326/L2055**, exact scalar/timing qualification under [TRAV021/TRAV020](#72-retained-traversal-component-contracts), [BELIEF](#6-per-zone-belief-model) and [STATE009](#13-persistence-and-restart), separately from [seedless public replay](#public-timeline-replay-boundary).                                                                       |
+| completion-physical-records        | [Physical contracts](tests/test_physical_record_contracts.py#L1)                                                                                                                             | Actual constructors and physical-frontier validation under [EVID](#5-physical-sensor-episodes), [HEALTH/PATH-STATE001](#approved-selected-path-cutover-contract--2026-09-12) and [STATE001/002](#13-persistence-and-restart), including atomicity and continuation.                                                                                                |
+| selected-prediction-execution      | [Prediction](tests/test_prediction.py#L1)                                                                                                                                                    | [PRED001–009](#12-prediction-and-learning): authentic component learning versus selected execution; [PATH004](#approved-selected-path-cutover-contract--2026-09-12) never permits selected-only learning.                                                                                                                                                          |
+| completion-runtime-wire            | [Runtime/wire](tests/test_runtime_wire_contracts.py#L1)                                                                                                                                      | [PUBLIC001/002](#11-public-contract)/[PRED009](#12-prediction-and-learning) publication-failure saving; [COUNT006](#8-authoritative-count) timestamps; [STATE001/003/013](#13-persistence-and-restart) grants and strict wire rejection.                                                                                                                           |
+| completion-scalar-retention        | [Scalar retention](tests/test_scalar_retention_contracts.py#L1)                                                                                                                              | [PATH004/005](#approved-selected-path-cutover-contract--2026-09-12) displacement, [POLICY013](#9-automation-policy)/[POLICY014](#approved-unsupported-jump-and-release-follow-up--2026-09-13) full dwell, [TRAV016/018](#72-retained-traversal-component-contracts) qualified reacquisition and [COUNT008/011](#8-authoritative-count) genuine support boundaries. |
+| completion-selected-boundaries     | [Selected contracts](tests/test_selected_path_contracts.py#L1)                                                                                                                               | [PATH001–004/PATH-STATE001](#approved-selected-path-cutover-contract--2026-09-12) origin/route/slot integrity and consumption chronology; [STATE001/002/008](#13-persistence-and-restart) atomic continuation.                                                                                                                                                     |
+| selected-path-followup             | [Follow-up state](tests/test_selected_path_followup_state.py#L1)                                                                                                                             | [PATH001–005](#approved-selected-path-cutover-contract--2026-09-12)/[STATE001/008/009](#13-persistence-and-restart) follow-up guarantees; stored learned counts are calibration, not selected learning under [PATH004](#approved-selected-path-cutover-contract--2026-09-12).                                                                                      |
+| completion-persistence-mapping     | [Cadence preservation](tests/test_zone_model_cadence_preservation.py#L1)                                                                                                                     | Preserve **A–K/R–S/V/W** component, **L–Q/X–Y** frontier and **T/U/current-zero** distinctions; [TRAV020](#72-retained-traversal-component-contracts)/[EVID013](#5-physical-sensor-episodes) qualification and [STATE009/011](#13-persistence-and-restart) deadlines/fingerprints do not restore legacy live authority.                                            |
+| completion-engine-endpoint-mapping | [Engine](tests/test_zone_model_engine.py#L1)                                                                                                                                                 | Original-ID component/current-engine separation under [PATH/HEALTH](#approved-selected-path-cutover-contract--2026-09-12), [COUNT](#8-authoritative-count), [POLICY](#9-automation-policy) and [STATE](#13-persistence-and-restart); preserved inputs and genuine qualification boundaries.                                                                        |
+| completion-gap-mapping             | [Supported gap](tests/test_zone_model_supported_gap_acquisition.py#L1)                                                                                                                       | Current [PATH006/HEALTH004](#approved-unsupported-jump-and-release-follow-up--2026-09-13) rejection/next-pair behavior versus retained [TRAV021](#72-retained-traversal-component-contracts) component authority; no current gap acquisition.                                                                                                                      |

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
+from copy import copy
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 from ..const import PRODUCT_MAX_OCCUPANTS
@@ -30,6 +31,17 @@ from .types import (
 DIAGNOSTIC_COUNTER_LIMIT = 2**31 - 1
 
 
+@dataclass(frozen=True)
+class PreparedSupportUpdate:
+    """Validated operation-local result; never serialized or reusable."""
+
+    owner: AnonymousSupportTracker
+    revision: int
+    at: datetime
+    transition: SupportTransition
+    counters: tuple[tuple[str, int], ...]
+
+
 class AnonymousSupportTracker:
     """Track count-only movement lineage without occupant identity."""
 
@@ -53,6 +65,7 @@ class AnonymousSupportTracker:
         self._bindings: tuple[SupportTokenBinding, ...] = ()
         self._latest_transition: SupportTransitionEvent | None = None
         self._advanced_at: datetime | None = None
+        self._revision = 0
         self._counters = {
             "support_created": 0,
             "support_transferred": 0,
@@ -301,6 +314,68 @@ class AnonymousSupportTracker:
         *,
         prepared_handoff: SupportTransition | None = None,
     ) -> SupportTransition:
+        return self.commit_prepared(self.prepare(
+            at, effect, authorization, issued_target_token, episodes, beliefs,
+            active_tokens, retained_tokens, prepared_handoff=prepared_handoff,
+        ))
+
+    def prepare(
+        self,
+        at: datetime,
+        effect: EpisodeEffect | None,
+        authorization: TraversalAuthorization | None,
+        issued_target_token: TraversalToken | None,
+        episodes: Sequence[EpisodeState],
+        beliefs: Sequence[ZoneBeliefState],
+        active_tokens: Sequence[TraversalToken],
+        retained_tokens: Sequence[TraversalToken],
+        *,
+        prepared_handoff: SupportTransition | None = None,
+    ) -> PreparedSupportUpdate:
+        """Compute on a bounded detached view of the preauthorization basis."""
+
+        self._validate_time(at)
+        if issued_target_token is not None and issued_target_token not in active_tokens:
+            raise ValueError("Support application requires its live target token")
+        candidate = copy(self)
+        candidate._counters = dict(self._counters)
+        candidate._apply(
+            at, effect, authorization, issued_target_token, episodes, beliefs,
+            active_tokens, retained_tokens, prepared_handoff=prepared_handoff,
+        )
+        # Selection above may use a frozen source binding evicted by issuance.
+        # Only final retained tokens may remain bound after the transfer.
+        transition = candidate._advanced_state(
+            at, episodes, beliefs, active_tokens, retained_tokens,
+        )
+        candidate._commit(transition, at)
+        return PreparedSupportUpdate(
+            self, self._revision, at, transition,
+            tuple(sorted(candidate._counters.items())),
+        )
+
+    def commit_prepared(self, prepared: PreparedSupportUpdate) -> SupportTransition:
+        """Commit once after publication, including a caught callback failure."""
+
+        if prepared.owner is not self or prepared.revision != self._revision:
+            raise ValueError("Prepared support update is stale or already committed")
+        result = self._commit(prepared.transition, prepared.at)
+        self._counters = dict(prepared.counters)
+        return result
+
+    def _apply(
+        self,
+        at: datetime,
+        effect: EpisodeEffect | None,
+        authorization: TraversalAuthorization | None,
+        issued_target_token: TraversalToken | None,
+        episodes: Sequence[EpisodeState],
+        beliefs: Sequence[ZoneBeliefState],
+        active_tokens: Sequence[TraversalToken],
+        retained_tokens: Sequence[TraversalToken],
+        *,
+        prepared_handoff: SupportTransition | None = None,
+    ) -> SupportTransition:
         if authorization is not None and authorization.settled_handoff is not None:
             if prepared_handoff is None:
                 if effect is None or issued_target_token is None:
@@ -316,6 +391,7 @@ class AnonymousSupportTracker:
             beliefs,
             active_tokens,
             retained_tokens,
+            preserve_source_bindings=True,
         )
         reacquiring_settled_endpoint = bool(
             effect is not None
@@ -580,6 +656,8 @@ class AnonymousSupportTracker:
         beliefs: Sequence[ZoneBeliefState],
         active_tokens: Sequence[TraversalToken],
         retained_tokens: Sequence[TraversalToken],
+        *,
+        preserve_source_bindings: bool = False,
     ) -> SupportTransition:
         self._validate_time(at)
         state_by_node = self._unique_by(episodes, "node_id", "episode")
@@ -594,6 +672,16 @@ class AnonymousSupportTracker:
             if support.state == "moving":
                 if support.valid_until is None or support.valid_until <= at:
                     remove_reason = "moving_expiry"
+                elif not preserve_source_bindings and not any(
+                    binding.support_id == support.support_id
+                    and binding.token_id == token.token_id
+                    and token.node_id == support.current_node_id
+                    and token.episode_id == support.current_episode_id
+                    and token.accepted_at == support.updated_at
+                    and token.valid_until == support.valid_until
+                    for binding in self._bindings for token in active_tokens
+                ):
+                    remove_reason = "missing_target_token"
             elif not self._settled_support_valid(
                 support,
                 state_by_node,
@@ -619,7 +707,8 @@ class AnonymousSupportTracker:
         bindings = {
             item.token_id: item.support_id
             for item in self._bindings
-            if item.token_id in token_by_id and item.support_id in supports
+            if (preserve_source_bindings or item.token_id in token_by_id)
+            and item.support_id in supports
         }
         supports, bindings, latest = self._coalesce_current_components(
             supports,
@@ -686,6 +775,8 @@ class AnonymousSupportTracker:
             and belief is not None
             and not belief.health_warning
             and (
+                not require_active_belief
+                or
                 state.status != "clear"
                 or (
                     belief.outward_context is None
@@ -930,6 +1021,7 @@ class AnonymousSupportTracker:
         self._bindings = transition.bindings
         self._latest_transition = latest
         self._advanced_at = at
+        self._revision += 1
         return transition
 
     def _increment_counter(self, name: str, amount: int) -> None:

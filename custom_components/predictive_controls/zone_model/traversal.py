@@ -290,6 +290,7 @@ class TraversalFrontier:
             or state.traversal_valid_until is None
             or state.traversal_valid_until <= effect.at
             or not authorization.authorized
+            or authorization.reason == "supported_gap_acquisition"
             or authorization.target_episode_id != effect.episode_id
             or authorization.track_confidence is None
             or authorization.provenance_kind is None
@@ -317,7 +318,7 @@ class TraversalFrontier:
         )
         self._tokens[token_id] = token
         self._current.add(token_id)
-        self._enforce_token_bound()
+        self._enforce_token_bound(protected_token_id=token_id)
         return token
 
     def authorize_interaction(
@@ -355,10 +356,41 @@ class TraversalFrontier:
             True,
         )
 
-    def sync(self, state: EpisodeState, at: datetime) -> None:
+    @staticmethod
+    def preserves_warned_token(
+        token: TraversalToken, state: EpisodeState, at: datetime,
+    ) -> bool:
+        """REQ-TRAV-020: original historical authority, never renewed evidence."""
+
+        return bool(
+            state.cadence_warning
+            and state.cadence_warning_reason == "impossible_cadence"
+            and state.status == "asserted"
+            and state.known_on
+            and not state.health_warning
+            and state.traversal_valid_until is None
+            and token.node_id == state.node_id
+            and token.zone == state.zone
+            and token.profile_name == state.profile_name
+            and token.role == "transition"
+            and token.episode_id == state.episode_id
+            and token.accepted_at == state.started_at
+            and token.continuity_reopened_at is None
+            and token.accepted_at <= at < token.valid_until
+            and TraversalFrontier._token_timing_valid(token)
+        )
+
+    def sync(
+        self, state: EpisodeState, at: datetime, *, invalidate: bool = False,
+    ) -> None:
         self.advance(at)
         self._validated_episode(state)
-        if state.status in {"degraded", "unavailable"} or state.cadence_warning:
+        if (
+            invalidate
+            or state.status in {"degraded", "unavailable"}
+            or state.health_warning
+            or state.cadence_warning
+        ):
             self._pending_by_zone = {
                 zone: candidate
                 for zone, candidate in self._pending_by_zone.items()
@@ -370,7 +402,15 @@ class TraversalFrontier:
                 if token.node_id == state.node_id
             )
             for token_id in token_ids:
-                self._remove_token(token_id)
+                token = self._tokens.get(token_id)
+                if (
+                    not invalidate
+                    and token is not None
+                    and self.preserves_warned_token(token, state, at)
+                ):
+                    self._current.discard(token_id)
+                else:
+                    self._remove_token(token_id)
             return
         token_id = f"{state.node_id}:{state.episode_id}"
         if token_id not in self._tokens:
@@ -389,6 +429,8 @@ class TraversalFrontier:
         corroborating_states: Sequence[EpisodeState] = (),
         settled_support: AnonymousOccupancySupport | None = None,
         handoff_resolver: Callable[[], SettledAdjacentHandoff | None] | None = None,
+        gap_resolver: Callable[[], TraversalToken | None] | None = None,
+        allow_missed_edge: bool = True,
     ) -> TraversalAuthorization:
         self.advance(at)
         target_node = self._validated_episode(target)
@@ -423,6 +465,8 @@ class TraversalFrontier:
             source_states=source_states,
             settled_support=settled_support,
             handoff_resolver=handoff_resolver,
+            gap_resolver=gap_resolver,
+            allow_missed_edge=allow_missed_edge,
         )
 
     def authorize_correlated_target(
@@ -432,6 +476,8 @@ class TraversalFrontier:
         *,
         settled_support: AnonymousOccupancySupport | None = None,
         handoff_resolver: Callable[[], SettledAdjacentHandoff | None] | None = None,
+        gap_resolver: Callable[[], TraversalToken | None] | None = None,
+        allow_missed_edge: bool = True,
     ) -> TraversalAuthorization:
         """Authorize correlated target evidence without creating source authority."""
 
@@ -466,6 +512,8 @@ class TraversalFrontier:
             source_states={},
             settled_support=settled_support,
             handoff_resolver=handoff_resolver,
+            gap_resolver=gap_resolver,
+            allow_missed_edge=allow_missed_edge,
         )
 
     def _authorize_from_context(
@@ -480,6 +528,8 @@ class TraversalFrontier:
         source_states: Mapping[tuple[str, str], EpisodeState],
         settled_support: AnonymousOccupancySupport | None,
         handoff_resolver: Callable[[], SettledAdjacentHandoff | None] | None,
+        gap_resolver: Callable[[], TraversalToken | None] | None,
+        allow_missed_edge: bool,
     ) -> TraversalAuthorization:
         assert target.episode_id is not None
         target_episode_id = target.episode_id
@@ -511,7 +561,7 @@ class TraversalFrontier:
         missed = tuple(
             token
             for token in candidates
-            if token not in adjacent
+            if allow_missed_edge and token not in adjacent
             and self._missed_edge(
                 token,
                 target.node_id,
@@ -618,6 +668,15 @@ class TraversalFrontier:
                 path = (handoff.source_node_id, target.node_id)
                 provenance = "settled_adjacent_transfer"
                 equivalent_strength = True
+            elif (
+                gap_resolver is not None
+                and (gap_source := gap_resolver()) is not None
+            ):
+                sources = (gap_source,)
+                reason = "supported_gap_acquisition"
+                confidence = "provisional"
+                path = (target.node_id,)
+                provenance = "supported_gap_acquisition"
             elif remember_pending:
                 self._remember_pending(target, at, target_node.reliability)
         authorized = confidence is not None
@@ -970,6 +1029,9 @@ class TraversalFrontier:
         at: datetime,
         source_state: EpisodeState | None,
     ) -> bool:
+        # Explicit map times must not bypass the dedicated support/health gate.
+        if token.provenance_kind == "settled_adjacent_transfer":
+            return False
         departure_at = token.accepted_at
         if (
             source_state is not None
@@ -1019,7 +1081,7 @@ class TraversalFrontier:
             key: use for key, use in self._uses.items() if use.token_id != token_id
         }
 
-    def _enforce_token_bound(self) -> None:
+    def _enforce_token_bound(self, *, protected_token_id: str | None = None) -> None:
         while len(self._tokens) + len(self._retained) > self._token_limit:
             if self._retained:
                 oldest = min(
@@ -1028,7 +1090,8 @@ class TraversalFrontier:
                 )
             else:
                 oldest = min(
-                    self._tokens.values(),
+                    (token for token in self._tokens.values()
+                     if token.token_id != protected_token_id),
                     key=lambda item: (item.valid_until, item.token_id),
                 )
             self._remove_token(oldest.token_id)

@@ -19,6 +19,7 @@ from custom_components.predictive_controls.automation_summary import (
     runtime_automation_summary,
 )
 from custom_components.predictive_controls.model import PredictiveMap
+from tests.runtime_replay import RuntimeScenario
 from tests.test_entity_platforms import install_fake_homeassistant
 from tests.test_prediction import make_map as prediction_map
 
@@ -461,7 +462,7 @@ def test_runtime_adapter_boundaries_and_callbacks(
         )
     )
     runtime._async_publish_diagnostics(NOW)  # noqa: SLF001
-    runtime.observe_node("hall", NOW + timedelta(seconds=1))
+    runtime.observe_node("hall", datetime.now(UTC))
     assert publications
 
     runtime._unsubscribe = object()  # noqa: SLF001
@@ -607,6 +608,11 @@ def test_runtime_migrates_legacy_state_with_current_authoritative_count(
 def test_runtime_ignores_legacy_prediction_actions_and_reports_health(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Keep the synthetic action/pair inputs; supported ON is no longer a fault.
+
+    HEALTH001/003 warning publication is protected separately by
+    test_runtime_unsupported_on_publishes_600_second_warning_without_activation.
+    """
     module = runtime_module(monkeypatch)
     action = PredictiveAction(
         "prelight",
@@ -628,15 +634,18 @@ def test_runtime_ignores_legacy_prediction_actions_and_reports_health(
     runtime._async_refresh_active_confidence(  # noqa: SLF001
         NOW + timedelta(minutes=20)
     )
-    runtime.confidence.refresh_active = lambda _now: ()
+    runtime.confidence.refresh_active = lambda _now, *, defer_learning=False: ()
     runtime._async_refresh_active_confidence(  # noqa: SLF001
         NOW + timedelta(minutes=20)
     )
     runtime._async_refresh_active_confidence(  # noqa: SLF001
         NOW + timedelta(minutes=20)
     )
-    assert "sensor_health_degraded" in runtime.problem_reasons
-    assert "physical_sensor_episode" in runtime.problem_sources
+    assert runtime.problem_reasons == ()
+    assert runtime.problem_sources == ()
+    assert runtime.confidence.reliability_warning_occurrences == ()
+    assert runtime.confidence.policy_states["hall"].active
+    assert hass.services.calls == []
     runtime._async_expire_transient_state(NOW + timedelta(minutes=21))  # noqa: SLF001
     transient = module.PredictiveControlsRuntime(
         _FakeHass(), make_map(), (), transition_window=30, expected_occupants=1
@@ -682,6 +691,55 @@ def test_runtime_ignores_legacy_prediction_actions_and_reports_health(
         expected_occupants=1,
     )
     partial.start()
+
+
+@pytest.mark.parametrize("count", (1, 2))
+def test_runtime_unsupported_on_publishes_600_second_warning_without_activation(
+    count: int,
+) -> None:
+    """Synthetic HEALTH001/003 inverse, through real sampled Reliability writes.
+
+    Same runtime map, but only hall ON: no office positive supplies path support.
+    Registered timers, not forced entity refreshes, publish and clear the warning.
+    """
+    with RuntimeScenario(NOW) as scene:
+        replay = scene.create(make_map(), count).watch_reliability()
+        replay.send("binary_sensor.hall", "on", NOW)
+        replay.advance(NOW + timedelta(seconds=599))
+        before = replay.reliability_attributes
+        assert before is not None
+        assert before["active_count"] == 0
+        assert before["warnings"] == []
+        assert replay.runtime.problem_reasons == ()
+
+        replay.advance(NOW + timedelta(seconds=600))
+        published = replay.reliability_attributes
+        assert published is not None
+        assert replay.reliability_writes[-1].at == NOW + timedelta(seconds=600)
+        assert published["active_count"] == 1
+        rows = published["warnings"]
+        assert isinstance(rows, list) and len(rows) == 1
+        assert rows[0]["node_id"] == "hall"
+        assert rows[0]["kind"] == "suspected_stuck"
+        assert rows[0]["active_reasons"] == ["assertion_timeout"]
+        assert rows[0]["first_observed_at"] == (
+            NOW + timedelta(seconds=600)
+        ).isoformat()
+        assert replay.runtime.problem_reasons == ("sensor_health_degraded",)
+        assert replay.runtime.problem_sources == ("physical_sensor_episode",)
+
+        replay.advance(NOW + timedelta(seconds=610))
+        assert replay.reliability_attributes == published
+        assert not replay.view().active("hall")
+        assert replay.edges == []
+
+        replay.send("binary_sensor.hall", "off", NOW + timedelta(seconds=611))
+        replay.advance(NOW + timedelta(seconds=630))
+        recovered = replay.reliability_attributes
+        assert recovered is not None and recovered["active_count"] == 0
+        assert replay.reliability_writes[-1].at == NOW + timedelta(seconds=630)
+        assert replay.runtime.problem_reasons == ()
+        assert replay.edges == []
 
 
 @dataclass

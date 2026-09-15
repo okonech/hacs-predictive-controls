@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import math
+from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import fields, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import pytest
 
@@ -39,6 +41,7 @@ from custom_components.predictive_controls.zone_model.persistence import (
     serialize_target_state,
     target_map_fingerprint,
 )
+from custom_components.predictive_controls.zone_model.prediction import PredictionLease
 from custom_components.predictive_controls.zone_model.types import (
     SensorInput,
     TraversalAuthorization,
@@ -55,6 +58,523 @@ EXISTING_FAST_PATHS = {
     "correlated_continuity", "local_interaction", "missed_edge", "mature_prediction",
     "same_zone", "third_node_confirmation",
 }
+CURRENT_FAST_PATHS = (EXISTING_FAST_PATHS | HANDOFF_PATHS) - {"missed_edge"}
+# These existing mechanism-mutation cases exercise selected movement, not
+# predicted policy grants. Mature prediction remains mandatory in live acceptance.
+SELECTED_ACQUISITION_PATHS = CURRENT_FAST_PATHS - {"mature_prediction"}
+
+
+# The normal repository check intentionally skips importing benchmark internals.
+# Keep the actual call/return contracts here, and validate their dynamic returns.
+PredictionProof = tuple[
+    PredictiveMap, tuple[PredictionLease, ...], Mapping[str, Mapping[str, float]],
+]
+FastPathOperation = tuple[ZoneModelSnapshot, ZoneModelResult, str, str, datetime]
+FastPathPredicate = Callable[
+    [str, ZoneModelSnapshot, ZoneModelResult, str, str, datetime,
+     PredictionProof | None], bool,
+]
+RejectionChecks = Callable[
+    [ZoneModelSnapshot, ZoneModelResult, str, str, datetime], dict[str, bool],
+]
+MeasurementReports = dict[str, dict[str, object]]
+
+
+class AcquisitionPredicate(Protocol):
+    def __call__(
+        self, before: ZoneModelSnapshot, result: ZoneModelResult,
+        target_zone: str, event_at: datetime,
+        prediction: PredictionProof | None = None,
+        *, require_prediction: bool = False,
+    ) -> bool: ...
+
+
+def _checked_boolean(value: object) -> bool:
+    """Validate the skipped-import return, never coerce a truthy non-boolean."""
+    assert isinstance(value, bool)
+    return value
+
+
+def _checked_flags(value: object) -> dict[str, bool]:
+    """Preserve every flag/key while checking the real predicate return shape."""
+    assert isinstance(value, dict)
+    flags: dict[str, bool] = {}
+    for key, flag in value.items():
+        assert isinstance(key, str)
+        flags[key] = _checked_boolean(flag)
+    return flags
+
+
+def _checked_reports(value: object) -> MeasurementReports:
+    """Check collection/record keys without replacing any measurement values."""
+    assert isinstance(value, dict)
+    reports: dict[str, dict[str, object]] = {}
+    for name, raw in value.items():
+        assert isinstance(name, str)
+        assert isinstance(raw, dict)
+        record: dict[str, object] = {}
+        for key, item in raw.items():
+            assert isinstance(key, str)
+            record[key] = item
+        reports[name] = record
+    return reports
+
+
+def _checked_number(value: object) -> int | float:
+    assert isinstance(value, (int, float)) and not isinstance(value, bool)
+    return value
+
+
+def _complete_component_reports(iterations: int) -> tuple[
+    dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]],
+]:
+    """Explicit COMPONENT gate operands, never claimed as measured acquisitions."""
+    fast = {name: {
+        "current_equivalent": benchmark.FAST_PATH_EQUIVALENTS[name],
+        "requested_count": iterations, "attempt_count": iterations,
+        "prior_off_count": iterations, "sample_count": iterations,
+        "activation_count": iterations, "path_qualification_count": iterations,
+        "publication_count": iterations, "public_write_count": iterations,
+        "fanout_count": iterations, "registered_entity_count": 34,
+        "dispatch_callback_count": 18 * iterations,
+        "update_subscriber_count": 18, "failure_reasons": [],
+        "all_activated": True, "all_path_qualified": True,
+        "all_publications_scheduled": True, "p99_gate": True, "hard_gate": True,
+        "p99_ms": FAST_PATH_P99_MS, "max_ms": FAST_PATH_HARD_MS - 0.001,
+    } for name in CURRENT_FAST_PATHS}
+    timer = {name: {
+        "requested_count": iterations, "attempt_count": iterations,
+        "sample_count": iterations, "completion_count": iterations,
+        "all_completed": True, "p95_gate": True, "hard_gate": True,
+        "p95_ms": benchmark.PREFERRED_CALLBACK_MS,
+        "max_ms": benchmark.HARD_CALLBACK_MS,
+    } for name in ("pending_expiry", "unsupported_on_health_deadline")}
+    negative = {"rejected_jump": {
+        "requested_count": iterations, "attempt_count": iterations,
+        "sample_count": iterations, "outcome": "rejected", "failure_reasons": [],
+        "on_write_count": 0, "acquired_event_count": 0,
+        "public_write_count": iterations, "registered_entity_count": 34,
+        "dispatch_callback_count": 18 * iterations,
+        "update_subscriber_count": 18, "occupants": 2,
+        "p99_ms": FAST_PATH_P99_MS, "max_ms": FAST_PATH_HARD_MS - 0.001,
+        **{f"{key}_count": iterations for key in (
+            "prior_off", "remained_off", "rejection", "warning", "selection_unchanged",
+            "no_acquired", "fanout", "qualified",
+        )},
+    }}
+    return fast, timer, negative
+
+
+def _stub_complete_reports(monkeypatch: pytest.MonkeyPatch, iterations: int) -> None:
+    fast, timer, negative = _complete_component_reports(iterations)
+    monkeypatch.setattr(benchmark, "_measure_fast_paths", lambda *a, **k: fast)
+    monkeypatch.setattr(benchmark, "_measure_timer_work", lambda *a, **k: timer)
+    monkeypatch.setattr(benchmark, "_measure_rejected_jumps", lambda *a, **k: negative)
+
+
+@pytest.mark.parametrize("family", ("fast", "timer", "negative"))
+@pytest.mark.parametrize("mutation", (
+    "unchanged", "empty", "missing", "renamed", "extra", "partial", "flag_only",
+    "nan", "over", "boolean_count",
+))
+def test_required_workload_inventory_and_counters_fail_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    capsys: pytest.CaptureFixture[str], family: str, mutation: str,
+) -> None:
+    """PERF001/002/007/008: forged flags and absent paths cannot pass CLI."""
+    fast, timer, negative = _complete_component_reports(2)
+    reports = {"fast": fast, "timer": timer, "negative": negative}
+    selected = reports[family]
+    key = sorted(selected)[0]
+    trace = selected[key]
+    if mutation == "empty":
+        selected.clear()
+    elif mutation == "missing":
+        del selected[key]
+    elif mutation == "renamed":
+        selected["not_the_workload"] = selected.pop(key)
+    elif mutation == "extra":
+        selected["extra_workload"] = dict(trace)
+    elif mutation == "partial":
+        trace["sample_count"] = 1
+    elif mutation == "flag_only":
+        trace["completion_count" if family == "timer" else
+              "qualified_count" if family == "negative" else
+              "path_qualification_count"] = 1
+    elif mutation == "boolean_count":
+        trace["attempt_count"] = True
+    elif mutation == "nan":
+        trace["max_ms"] = float("nan")
+    elif mutation == "over":
+        trace["max_ms"] = (benchmark.HARD_CALLBACK_MS + 0.001
+                           if family == "timer" else FAST_PATH_HARD_MS)
+    monkeypatch.setattr(benchmark, "_measure_fast_paths", lambda *a, **k: fast)
+    monkeypatch.setattr(benchmark, "_measure_timer_work", lambda *a, **k: timer)
+    monkeypatch.setattr(benchmark, "_measure_rejected_jumps", lambda *a, **k: negative)
+    report = run_benchmark(MAP_PATH, event_count=2)
+    assert report["passed"] is (mutation == "unchanged")
+    output = tmp_path / "inventory.json"
+    monkeypatch.setattr("sys.argv", ["benchmark", "--events", "2", "--output",
+                                     str(output)])
+    if mutation == "unchanged":
+        main()
+    else:
+        with pytest.raises(SystemExit) as error:
+            main()
+        assert error.value.code == (2 if mutation == "nan" else 1)
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    if mutation == "nan":
+        assert not output.exists()
+        assert json.loads(captured.err)["passed"] is False
+    else:
+        assert captured.err == ("" if mutation == "unchanged" else output.read_text())
+        assert json.loads(output.read_text())["passed"] is (mutation == "unchanged")
+
+
+def test_actual_mature_prediction_is_an_acquisition_not_a_local_episode(
+    predictive_map: PredictiveMap,
+) -> None:
+    """Minimal predicate red, separate from the independently proved write bug."""
+    engine = ZoneModelEngine(predictive_map, 2, NOW)
+    for _ in range(11):
+        engine.prediction_manager.chain.observe("stairs_bottom_sensor",
+                                                 "guest_bedroom_sensor")
+    for ms, node in enumerate(("dining_sensor", "foyer_sensor"), 1):
+        engine.observe(SensorInput(next(iter(predictive_map.nodes[node].entities.values())),
+                                   "on", NOW + timedelta(milliseconds=ms)))
+    before = engine.snapshot
+    at = NOW + timedelta(milliseconds=3)
+    result = engine.observe(SensorInput(next(iter(
+        predictive_map.nodes["stairs_bottom_sensor"].entities.values())), "on", at))
+    assert any(e.zone == "guest_bedroom" and e.kind == "acquired"
+               for e in result.policy_events)
+    assert any(lease.mature and lease.target_zone == "guest_bedroom"
+               for lease in engine.prediction_manager.leases)
+    # Both gates require real post-operation independent state.
+    proof = (predictive_map, engine.prediction_manager.leases,
+             engine.prediction_manager.chain.counts)
+    assert benchmark._acquisition_qualified(before, result, "guest_bedroom", at, proof)
+    assert benchmark._fast_path_qualified(
+        "mature_prediction", before, result, "stairs_bottom_sensor", "guest_bedroom",
+        at, proof,
+    )
+
+
+def test_duplicate_matching_acquisition_decision_is_not_qualified(
+    predictive_map: PredictiveMap,
+) -> None:
+    engine = ZoneModelEngine(predictive_map, 2, NOW)
+    engine.observe(SensorInput(next(iter(
+        predictive_map.nodes["entrance_sensor"].entities.values())), "on", NOW))
+    before = engine.snapshot
+    at = NOW + timedelta(seconds=1)
+    result = engine.observe(SensorInput(next(iter(
+        predictive_map.nodes["bathroom_laundry_sensor"].entities.values())), "on", at))
+    assert benchmark._acquisition_qualified(before, result, "bathroom_laundry", at)
+    decision = next(d for d in result.policy_decisions if d.event_kind == "acquired")
+    corrupted = replace(result, policy_decisions=(*result.policy_decisions, decision))
+    assert not benchmark._acquisition_qualified(
+        before, corrupted, "bathroom_laundry", at,
+    )
+
+
+@pytest.mark.parametrize("mutation", (
+    "unchanged", "missing_proof", "missing_leases", "missing_grant", "missing_counts",
+    "immature", "support", "probability", "full_row", "expired", "wrong_source",
+    "wrong_target_node", "wrong_target_zone", "wrong_time", "prior_on", "no_event",
+    "duplicate_event", "refresh", "no_decision", "duplicate_decision", "wrong_reason",
+    "wrong_evidence", "uncommitted_authorization",
+))
+def test_mature_prediction_requires_independent_provenance_in_both_predicates(
+    predictive_map: PredictiveMap, mutation: str,
+) -> None:
+    engine = ZoneModelEngine(predictive_map, 2, NOW)
+    for _ in range(11):
+        engine.prediction_manager.chain.observe("stairs_bottom_sensor",
+                                                 "guest_bedroom_sensor")
+    for ms, node in enumerate(("dining_sensor", "foyer_sensor"), 1):
+        engine.observe(SensorInput(next(iter(
+            predictive_map.nodes[node].entities.values())), "on",
+            NOW + timedelta(milliseconds=ms)))
+    before = engine.snapshot
+    at = NOW + timedelta(milliseconds=3)
+    source, zone = "stairs_bottom_sensor", "guest_bedroom"
+    result = engine.observe(SensorInput(next(iter(
+        predictive_map.nodes[source].entities.values())), "on", at))
+    leases = engine.prediction_manager.leases
+    counts = engine.prediction_manager.chain.counts
+    proof: PredictionProof | None = (predictive_map, leases, counts)
+    assert benchmark._acquisition_qualified(before, result, zone, at, proof)
+    assert benchmark._fast_path_qualified("mature_prediction", before, result,
+                                          source, zone, at, proof)
+    if mutation == "missing_proof":
+        proof = None
+    elif mutation == "missing_leases":
+        proof = (predictive_map, (), counts)
+    elif mutation == "missing_grant":
+        result = replace(result, snapshot=replace(result.snapshot,
+                                                  selected_prediction_grants=()))
+    elif mutation in {"missing_counts", "full_row"}:
+        if mutation == "missing_counts":
+            counts = {}
+        else:
+            counts[source]["stairs_top_sensor"] = 100.0
+        proof = (predictive_map, leases, counts)
+    elif mutation in {"immature", "support", "probability", "expired", "wrong_source",
+                      "wrong_target_node"}:
+        changes: dict[str, object] = {
+            "immature": {"mature": False}, "support": {"support": 4.0},
+            "probability": {"probability": 0.84},
+            "expired": {"expires_at": at},
+            "wrong_source": {"source_node_id": "dining_sensor"},
+            "wrong_target_node": {"target_node_id": "stairs_top_sensor"},
+        }
+        fields_changed = changes[mutation]
+        assert isinstance(fields_changed, dict)
+        leases = tuple(
+            replace(lease, **fields_changed) if lease.target_zone == zone else lease
+            for lease in leases
+        )
+        proof = (predictive_map, leases, counts)
+    elif mutation == "wrong_target_zone":
+        zone = "office_a"
+    elif mutation == "wrong_time":
+        at += timedelta(microseconds=1)
+    elif mutation == "prior_on":
+        before = replace(before, policy_states=result.snapshot.policy_states)
+    elif mutation in {"no_event", "duplicate_event", "refresh"}:
+        events = tuple(e for e in result.policy_events if e.zone == zone)
+        target_event, = events
+        kept = tuple(e for e in result.policy_events if e.zone != zone)
+        replacement = (() if mutation == "no_event" else
+                       (target_event, target_event) if mutation == "duplicate_event"
+                       else (replace(target_event, kind="refreshed"),))
+        result = replace(result, policy_events=(*kept, *replacement))
+    elif mutation in {"no_decision", "duplicate_decision", "wrong_reason",
+                      "wrong_evidence"}:
+        decision = next(d for d in result.policy_decisions
+                        if d.zone == zone and d.event_kind == "acquired")
+        kept_decisions = tuple(d for d in result.policy_decisions if d is not decision)
+        replacement_decisions = (
+            () if mutation == "no_decision" else
+            (decision, decision) if mutation == "duplicate_decision" else
+            (replace(decision, reason="acquired"),) if mutation == "wrong_reason" else
+            (replace(decision, evidence_ids=()),)
+        )
+        result = replace(result, policy_decisions=(*kept_decisions,
+                                                   *replacement_decisions))
+    elif mutation == "uncommitted_authorization":
+        result = replace(result, authorizations=())
+    assert benchmark._acquisition_qualified(before, result, zone, at, proof) is (
+        mutation == "unchanged"
+    )
+    assert benchmark._fast_path_qualified("mature_prediction", before, result,
+                                          source, zone, at, proof) is (
+        mutation == "unchanged"
+    )
+
+
+@pytest.fixture
+def actual_mature_prediction_operation(predictive_map: PredictiveMap) -> tuple[
+    ZoneModelSnapshot, ZoneModelResult, str, str, datetime, PredictionProof,
+]:
+    """Reuse the actual eleven-support history without altering existing fixtures."""
+    engine = ZoneModelEngine(predictive_map, 2, NOW)
+    source, zone = "stairs_bottom_sensor", "guest_bedroom"
+    for _ in range(11):
+        engine.prediction_manager.chain.observe(source, "guest_bedroom_sensor")
+    for ms, node in enumerate(("dining_sensor", "foyer_sensor"), 1):
+        engine.observe(SensorInput(next(iter(
+            predictive_map.nodes[node].entities.values())), "on",
+            NOW + timedelta(milliseconds=ms)))
+    before = engine.snapshot
+    at = NOW + timedelta(milliseconds=3)
+    result = engine.observe(SensorInput(next(iter(
+        predictive_map.nodes[source].entities.values())), "on", at))
+    proof = (predictive_map, engine.prediction_manager.leases,
+             engine.prediction_manager.chain.counts)
+    return before, result, source, zone, at, proof
+
+
+def _ordinary_prediction_counterfeit(
+    result: ZoneModelResult, zone: str, proof: PredictionProof,
+    mutation: str,
+) -> tuple[ZoneModelResult, PredictionProof]:
+    """Synthetic gate operands, not a claimed real acquisition or restorable state."""
+    model, leases, counts = proof
+    target = next(p for p in result.snapshot.policy_states if p.zone == zone)
+    lease = next(lease for lease in leases if lease.target_zone == zone)
+    source_zone = model.nodes[lease.current_node_id].occupancy_zone
+    source = next(p for p in result.snapshot.policy_states if p.zone == source_zone)
+    event = next(e for e in result.policy_events if e.zone == zone)
+    assert target.phase == "predicted" and source.phase == "active"
+    assert lease.mature and result.snapshot.selected_prediction_grants and counts
+    # Reuse the same operation's ordinary policy shape at the predicted target.
+    # Keep its real lease even when independent grants/counts are absent.
+    ordinary = replace(source, zone=zone, profile_name=target.profile_name)
+    snapshot = replace(result.snapshot, policy_states=tuple(
+        ordinary if p.zone == zone else p for p in result.snapshot.policy_states
+    ))
+    if mutation in {"missing_grants", "missing_both"}:
+        snapshot = replace(snapshot, selected_prediction_grants=())
+    if mutation in {"missing_counts", "missing_both"}:
+        counts = {}
+    corrupted = replace(
+        result, snapshot=snapshot,
+        policy_events=tuple(
+            replace(e, authorization_reason="selected_path", policy_reason="acquired")
+            if e.zone == zone else e for e in result.policy_events
+        ),
+        policy_decisions=tuple(
+            replace(d, reason="acquired", episode_id=event.episode_id,
+                    traversal_reason="selected_path")
+            if d.zone == zone else d for d in result.policy_decisions
+        ),
+    )
+    return corrupted, (model, leases, counts)
+
+
+@pytest.mark.parametrize("mutation", (
+    "full_proof", "missing_grants", "missing_counts", "missing_both",
+))
+def test_mature_prediction_rejects_ordinary_acquisition_counterfeit(
+    actual_mature_prediction_operation: tuple[
+        ZoneModelSnapshot, ZoneModelResult, str, str, datetime,
+        PredictionProof,
+    ], mutation: str,
+) -> None:
+    """Sept13 source review: an ordinary edge plus lease must not certify prediction."""
+    before, result, source, zone, at, proof = actual_mature_prediction_operation
+    assert benchmark._acquisition_qualified(before, result, zone, at, proof)
+    assert benchmark._fast_path_qualified(
+        "mature_prediction", before, result, source, zone, at, proof,
+    )
+    corrupted, proof = _ordinary_prediction_counterfeit(result, zone, proof, mutation)
+    # Ordinary acquisition semantics remain valid, even with incidental leases.
+    assert benchmark._acquisition_qualified(before, corrupted, zone, at, proof)
+    assert not benchmark._fast_path_qualified(
+        "mature_prediction", before, corrupted, source, zone, at, proof,
+    )
+
+
+@pytest.mark.parametrize("mutation", (
+    "full_proof", "missing_grants", "missing_counts", "missing_both",
+))
+def test_mature_measurement_rejects_ordinary_acquisition_counterfeit(
+    predictive_map: PredictiveMap, monkeypatch: pytest.MonkeyPatch, mutation: str,
+) -> None:
+    """Isolate the outer gate: a later predicate cannot hide cross-mode acceptance."""
+    original_acquisition: AcquisitionPredicate = benchmark._acquisition_qualified
+    original_path: FastPathPredicate = benchmark._fast_path_qualified
+    mutated = 0
+
+    def acquire(
+        before: ZoneModelSnapshot, result: ZoneModelResult, zone: str, at: datetime,
+        proof: PredictionProof | None = None, *, require_prediction: bool = False,
+    ) -> bool:
+        nonlocal mutated
+        if proof is not None:
+            assert original_acquisition(
+                before, result, zone, at, proof, require_prediction=require_prediction,
+            )
+            result, proof = _ordinary_prediction_counterfeit(
+                result, zone, proof, mutation,
+            )
+            mutated += 1
+        return _checked_boolean(
+            original_acquisition(
+                before, result, zone, at, proof, require_prediction=require_prediction,
+            ),
+        )
+
+    def path(
+        name: str, before: ZoneModelSnapshot, result: ZoneModelResult,
+        source: str, zone: str, at: datetime,
+        proof: PredictionProof | None = None,
+    ) -> bool:
+        if name == "mature_prediction":
+            return True  # Deliberately isolate the earlier acquisition gate.
+        return _checked_boolean(
+            original_path(name, before, result, source, zone, at, proof),
+        )
+
+    monkeypatch.setattr(benchmark, "_acquisition_qualified", acquire)
+    monkeypatch.setattr(benchmark, "_fast_path_qualified", path)
+    paths = _measure_fast_paths(predictive_map, iterations=1)
+    assert set(paths) == CURRENT_FAST_PATHS and mutated == 1
+    for name in SELECTED_ACQUISITION_PATHS:
+        assert paths[name]["activation_count"] == 1
+        assert paths[name]["path_qualification_count"] == 1
+        assert paths[name]["publication_count"] == paths[name]["sample_count"] == 1
+    trace = paths["mature_prediction"]
+    assert trace["prior_off_count"] == trace["public_write_count"] == 1
+    assert trace["activation_count"] == 0
+    assert trace["path_qualification_count"] == trace["publication_count"] == 0
+    assert trace["sample_count"] == 0
+    assert trace["p99_ms"] is None and trace["max_ms"] is None
+    assert not trace["all_activated"] and not trace["all_path_qualified"]
+    assert not trace["p99_gate"] and not trace["hard_gate"]
+
+
+@pytest.mark.parametrize("counter", (
+    "requested_count", "attempt_count", "sample_count", "prior_off_count",
+    "activation_count", "path_qualification_count", "publication_count",
+    "public_write_count", "fanout_count",
+))
+def test_positive_aggregate_requires_every_count_despite_true_flags(
+    counter: str,
+) -> None:
+    fast, _, _ = _complete_component_reports(2)
+    assert all(benchmark._positive_workload_gates(fast, 2, 16).values())
+    fast["mature_prediction"][counter] = 1
+    assert not all(benchmark._positive_workload_gates(fast, 2, 16).values())
+
+
+@pytest.mark.parametrize("counter", (
+    "requested_count", "attempt_count", "sample_count", "completion_count",
+))
+def test_timer_aggregate_requires_every_count_despite_true_flags(counter: str) -> None:
+    _, timer, _ = _complete_component_reports(2)
+    assert all(benchmark._timer_workload_gates(timer, 2).values())
+    timer["pending_expiry"][counter] = 1
+    assert not all(benchmark._timer_workload_gates(timer, 2).values())
+
+
+@pytest.mark.parametrize(("metric", "value", "passes"), (
+    ("p99_ms", 5.0, True), ("p99_ms", 5.000001, False),
+    ("max_ms", 9.999999, True), ("max_ms", 10.0, False),
+    ("p99_ms", -1.0, False), ("max_ms", None, False),
+))
+def test_positive_latency_budget_is_unchanged_and_independent_of_flags(
+    metric: str, value: float | None, passes: bool,
+) -> None:
+    fast, _, _ = _complete_component_reports(2)
+    fast["mature_prediction"][metric] = value
+    assert all(benchmark._positive_workload_gates(fast, 2, 16).values()) is passes
+
+
+@pytest.mark.parametrize("target_only", (False, True))
+def test_rejection_requires_executed_fanout_not_just_registered_handlers(
+    predictive_map: PredictiveMap, monkeypatch: pytest.MonkeyPatch, target_only: bool,
+) -> None:
+    """PERF007/008: registration cannot certify a bypassed real dispatcher."""
+    types = benchmark._runtime_publication_types()
+
+    def bypass(self: Any) -> None:
+        if target_only:
+            # Real zone callback but preceding Home/Problem/other zones skipped.
+            callbacks: list[Callable[[], None]] = next(
+                iter(self.hass._dispatch.values()), [],
+            )
+            if callbacks:
+                callbacks[-1]()
+
+    monkeypatch.setattr(types[0], "_dispatch_update", bypass)
+    monkeypatch.setattr(benchmark, "_runtime_publication_types", lambda: types)
+    measurements = benchmark._measure_rejected_jumps(predictive_map, iterations=1)
+    assert measurements["rejected_jump"]["sample_count"] == 1
+    assert not benchmark._negative_workload_gates(measurements, 1)["correctness"]
 
 
 @pytest.fixture(scope="module")
@@ -96,12 +616,31 @@ def test_benchmark_rejects_more_than_one_thousand_events() -> None:
 
 def test_target_benchmark_reports_required_bounded_metrics() -> None:
     instrumented = run_benchmark(MAP_PATH, event_count=1, target_counts=(2,))
-    assert set(instrumented["fast_paths"]) == EXISTING_FAST_PATHS | HANDOFF_PATHS
-    for trace in instrumented["fast_paths"].values():
+    assert set(instrumented["fast_paths"]) == CURRENT_FAST_PATHS
+    assert instrumented["map"]["zones"] == 16
+    assert instrumented["map"]["nodes"] == 17
+    assert instrumented["map"]["occupants"] == [2]
+    assert set(instrumented["negative_workloads"]) == {"rejected_jump"}
+    for family in ("negative_gates", "positive_gates", "timer_gates"):
+        assert all(value for gate, value in instrumented[family].items()
+                   if not gate.endswith("latency"))
+    for name, trace in instrumented["fast_paths"].items():
+        assert trace["current_equivalent"] == benchmark.FAST_PATH_EQUIVALENTS[name]
+        assert trace["attempt_count"] == trace["prior_off_count"] == 1
+        assert trace["fixture_kind"] == (
+            "synthetic_learned_counts_and_observations" if name == "mature_prediction"
+            else "synthetic_observations"
+        )
+        assert trace["registered_entity_count"] == 34
+        assert trace["update_subscriber_count"] == 18
+        assert trace["failure_reasons"] == [], (name, trace["failure_reasons"])
         assert trace["sample_count"] == trace["activation_count"] == 1
         assert trace["path_qualification_count"] == 1
         assert trace["publication_count"] == 1
-        assert trace["public_write_count"] >= 1
+        assert trace["public_write_count"] == 1
+        assert trace["requested_count"] == trace["fanout_count"] == 1
+        assert all(math.isfinite(trace[key]) and trace[key] >= 0
+               for key in ("p99_ms", "max_ms"))
         assert trace["all_activated"]
         assert trace["all_path_qualified"]
         assert trace["all_publications_scheduled"]
@@ -109,6 +648,32 @@ def test_target_benchmark_reports_required_bounded_metrics() -> None:
         assert trace["update_subscriber_count"] == 18
     for name in HANDOFF_PATHS:
         assert instrumented["fast_paths"][name]["public_write_count"] == 1
+    core = instrumented["counts"]["2"]["core"]
+    assert core["selected_slot_max"] == core["selected_slot_limit"] == 2
+    assert core["selected_path_max"] <= 2
+    assert core["selected_visit_max"] <= core["selected_history_limit"] == 4
+    assert core["selected_route_max"] <= 4
+    assert core["selected_source_max"] == core["selected_source_limit"] == 17
+    assert core["health_state_max"] == core["health_state_limit"] == 17
+    assert core["health_cycle_max"] <= core["health_cycle_limit"] == 6
+    assert all(value for gate, value in instrumented["counts"]["2"]["gates"].items()
+               if gate not in {"preferred_callback", "hard_callback"})
+    assert core["event_count"] == 1
+    assert all(math.isfinite(core[key]) and core[key] >= 0 for key in (
+        "startup_ms", "total_ms", "p50_ms", "p95_ms", "p99_ms", "max_ms",
+    ))
+    assert set(instrumented["timer_work"]) == {
+        "pending_expiry", "unsupported_on_health_deadline",
+    }
+    assert all(t["all_completed"] for t in instrumented["timer_work"].values())
+    for trace in instrumented["timer_work"].values():
+        assert trace["requested_count"] == trace["attempt_count"] == 1
+        assert trace["sample_count"] == trace["completion_count"] == 1
+        assert all(math.isfinite(trace[key]) and trace[key] >= 0
+                   for key in ("p95_ms", "max_ms"))
+
+
+def test_historical_benchmark_artifact_is_not_current_qualification() -> None:
 
     # The retained 100-sample result is generated by the standalone benchmark
     # process, outside pytest coverage instrumentation that changes wall time.
@@ -146,17 +711,26 @@ def test_target_benchmark_reports_required_bounded_metrics() -> None:
 
 
 @pytest.mark.parametrize("correlated", (False, True))
-def test_handoff_fixture_is_supported_asserted_and_repeatably_consumable(
+def test_handoff_fixture_is_selected_asserted_and_repeatably_continuable(
     predictive_map: PredictiveMap, correlated: bool,
 ) -> None:
     fingerprint = target_map_fingerprint(predictive_map)
     assert len(predictive_map.zones()) == 16 and len(predictive_map.nodes) == 17
     snapshot = _handoff_fixture(predictive_map, NOW, correlated=correlated)
     frozen = _render_json(_semantic_value(snapshot))
-    source, = snapshot.anonymous_supports
+    path, unlocated = snapshot.selected_paths
+    assert path is not None and unlocated is None
+    source = next(v for v in path.route if v.node_id == "guest_bedroom_sensor")
+    assert source.branch_active
+    assert tuple(v.node_id for v in path.route) == (
+        ("foyer_sensor", "stairs_bottom_sensor", "guest_bedroom_sensor",
+         "stairs_bottom_sensor") if correlated else
+        ("dining_sensor", "foyer_sensor", "stairs_bottom_sensor",
+         "guest_bedroom_sensor")
+    )
     at = snapshot.updated_at + timedelta(microseconds=1)
     source_episode = next(
-        s for s in snapshot.episode_states if s.node_id == source.current_node_id
+        s for s in snapshot.episode_states if s.node_id == source.node_id
     )
     assert source_episode.started_at == NOW + timedelta(seconds=3)
     assert at - source_episode.started_at == timedelta(hours=2)
@@ -164,6 +738,16 @@ def test_handoff_fixture_is_supported_asserted_and_repeatably_consumable(
         s for s in snapshot.episode_states if s.node_id == "living_left_sensor"
     )
     assert (target.cadence_run_started_at is not None) == correlated
+    if correlated:
+        assert target.status == "clear"
+        assert all(value == "off" for _, value in target.alias_states)
+        assert target.cadence_run_started_at == NOW + timedelta(seconds=6603)
+        assert target.cadence_last_transition_at == NOW + timedelta(seconds=6613)
+        assert any(v.node_id == target.node_id and not v.branch_active
+                   for v in path.visits)
+    else:
+        assert target.generation == 0
+    assert not next(p for p in snapshot.policy_states if p.zone == "living_room").active
     assert all(p.node_id == "living_left_sensor" for p in snapshot.pending_candidates)
     results = []
     for _ in range(2):
@@ -178,6 +762,8 @@ def test_handoff_fixture_is_supported_asserted_and_repeatably_consumable(
         projected = restore_target_state(predictive_map, payload, at).snapshot
         _assert_handoff_source(predictive_map, projected)
         before_prediction = engine.prediction_manager.serialize()
+        before_counts = engine.prediction_manager.chain.counts
+        before_pending = tuple(engine._pending_prediction_learning)
         event = SensorInput(
             next(iter(predictive_map.nodes["living_left_sensor"].entities.values())),
             "on", at,
@@ -186,24 +772,66 @@ def test_handoff_fixture_is_supported_asserted_and_repeatably_consumable(
         assert _handoff_qualified(snapshot, result, correlated=correlated)
         assert not _handoff_qualified(snapshot, result, correlated=not correlated)
         assert next(s for s in result.snapshot.episode_states
-                    if s.node_id == source.current_node_id) == next(
+                    if s.node_id == source.node_id) == next(
                         s for s in projected.episode_states
-                        if s.node_id == source.current_node_id
+                        if s.node_id == source.node_id
                     )
         assert next(s for s in result.snapshot.belief_states
-                    if s.zone == source.current_zone) == next(
+                    if s.zone == source.zone) == next(
                         s for s in projected.belief_states
-                        if s.zone == source.current_zone
+                        if s.zone == source.zone
                     )
         assert not engine._pending_prediction_learning
-        assert engine.prediction_manager.serialize() == before_prediction
-        assert len(result.snapshot.traversal_tokens) == 1
-        assert len(result.snapshot.support_token_bindings) == 1
+        assert tuple(engine._pending_prediction_learning) == before_pending == ()
+        assert engine.prediction_manager.chain.counts == before_counts
+        if correlated:
+            # Genuine correlated/legacy transfer exclusions remain nonissuing.
+            assert engine.prediction_manager.serialize() == before_prediction
+        else:
+            # PRED008 selected execution is not PRED007 legacy-transfer learning.
+            grants = result.snapshot.selected_prediction_grants
+            leases = engine.prediction_manager.leases
+            assert grants and len(grants) == len(leases) <= 64
+            assert {g.key for g in grants} == {
+                (lease.source_node_id, lease.current_node_id, lease.target_node_id,
+                 lease.source_episode_id) for lease in leases
+            }
+            assert all(g.authorization == result.authorizations[0]
+                       and g.effect_kind == "positive"
+                       and g.expires_at == at + timedelta(seconds=10) for g in grants)
+            assert all(
+                lease.source_node_id == source.node_id
+                and lease.current_node_id == "living_left_sensor"
+                and lease.target_node_id
+                in predictive_map.nodes[lease.current_node_id].adjacent
+                and lease.source_episode_id
+                == result.authorizations[0].target_episode_id
+                and lease.authority_kind == "selected_prediction_grant"
+                and lease.created_at == at
+                and lease.expires_at == at + timedelta(seconds=10)
+                and not lease.mature and lease.support == 0 for lease in leases
+            )
+        assert not result.snapshot.traversal_tokens
+        assert not result.snapshot.support_token_bindings
+        assert not result.snapshot.anonymous_supports
+        moved_path, unlocated = result.snapshot.selected_paths
+        assert moved_path is not None and unlocated is None
+        assert moved_path.endpoint.node_id == "living_left_sensor"
+        assert moved_path.endpoint.at == at
+        assert source in moved_path.route
         assert not result.snapshot.pending_candidates
         assert not engine.observe(event).policy_events
         moved = serialize_target_state(predictive_map, engine)
         restored = restore_target_state(predictive_map, moved, at)
         assert serialize_target_state(predictive_map, restored) == moved
+        if not correlated:
+            restored.advance(at + timedelta(seconds=9, microseconds=999999))
+            assert restored.prediction_manager.leases == leases
+            assert restored.snapshot.selected_prediction_grants == grants
+            restored.advance(at + timedelta(seconds=10))
+            assert restored.prediction_manager.leases == ()
+            assert restored.snapshot.selected_prediction_grants == ()
+            assert restored.prediction_manager.chain.counts == before_counts
         results.append(result)
     assert results[0] == results[1]
     assert _render_json(_semantic_value(snapshot)) == frozen
@@ -211,8 +839,10 @@ def test_handoff_fixture_is_supported_asserted_and_repeatably_consumable(
 
 
 @pytest.mark.parametrize("mutation", (
-    "no_authorization", "ordinary_reason", "no_public_event", "refresh",
-    "no_token", "no_transfer", "wrong_disposition",
+    "no_authorization", "wrong_provenance", "no_public_event", "refresh",
+    "no_selected_movement", "no_continuation", "wrong_disposition",
+    "no_decision", "wrong_target", "already_active", "source_changed",
+    "wrong_source", "wrong_route",
 ))
 def test_handoff_qualification_rejects_unproven_path_or_acquisition(
     predictive_map: PredictiveMap, mutation: str,
@@ -226,10 +856,11 @@ def test_handoff_qualification_rejects_unproven_path_or_acquisition(
     assert _handoff_qualified(snapshot, result, correlated=False)
     if mutation == "no_authorization":
         result = replace(result, authorizations=())
-    elif mutation == "ordinary_reason":
+    elif mutation == "wrong_provenance":
         result = replace(result, authorizations=(replace(
-            result.authorizations[0], reason="adjacent_authorized",
-            settled_handoff=None,
+            result.authorizations[0], reason="boundary_authorized",
+            provenance_kind="boundary", selected_source_episode_ids=(),
+            path_node_ids=("living_left_sensor",),
         ),))
     elif mutation == "no_public_event":
         result = replace(result, policy_events=())
@@ -237,14 +868,41 @@ def test_handoff_qualification_rejects_unproven_path_or_acquisition(
         result = replace(result, policy_events=(replace(
             result.policy_events[0], kind="refreshed",
         ),))
-    elif mutation == "no_token":
+    elif mutation == "no_selected_movement":
         result = replace(result, snapshot=replace(
-            result.snapshot, traversal_tokens=(), current_token_ids=(),
+            result.snapshot, selected_paths=(None, None),
         ))
-    elif mutation == "no_transfer":
+    elif mutation == "no_continuation":
         result = replace(result, snapshot=replace(
-            result.snapshot, anonymous_supports=snapshot.anonymous_supports,
+            result.snapshot, selected_paths=snapshot.selected_paths,
         ))
+    elif mutation == "no_decision":
+        result = replace(result, policy_decisions=())
+    elif mutation == "wrong_target":
+        result = replace(result, policy_events=(replace(
+            result.policy_events[0], zone="guest_bedroom",
+        ),))
+    elif mutation == "already_active":
+        snapshot = replace(snapshot, policy_states=result.snapshot.policy_states)
+    elif mutation == "source_changed":
+        result = replace(result, snapshot=replace(
+            result.snapshot, episode_states=tuple(
+                replace(e, last_event_at=result.snapshot.updated_at)
+                if e.node_id == "guest_bedroom_sensor" else e
+                for e in result.snapshot.episode_states
+            ),
+        ))
+    elif mutation == "wrong_source":
+        result = replace(result, authorizations=(replace(
+            result.authorizations[0], selected_source_episode_ids=(
+                f"guest_bedroom_sensor:2:{NOW.isoformat()}",
+            ),
+        ),))
+    elif mutation == "wrong_route":
+        result = replace(result, authorizations=(replace(
+            result.authorizations[0],
+            path_node_ids=("guest_bedroom_sensor", "living_left_sensor"),
+        ),))
     else:
         result = replace(result, disposition="duplicate")
     assert not _handoff_qualified(snapshot, result, correlated=False)
@@ -267,7 +925,9 @@ def test_handoff_preparation_precedes_timing_and_each_event_gets_a_new_engine(
     def observe(
         self: ZoneModelEngine, event: SensorInput, **kwargs: Any,
     ) -> ZoneModelResult:
-        if event.event_at == NOW.replace(hour=15) + timedelta(seconds=3):
+        if (event.entity_id == next(iter(
+            predictive_map.nodes["living_left_sensor"].entities.values()))
+            and event.event_at == NOW.replace(hour=15) + timedelta(seconds=3)):
             assert len(prepared) == 2
             assert self.snapshot in prepared
             assert all(self is not previous for previous in engines)
@@ -278,7 +938,7 @@ def test_handoff_preparation_precedes_timing_and_each_event_gets_a_new_engine(
     monkeypatch.setattr(ZoneModelEngine, "observe", observe)
     paths = _measure_fast_paths(predictive_map, iterations=2)
     assert len(engines) == 4
-    assert set(paths) == EXISTING_FAST_PATHS | HANDOFF_PATHS
+    assert set(paths) == CURRENT_FAST_PATHS
     for name in HANDOFF_PATHS:
         trace = paths[name]
         assert trace["sample_count"] == trace["path_qualification_count"] == 2
@@ -315,10 +975,523 @@ def test_out_of_order_workload_is_model_neutral_and_within_budget(
     result, engine = _measure_core(predictive_map, workload)
 
     assert result["stale_event_count"] > 0
-    assert result["max_ms"] <= 100.0
+    assert result["event_count"] == 100
+    assert all(math.isfinite(result[key]) and result[key] >= 0 for key in (
+        "startup_ms", "total_ms", "p50_ms", "p95_ms", "p99_ms", "max_ms",
+    ))
     assert all(
         0.0 <= belief.probability <= 1.0 for belief in engine.snapshot.belief_states
     )
+
+
+@pytest.fixture(scope="module")
+def actual_fast_path_operations(
+    predictive_map: PredictiveMap,
+) -> dict[str, FastPathOperation]:
+    """Capture real preconditions/results outside latency, never fabricate a path."""
+
+    operations: dict[str, FastPathOperation] = {}
+    original: FastPathPredicate = benchmark._fast_path_qualified
+
+    def capture(
+        name: str, before: ZoneModelSnapshot, result: ZoneModelResult,
+        target_id: str, zone: str, at: datetime,
+        prediction: PredictionProof | None = None,
+    ) -> bool:
+        operations[name] = (before, result, target_id, zone, at)
+        return _checked_boolean(
+            original(name, before, result, target_id, zone, at, prediction),
+        )
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(benchmark, "_fast_path_qualified", capture)
+        _measure_fast_paths(predictive_map, iterations=1)
+    # Preserve these selected-mechanism controls independently of prediction's
+    # different policy contract. The live acceptance above still requires every ON.
+    selected = {name: args for name, args in operations.items()
+                if name in SELECTED_ACQUISITION_PATHS}
+    assert set(selected) == SELECTED_ACQUISITION_PATHS
+    return selected
+
+
+def test_named_selected_fixtures_preserve_distinct_preconditions(
+    actual_fast_path_operations: dict[str, FastPathOperation],
+) -> None:
+    operations = actual_fast_path_operations
+    for name in ("adjacent_pair", "same_zone", "cadence_correlated_target"):
+        before, result, target_id, zone, _ = operations[name]
+        assert before.selected_paths == (None, None)
+        source_id = result.authorizations[0].path_node_ids[-2]
+        source = next(s for s in before.selected_sources if s.node_id == source_id)
+        assert source.origin == "ordinary" and not source.consumed
+        assert source.node_id != target_id
+        if name == "same_zone":
+            assert next(e.zone for e in before.episode_states
+                        if e.node_id == source_id) == zone
+        if name == "cadence_correlated_target":
+            target = next(e for e in before.episode_states if e.node_id == target_id)
+            assert target.status == "clear"
+            assert target.cadence_run_started_at is not None
+            assert result.disposition == "accepted_correlated_positive"
+    for name, confidence, length in (
+        ("third_node_confirmation", "provisional", 2),
+        ("confirmed_token", "confirmed", 3),
+    ):
+        before, result, *_ = operations[name]
+        path, unlocated = before.selected_paths
+        assert path is not None and unlocated is None
+        assert path.track_confidence == confidence and len(path.route) == length
+        assert result.authorizations[0].track_confidence == "confirmed"
+    before, result, *_ = operations["correlated_continuity"]
+    source_episode = next(e for e in before.episode_states
+                          if e.node_id == "stairs_top_sensor")
+    assert source_episode.status == "asserted" and source_episode.known_on
+    assert source_episode.started_at is not None
+    assert source_episode.last_event_at is not None
+    assert source_episode.started_at < source_episode.last_event_at
+    assert source_episode.last_event_at.second == 45  # Actual correlated reassertion.
+    assert result.authorizations[0].selected_source_episode_ids == (
+        source_episode.episode_id,
+    )
+    before, result, *_ = operations["local_interaction"]
+    assert before.selected_paths == (None, None)
+    assert result.disposition == "accepted_interaction"
+    assert result.authorizations[0].selected_source_episode_ids == ()
+
+
+@pytest.mark.parametrize("profile", TRACE_PROFILES)
+def test_core_reports_observed_selected_state_bounds(
+    predictive_map: PredictiveMap, profile: str,
+) -> None:
+    workload = _build_workload(predictive_map, event_count=20, started_at=NOW,
+                               occupants=2, trace_profile=profile)
+    metrics, engine = _measure_core(predictive_map, workload)
+    assert metrics["selected_slot_max"] == len(engine.snapshot.selected_paths) == 2
+    assert 0 < metrics["selected_path_max"] <= 2
+    assert 2 <= metrics["selected_route_max"] <= 4
+    assert 2 <= metrics["selected_visit_max"] <= 4
+    assert metrics["selected_source_max"] == len(engine.snapshot.selected_sources) == 17
+    assert metrics["health_state_max"] == len(engine.snapshot.path_health) == 17
+    assert metrics["health_cycle_max"] <= 6
+    assert metrics["persistence_byte_stable"]
+
+
+@pytest.mark.parametrize("name", sorted(SELECTED_ACQUISITION_PATHS))
+@pytest.mark.parametrize("mutation", (
+    "unchanged", "prior_on", "no_acquired", "refresh", "no_decision",
+    "no_selected_movement", "duplicate", "wrong_target",
+))
+def test_each_current_fast_path_requires_real_acquisition(
+    actual_fast_path_operations: dict[str, FastPathOperation], name: str, mutation: str,
+) -> None:
+    before, result, target_id, zone, at = actual_fast_path_operations[name]
+    assert benchmark._fast_path_qualified(name, before, result, target_id, zone, at)
+    if mutation == "prior_on":
+        before = replace(before, policy_states=result.snapshot.policy_states)
+    elif mutation == "no_acquired":
+        result = replace(result, policy_events=())
+    elif mutation == "refresh":
+        result = replace(result, policy_events=tuple(
+            replace(e, kind="refreshed") if e.zone == zone else e
+            for e in result.policy_events
+        ))
+    elif mutation == "no_decision":
+        result = replace(result, policy_decisions=())
+    elif mutation == "no_selected_movement":
+        result = replace(result, snapshot=replace(
+            result.snapshot, selected_paths=before.selected_paths,
+        ))
+    elif mutation == "duplicate":
+        result = replace(result, disposition="duplicate")
+    elif mutation == "wrong_target":
+        result = replace(result, policy_events=tuple(
+            replace(e, zone="not_the_measured_zone") for e in result.policy_events
+        ))
+    assert benchmark._fast_path_qualified(
+        name, before, result, target_id, zone, at,
+    ) is (mutation == "unchanged")
+
+
+@pytest.mark.parametrize("mutation", ("no_write", "off_write", "duplicate_write"))
+def test_no_latency_sample_without_exact_matching_public_write(
+    predictive_map: PredictiveMap, monkeypatch: pytest.MonkeyPatch, mutation: str,
+) -> None:
+    original = benchmark._BenchmarkBinarySensorEntity.async_write_ha_state
+    if mutation == "off_write":
+        types = benchmark._runtime_publication_types()
+        monkeypatch.setattr(types[3], "is_on", property(lambda self: False))
+        monkeypatch.setattr(benchmark, "_runtime_publication_types", lambda: types)
+    else:
+        def write(self: Any) -> None:
+            if mutation == "duplicate_write":
+                original(self)
+                original(self)
+
+        monkeypatch.setattr(benchmark._BenchmarkBinarySensorEntity,
+                            "async_write_ha_state", write)
+    paths = _measure_fast_paths(predictive_map, iterations=1)
+    assert set(paths) == CURRENT_FAST_PATHS
+    for name, trace in paths.items():
+        if name in SELECTED_ACQUISITION_PATHS:
+            assert trace["activation_count"] == trace["path_qualification_count"] == 1
+        assert trace["sample_count"] == trace["publication_count"] == 0
+        assert trace["max_ms"] is None and trace["p99_ms"] is None
+        assert not trace["all_publications_scheduled"]
+        assert not trace["p99_gate"] and not trace["hard_gate"]
+
+
+def test_every_requested_sample_must_qualify(
+    predictive_map: PredictiveMap, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original: FastPathPredicate = benchmark._fast_path_qualified
+    seen = 0
+
+    def reject_one(
+        name: str, before: ZoneModelSnapshot, result: ZoneModelResult,
+        target_id: str, zone: str, at: datetime,
+        prediction: PredictionProof | None = None,
+    ) -> bool:
+        nonlocal seen
+        qualified = _checked_boolean(
+            original(name, before, result, target_id, zone, at, prediction),
+        )
+        if name == "same_zone":
+            seen += 1
+            return qualified and seen != 1
+        return qualified
+
+    monkeypatch.setattr(benchmark, "_fast_path_qualified", reject_one)
+    trace = _measure_fast_paths(predictive_map, iterations=2)["same_zone"]
+    assert trace["attempt_count"] == trace["activation_count"] == 2
+    assert trace["publication_count"] == 2
+    assert trace["sample_count"] == trace["path_qualification_count"] == 1
+    assert not trace["all_path_qualified"]
+    assert not trace["p99_gate"] and not trace["hard_gate"]
+
+
+def test_mature_prediction_setup_rejects_unlearned_fixture(
+    predictive_map: PredictiveMap, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from custom_components.predictive_controls.markov import MarkovChain
+
+    monkeypatch.setattr(MarkovChain, "observe", lambda *args, **kwargs: False)
+    with pytest.raises(AssertionError):
+        _measure_fast_paths(predictive_map, iterations=1)
+
+
+@pytest.mark.parametrize("mutation", (
+    "unchanged", "no_warning", "early_warning", "occupancy_degradation",
+    "selection_changed", "public_state_changed", "wrong_frontier",
+))
+def test_count_conflict_replacement_is_diagnostic_health_deadline_only(
+    mutation: str,
+) -> None:
+    model = benchmark._timer_health_map()
+    engine = ZoneModelEngine(model, 2, NOW)
+    initial = engine.snapshot
+    for seconds, node in enumerate(("target", "a", "am", "as", "d", "dm", "ds")):
+        engine.observe(SensorInput(f"binary_sensor.{node}", "on",
+                                   NOW + timedelta(seconds=seconds)))
+    deadline = NOW + timedelta(seconds=600)
+    engine.advance(deadline - timedelta(microseconds=1))
+    before = engine.snapshot
+    assert not before.count_conflicts and not before.reliability_warning_occurrences
+    assert all(p is not None for p in before.selected_paths)
+    result = engine.advance(deadline)
+    assert benchmark._health_deadline_qualified(before, result, deadline)
+    if mutation == "no_warning":
+        result = replace(result, snapshot=replace(
+            result.snapshot, reliability_warning_occurrences=(),
+        ))
+    elif mutation == "early_warning":
+        warning, = result.snapshot.reliability_warning_occurrences
+        result = replace(result, snapshot=replace(
+            result.snapshot, reliability_warning_occurrences=(replace(
+                warning, first_observed_at=deadline - timedelta(microseconds=1),
+            ),),
+        ))
+    elif mutation == "occupancy_degradation":
+        result = replace(result, snapshot=replace(
+            result.snapshot, episode_states=tuple(
+                replace(e, health_warning=True, degradation_reason="count_conflict")
+                if e.node_id == "target" else e for e in result.snapshot.episode_states
+            ),
+        ))
+    elif mutation == "selection_changed":
+        result = replace(result, snapshot=replace(
+            result.snapshot, selected_paths=(None, None),
+        ))
+    elif mutation == "public_state_changed":
+        result = replace(result, snapshot=replace(
+            result.snapshot, policy_states=initial.policy_states,
+        ))
+    elif mutation == "wrong_frontier":
+        result = replace(result, snapshot=replace(result.snapshot, updated_at=NOW))
+    assert benchmark._health_deadline_qualified(
+        before, result, deadline,
+    ) is (mutation == "unchanged")
+
+
+@pytest.fixture(scope="module")
+def rejected_jump_measurement(
+    predictive_map: PredictiveMap,
+) -> MeasurementReports:
+    return _checked_reports(
+        benchmark._measure_rejected_jumps(predictive_map, iterations=2),
+    )
+
+
+def test_rejected_jump_is_complete_separate_diagnostic_workload(
+    rejected_jump_measurement: MeasurementReports,
+) -> None:
+    assert ROUTINE_BENCHMARK_EVENTS == 100 and MAX_BENCHMARK_EVENTS == 1000
+    assert set(rejected_jump_measurement) == {"rejected_jump"}
+    trace = rejected_jump_measurement["rejected_jump"]
+    assert trace["supersedes"] == "missed_edge"
+    assert trace["occupants"] == 2
+    assert trace["fixture_kind"] == "synthetic_observations"
+    assert trace["registered_entity_count"] == 34
+    assert trace["update_subscriber_count"] == 18
+    assert trace["requested_count"] == trace["attempt_count"] == 2
+    assert trace["sample_count"] == 2
+    for key in ("prior_off", "remained_off", "rejection", "warning", "qualified",
+                "selection_unchanged", "no_acquired", "fanout"):
+        assert trace[f"{key}_count"] == 2
+    assert trace["on_write_count"] == trace["acquired_event_count"] == 0
+    assert trace["outcome"] == "rejected" and trace["failure_reasons"] == []
+    gates = benchmark._negative_workload_gates(rejected_jump_measurement, 2)
+    assert all(value for gate, value in gates.items() if not gate.endswith("latency"))
+    latency = {key: _checked_number(trace[key]) for key in ("p99_ms", "max_ms")}
+    assert all(math.isfinite(latency[key]) and latency[key] >= 0
+               for key in ("p99_ms", "max_ms"))
+
+
+@pytest.mark.parametrize("iterations", (0, MAX_BENCHMARK_EVENTS + 1))
+def test_rejected_jump_benchmark_enforces_iteration_bounds(
+    predictive_map: PredictiveMap, iterations: int,
+) -> None:
+    with pytest.raises(ValueError, match="between 1 and 1000"):
+        benchmark._measure_rejected_jumps(predictive_map, iterations=iterations)
+
+
+@pytest.mark.parametrize("mutation", (
+    "unchanged", "no_warning", "wrong_warning", "cleared_warning", "early_warning",
+    "no_authorization", "authorized", "wrong_target", "wrong_outcome", "no_decision",
+    "prior_on", "target_on", "acquired", "selection_changed", "on_write",
+))
+def test_rejected_jump_qualifies_actual_result_not_just_silence(
+    predictive_map: PredictiveMap, monkeypatch: pytest.MonkeyPatch, mutation: str,
+) -> None:
+    original: RejectionChecks = benchmark._rejected_jump_checks
+
+    def mutate(
+        before: ZoneModelSnapshot, result: ZoneModelResult,
+        target_id: str, zone: str, at: datetime,
+    ) -> dict[str, bool]:
+        assert all(original(before, result, target_id, zone, at).values())
+        if mutation in {
+            "no_warning", "wrong_warning", "cleared_warning", "early_warning",
+        }:
+            warning, = result.snapshot.reliability_warning_occurrences
+            warnings = () if mutation == "no_warning" else (replace(
+                warning,
+                reason="assertion_timeout"
+                if mutation == "wrong_warning" else warning.reason,
+                kind="suspected_stuck" if mutation == "wrong_warning" else warning.kind,
+                cleared_at=at if mutation == "cleared_warning" else None,
+                first_observed_at=at - timedelta(microseconds=1)
+                if mutation == "early_warning" else at,
+            ),)
+            result = replace(result, snapshot=replace(
+                result.snapshot, reliability_warning_occurrences=warnings,
+            ))
+        elif mutation == "no_authorization":
+            result = replace(result, authorizations=())
+        elif mutation in {"authorized", "wrong_target"}:
+            result = replace(result, authorizations=(replace(
+                result.authorizations[0], authorized=mutation == "authorized",
+                reason="boundary_authorized" if mutation == "authorized"
+                else result.authorizations[0].reason,
+                track_confidence="provisional" if mutation == "authorized" else None,
+                provenance_kind="boundary" if mutation == "authorized" else None,
+                path_node_ids=(target_id,) if mutation == "authorized" else (),
+                target_node_id="dining_sensor"
+                if mutation == "wrong_target" else target_id,
+            ),))
+        elif mutation == "wrong_outcome":
+            result = replace(result, disposition="duplicate")
+        elif mutation == "no_decision":
+            result = replace(result, policy_decisions=())
+        elif mutation in {"prior_on", "target_on"}:
+            snapshot = before if mutation == "prior_on" else result.snapshot
+            active = next(p for p in snapshot.policy_states if p.active)
+            snapshot = replace(snapshot, policy_states=tuple(
+                replace(active, zone=zone) if p.zone == zone else p
+                for p in snapshot.policy_states
+            ))
+            if mutation == "prior_on":
+                before = snapshot
+            else:
+                result = replace(result, snapshot=snapshot)
+        elif mutation == "acquired":
+            from custom_components.predictive_controls.zone_model.types import (
+                PolicyEvent,
+            )
+
+            result = replace(result, policy_events=(PolicyEvent(
+                kind="acquired", event_at=at, zone=zone, episode_id="mutated",
+                belief=1.0, authorization_reason="selected_path",
+                policy_reason="acquired",
+            ),))
+        elif mutation == "selection_changed":
+            result = replace(result, snapshot=replace(
+                result.snapshot, selected_paths=(None, None),
+            ))
+        return _checked_flags(original(before, result, target_id, zone, at))
+
+    monkeypatch.setattr(benchmark, "_rejected_jump_checks", mutate)
+    if mutation == "on_write":
+        types = benchmark._runtime_publication_types()
+        original_is_on = types[3].is_on.fget
+        original_write = benchmark._BenchmarkBinarySensorEntity.async_write_ha_state
+
+        def is_on(self: Any) -> bool:
+            return bool(getattr(self, "_benchmark_during_write", False)
+                        or original_is_on(self))
+
+        def write(self: Any) -> None:
+            self._benchmark_during_write = True
+            try:
+                original_write(self)
+            finally:
+                self._benchmark_during_write = False
+
+        monkeypatch.setattr(types[3], "is_on", property(is_on))
+        monkeypatch.setattr(benchmark._BenchmarkBinarySensorEntity,
+                            "async_write_ha_state", write)
+        monkeypatch.setattr(benchmark, "_runtime_publication_types", lambda: types)
+    measurements = benchmark._measure_rejected_jumps(predictive_map, iterations=1)
+    gates = benchmark._negative_workload_gates(measurements, 1)
+    trace = measurements["rejected_jump"]
+    # Failed correctness never hides a returned sample.
+    assert gates["samples_complete"]
+    assert gates["correctness"] is (mutation == "unchanged")
+    assert (trace["outcome"] == "rejected") is (mutation == "unchanged")
+
+
+@pytest.mark.parametrize("mutation", (
+    "unchanged", "missing_workload", "renamed_workload", "partial_samples",
+    "partial_attempts", "missing_warning", "wrong_outcome", "on_write", "acquired",
+    "prior_on", "target_on", "missing_rejection", "p99_over", "hard_equal",
+    "missing_latency", "nonfinite_latency",
+))
+def test_negative_workload_gates_top_level_and_cli(
+    rejected_jump_measurement: MeasurementReports,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+    mutation: str,
+) -> None:
+    # Isolate the new gate from unrelated positive-path failures/wall-time jitter;
+    # these are explicitly component report mutations, not live ON qualification.
+    workloads = deepcopy(rejected_jump_measurement)
+    trace = workloads["rejected_jump"]
+    trace.update(p99_ms=FAST_PATH_P99_MS, max_ms=FAST_PATH_HARD_MS - 0.001)
+    if mutation == "missing_workload":
+        workloads.clear()
+    elif mutation == "renamed_workload":
+        workloads["not_rejected_jump"] = workloads.pop("rejected_jump")
+    else:
+        changes: dict[str, tuple[str, object]] = {
+            "partial_samples": ("sample_count", 1),
+            "partial_attempts": ("attempt_count", 1),
+            "missing_warning": ("warning_count", 1),
+            "wrong_outcome": ("outcome", "acquired"),
+            "on_write": ("on_write_count", 1),
+            "acquired": ("acquired_event_count", 1),
+            "prior_on": ("prior_off_count", 1),
+            "target_on": ("remained_off_count", 1),
+            "missing_rejection": ("rejection_count", 1),
+            "p99_over": ("p99_ms", FAST_PATH_P99_MS + 0.001),
+            "hard_equal": ("max_ms", FAST_PATH_HARD_MS),
+            "missing_latency": ("p99_ms", None),
+            "nonfinite_latency": ("max_ms", float("inf")),
+        }
+        if mutation in changes:
+            key, value = changes[mutation]
+            trace[key] = value
+    _stub_complete_reports(monkeypatch, 2)
+    monkeypatch.setattr(benchmark, "_measure_rejected_jumps", lambda *a, **k: workloads)
+    report = run_benchmark(MAP_PATH, event_count=2)
+    assert report["passed"] is (mutation == "unchanged")
+    assert report["negative_workloads"] == workloads
+    assert all(report["negative_gates"].values()) is (mutation == "unchanged")
+    output = tmp_path / "negative-report.json"
+    monkeypatch.setattr("sys.argv", [
+        "benchmark", "--events", "2", "--output", str(output),
+    ])
+    if mutation == "unchanged":
+        main()
+    else:
+        with pytest.raises(SystemExit) as error:
+            main()
+        assert error.value.code == (2 if mutation == "nonfinite_latency" else 1)
+    captured = capsys.readouterr()
+    if mutation == "nonfinite_latency":
+        # Nonfinite report values additionally fail strict JSON serialization.
+        assert not output.exists() and captured.out == ""
+        assert json.loads(captured.err)["passed"] is False
+        return
+    rendered = output.read_text()
+    assert captured.out == ""
+    assert captured.err == ("" if mutation == "unchanged" else rendered)
+    assert json.loads(rendered)["passed"] is (mutation == "unchanged")
+
+
+def test_rejected_jump_times_complete_dispatch_with_fresh_prepared_runtime(
+    predictive_map: PredictiveMap, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    types = benchmark._runtime_publication_types()
+    observe = types[0].observe_entity
+    qualify: RejectionChecks = benchmark._rejected_jump_checks
+    order: list[str] = []
+    runtimes: list[Any] = []
+    times = iter((1_000_000, 3_000_000, 5_000_000, 8_000_000))
+    target = next(iter(predictive_map.nodes["gym_sensor"].entities.values()))
+
+    def clock() -> int:
+        order.append("clock")
+        return next(times)
+
+    def dispatch(self: Any, entity: str, *args: Any, **kwargs: Any) -> None:
+        if entity != target:
+            observe(self, entity, *args, **kwargs)
+            return
+        assert all(self is not previous for previous in runtimes)
+        runtimes.append(self)
+        assert len(self.map.nodes) == 17 and len(self.map.zones()) == 16
+        order.append("dispatch")
+        observe(self, entity, *args, **kwargs)
+        assert self.confidence._last_result.snapshot.reliability_warning_occurrences
+        order.append("returned")
+
+    def checked(
+        before: ZoneModelSnapshot, result: ZoneModelResult,
+        target_id: str, zone: str, at: datetime,
+    ) -> dict[str, bool]:
+        order.append("qualified")
+        return _checked_flags(qualify(before, result, target_id, zone, at))
+
+    monkeypatch.setattr(types[0], "observe_entity", dispatch)
+    monkeypatch.setattr(benchmark, "_runtime_publication_types", lambda: types)
+    monkeypatch.setattr(benchmark, "perf_counter_ns", clock)
+    monkeypatch.setattr(benchmark, "_rejected_jump_checks", checked)
+    measurements = benchmark._measure_rejected_jumps(predictive_map, iterations=2)
+    assert len(runtimes) == 2
+    assert order == ["clock", "dispatch", "returned", "clock", "qualified"] * 2
+    assert measurements["rejected_jump"]["max_ms"] == 3.0
+    assert measurements["rejected_jump"]["p99_ms"] == benchmark._percentile(
+        [2.0, 3.0], 0.99,
+    )
+    assert all(benchmark._negative_workload_gates(measurements, 2).values())
 
 
 @pytest.fixture(scope="module")
@@ -350,6 +1523,26 @@ def test_semantic_fixture_covers_exactly_all_five_profiles(
 ) -> None:
     assert set(semantic_captures) == set(TRACE_PROFILES)
     assert len(semantic_captures) == 5
+
+
+@pytest.mark.parametrize("profile", TRACE_PROFILES)
+def test_semantic_selected_only_capture_keeps_pending_learning_empty(
+    semantic_captures: dict[str, dict[str, Any]], profile: str,
+) -> None:
+    """Integration control: real selected authorizations never queue learning."""
+
+    capture = semantic_captures[profile]
+    rows = capture["counts"]["2"]["events"]
+    assert len(rows) == capture["counts"]["2"]["event_count"] == 20
+    assert all(row["diagnostics"]["pending_prediction_learning"] == [] for row in rows)
+    authorized = [
+        item for row in rows for item in row["result"]["authorizations"]
+        if item["authorized"]
+    ]
+    assert authorized
+    assert {item["reason"] for item in authorized} == {"selected_path"}
+    assert {item["provenance_kind"] for item in authorized} == {"selected_path"}
+    assert compare_semantic(capture, capture)["passed"]
 
 
 @pytest.mark.parametrize("profile", TRACE_PROFILES)
@@ -453,19 +1646,76 @@ def authorization_capture(
     semantic_captures: dict[str, dict[str, Any]],
     authorization_location: tuple[str, str],
 ) -> dict[str, Any]:
-    """Keep one real authorization row without copying the full trace per case."""
+    """COMPONENT document, not evidence of runtime authorization or learning.
+
+    Reuse one complete capture envelope, but explicitly populate both comparator
+    locations with a representative confirmed authorization. Validate its types
+    before the tests deliberately create malformed operands; those mutations
+    exercise comparison, not production authorization decoding or restoration.
+    """
+
+    from custom_components.predictive_controls.zone_model.types import (
+        AuthorizationUse,
+        TraversalToken,
+    )
 
     capture = semantic_captures["deterministic"]
     workload = capture["counts"]["2"]
+    component = deepcopy({
+        **capture,
+        "metadata": {**capture["metadata"], "fixture_kind": "COMPONENT"},
+        "counts": {"2": {
+            **workload, "event_count": 1, "events": workload["events"][:1],
+        }},
+    })
+    row = component["counts"]["2"]["events"][0]
+    at = datetime.fromisoformat(row["event"]["event_at"])
+    target_episode_id = f"component_target:1:{at.isoformat()}"
+    source = TraversalToken(
+        token_id="token:component_source",
+        node_id="component_source",
+        zone="component_source_zone",
+        role="transition",
+        profile_name="transition_fast",
+        episode_id=f"component_source:1:{NOW.isoformat()}",
+        accepted_at=NOW,
+        valid_until=NOW + timedelta(seconds=180),
+        track_confidence="confirmed",
+        path_node_ids=("component_origin", "component_middle", "component_source"),
+        provenance_kind="adjacent",
+        equivalent_confirmed_strength=False,
+        continuity_reopened_at=None,
+    )
+    authorization = _semantic_value(TraversalAuthorization(
+        target_node_id="component_target",
+        target_zone="component_target_zone",
+        target_episode_id=target_episode_id,
+        authorized_at=at,
+        authorized=True,
+        reason="adjacent_authorized",
+        source_tokens=(source,),
+        new_uses=(AuthorizationUse(
+            token_id=source.token_id,
+            target_episode_id=target_episode_id,
+            reason="adjacent_authorized",
+            authorized_at=at,
+        ),),
+        track_confidence="confirmed",
+        path_node_ids=("component_middle", "component_source", "component_target"),
+        provenance_kind="adjacent",
+        equivalent_confirmed_strength=False,
+        settled_handoff=None,
+        selected_source_episode_ids=(),
+    ))
+    row["result"]["authorizations"] = [deepcopy(authorization)]
+    row["diagnostics"]["pending_prediction_learning"] = [deepcopy(authorization)]
     parent, array = authorization_location
-    row = next(row for row in workload["events"] if row[parent][array])
     assert set(row[parent][array][0]) == {
         field.name for field in fields(TraversalAuthorization)
     }
-    return deepcopy({
-        **capture,
-        "counts": {"2": {**workload, "event_count": 1, "events": [row]}},
-    })
+    assert source.accepted_at < at < source.valid_until
+    assert compare_semantic(component, deepcopy(component))["passed"]
+    return component
 
 
 @pytest.mark.parametrize("reverse", (False, True))
@@ -901,8 +2151,7 @@ def test_capture_occurs_after_all_timed_work_and_uses_same_workload_objects(
         assert workload is measured.pop(0)
         return original_capture(model, workload)
 
-    monkeypatch.setattr(benchmark, "_measure_fast_paths", lambda *a, **k: {})
-    monkeypatch.setattr(benchmark, "_measure_timer_work", lambda *a, **k: {})
+    _stub_complete_reports(monkeypatch, 2)
     monkeypatch.setattr(benchmark, "_measure_core", measure)
     monkeypatch.setattr(benchmark, "_capture_workload", capture)
     path = tmp_path / "semantic.json"
@@ -1049,8 +2298,7 @@ def test_cli_io_and_validation_errors_are_stderr_only(
         output = tmp_path / "missing-directory" / "report.json"
     elif failure == "write_semantic":
         args = ["benchmark", "--events", "1", "--semantic-output", str(tmp_path)]
-        monkeypatch.setattr(benchmark, "_measure_fast_paths", lambda *a, **k: {})
-        monkeypatch.setattr(benchmark, "_measure_timer_work", lambda *a, **k: {})
+        _stub_complete_reports(monkeypatch, 1)
     else:
         args = ["benchmark", "--events",
                 "1001" if failure == "too_many_events" else "-1"]

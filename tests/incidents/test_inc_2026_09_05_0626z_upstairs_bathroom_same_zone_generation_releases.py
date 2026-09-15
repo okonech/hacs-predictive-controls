@@ -1,14 +1,20 @@
+"""User-reported issue: original wording unavailable in the retained source.
+User expected: upstairs bathroom releases after exit (fixture reconstruction).
+Observed: retained regression covers a bathroom return/press followed by hall and
+office detections, with a bathroom that must be OFF by 07:11:04.674406Z.
+Source: frozen original in /tmp/black-box-migration-baseline.json.
+Test scope: public acquisition and one release, independently in live and both
+before/after-outward restore branches. Same-zone generation, token-use and context
+assertions are removed by the 2026-09-12 black-box boundary migration.
+"""
+
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from custom_components.predictive_controls.model import PredictiveMap
-from custom_components.predictive_controls.zone_model.engine import ZoneModelEngine
-from custom_components.predictive_controls.zone_model.persistence import (
-    restore_target_state,
-    serialize_target_state,
-)
 from custom_components.predictive_controls.zone_model.types import SensorInput
+from tests.runtime_replay import ActiveEdge, RuntimeScenario
 
 
 def _at(value: str) -> datetime:
@@ -16,6 +22,7 @@ def _at(value: str) -> datetime:
     return parsed.astimezone(UTC)
 
 
+@pytest.mark.scenario
 @pytest.mark.target_model
 @pytest.mark.parametrize("authoritative_count", (1, 2))
 def test_inc_2026_09_05_0626z_upstairs_bathroom_same_zone_generation_releases(
@@ -72,101 +79,63 @@ def test_inc_2026_09_05_0626z_upstairs_bathroom_same_zone_generation_releases(
             }
         }
     )
-    engine = ZoneModelEngine(
-        predictive_map,
-        authoritative_count,
-        hall_first_at - timedelta(seconds=1),
+    prefix_inputs = (
+        SensorInput("binary_sensor.hall", "on", hall_first_at),
+        SensorInput("binary_sensor.bathroom", "on", bathroom_at),
+        SensorInput("binary_sensor.hall", "off", hall_first_clear_at),
+        SensorInput("event.bathroom_scene", "pressed", interaction_at),
+        SensorInput("binary_sensor.bathroom", "off", bathroom_first_clear_at),
+        SensorInput("binary_sensor.bathroom", "on", bathroom_return_at),
     )
+    departure = SensorInput("binary_sensor.hall", "on", hall_return_at)
+    suffix_inputs = (
+        SensorInput("binary_sensor.office", "on", office_at),
+        SensorInput("binary_sensor.bathroom", "off", bathroom_final_clear_at),
+    )
+    expected_inputs = (*prefix_inputs, departure, *suffix_inputs)
+    # Original SensorInput reliability 1.0 is independent of map initial weights.
+    with RuntimeScenario(hall_first_at - timedelta(seconds=1)) as scenario:
+        live = scenario.create(predictive_map, authoritative_count)
+        before_outward = scenario.create(predictive_map, authoritative_count)
+        after_outward = scenario.create(predictive_map, authoritative_count)
+        branches = (live, before_outward, after_outward)
+        states = {replay: [replay.view()] for replay in branches}
+        for event in prefix_inputs:
+            for replay in branches:
+                states[replay].append(replay.observe(event))
 
-    engine.observe(SensorInput("binary_sensor.hall", "on", hall_first_at))
-    acquired = engine.observe(
-        SensorInput("binary_sensor.bathroom", "on", bathroom_at)
-    )
-    engine.observe(
-        SensorInput("binary_sensor.hall", "off", hall_first_clear_at)
-    )
-    engine.observe(SensorInput("event.bathroom_scene", "pressed", interaction_at))
-    engine.observe(
-        SensorInput("binary_sensor.bathroom", "off", bathroom_first_clear_at)
-    )
-    returned = engine.observe(
-        SensorInput("binary_sensor.bathroom", "on", bathroom_return_at)
-    )
-    before_outward = restore_target_state(
-        predictive_map,
-        serialize_target_state(predictive_map, engine),
-        engine.snapshot.updated_at,
-    )
-    departed = engine.observe(
-        SensorInput("binary_sensor.hall", "on", hall_return_at)
-    )
-    restored_departed = before_outward.observe(
-        SensorInput("binary_sensor.hall", "on", hall_return_at)
-    )
-    after_outward_payload = serialize_target_state(predictive_map, engine)
+        before_lengths = {replay: len(replay.edges) for replay in branches}
+        before_outward.restore(live.checkpoint())  # 06:27:44.895862Z exactly.
+        for replay in branches:
+            states[replay].append(replay.observe(departure))
+        after_lengths = {replay: len(replay.edges) for replay in branches}
+        after_outward.restore(live.checkpoint())  # 06:28:15.338213Z exactly.
 
-    engines = (engine, before_outward)
-    for item in engines:
-        item.observe(SensorInput("binary_sensor.office", "on", office_at))
-        item.observe(
-            SensorInput(
-                "binary_sensor.bathroom",
-                "off",
-                bathroom_final_clear_at,
+        # Merge by time, not by branch: neither fork misses an earlier input
+        # while another branch's suffix advances the shared clock.
+        for event in suffix_inputs:
+            for replay in branches:
+                states[replay].append(replay.observe(event))
+        for checkpoint_at in (stable_clear_at, observed_at):
+            live.advance(checkpoint_at)
+            for replay in branches:
+                states[replay].append(replay.view())
+
+        for replay in branches:
+            assert replay.normalized_inputs == list(expected_inputs)
+            assert states[replay][2].active("bathroom")
+            assert replay.input_edges_for("bathroom")[:1] == (
+                ActiveEdge(bathroom_at, "bathroom", True),
             )
+            assert not states[replay][-1].active("bathroom")
+            edges = replay.edges_for("bathroom")
+            assert len(edges) == 2, edges
+            assert edges[0] == ActiveEdge(bathroom_at, "bathroom", True)
+            assert not edges[1].active and edges[1].at <= observed_at
+        assert states[before_outward] == states[live] == states[after_outward]
+        assert before_outward.edges[before_lengths[before_outward]:] == (
+            live.edges[before_lengths[live]:]
         )
-    cleared = tuple(item.advance(stable_clear_at) for item in engines)
-    final = tuple(item.advance(observed_at) for item in engines)
-
-    assert [(event.zone, event.kind) for event in acquired.policy_events] == [
-        ("bathroom", "acquired")
-    ]
-    assert returned.authorizations[0].reason == "same_zone_authorized"
-    predecessor = returned.authorizations[0].source_tokens[0]
-    generation = next(
-        state
-        for state in returned.snapshot.belief_states
-        if state.zone == "bathroom"
-    ).generation_episode_id
-    assert any(
-        use.token_id == predecessor.token_id
-        and use.target_episode_id == generation
-        and use.reason == "same_zone_authorized"
-        for use in returned.snapshot.authorization_uses
-    )
-    assert any(
-        token.token_id == predecessor.token_id
-        for token in departed.authorizations[0].source_tokens
-    )
-    assert restored_departed.snapshot == departed.snapshot
-    bathroom_belief = next(
-        state for state in cleared[0].snapshot.belief_states if state.zone == "bathroom"
-    )
-    assert bathroom_belief.context == "cleared_with_outward"
-    assert cleared[1].snapshot == cleared[0].snapshot
-    bathroom_policy = next(
-        state for state in final[0].snapshot.policy_states if state.zone == "bathroom"
-    )
-    assert bathroom_policy.active is False
-    assert final[1].snapshot == final[0].snapshot
-    assert [(event.zone, event.kind) for event in final[0].policy_events].count(
-        ("bathroom", "released")
-    ) == 1
-
-    after_outward = restore_target_state(
-        predictive_map,
-        after_outward_payload,
-        hall_return_at,
-    )
-    after_outward.observe(SensorInput("binary_sensor.office", "on", office_at))
-    after_outward.observe(
-        SensorInput(
-            "binary_sensor.bathroom",
-            "off",
-            bathroom_final_clear_at,
+        assert after_outward.edges[after_lengths[after_outward]:] == (
+            live.edges[after_lengths[live]:]
         )
-    )
-    after_outward_cleared = after_outward.advance(stable_clear_at)
-    after_outward_final = after_outward.advance(observed_at)
-    assert after_outward_cleared.snapshot == cleared[0].snapshot
-    assert after_outward_final.snapshot == final[0].snapshot

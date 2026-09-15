@@ -38,6 +38,9 @@ def episodes(*, profile: str = "transition_fast") -> PhysicalEpisodes:
 
 def long_linked_cadence_run() -> PhysicalEpisodes:
     model = episodes(profile="stay_presence")
+    # SYNTHETIC component prerequisite, not production history: unused alias OFF.
+    # PATH005 requires known all-OFF; EVID012 needs completed physical cycles.
+    model.reconcile_startup_snapshot((sensor("binary_sensor.b", "off", 0),), NOW)
     model.observe(sensor("binary_sensor.a", "on", 0))
     for minute in range(9, 180, 9):
         model.observe(sensor("binary_sensor.a", "off", minute * 60 - 20))
@@ -79,6 +82,10 @@ def test_stable_clear_is_delayed_and_frontier_is_idempotent(
     stable_clear_seconds: int,
 ) -> None:
     model = episodes(profile=profile)
+    if profile == "stay_presence":
+        # SYNTHETIC component prerequisite, not production history: unused alias OFF.
+        # PATH005/EVID003: qualify clear timing, not unknown-alias availability.
+        model.reconcile_startup_snapshot((sensor("binary_sensor.b", "off", 0),), NOW)
     model.observe(sensor("binary_sensor.a", "on", 0))
     clear = model.observe(sensor("binary_sensor.a", "off", 10))
 

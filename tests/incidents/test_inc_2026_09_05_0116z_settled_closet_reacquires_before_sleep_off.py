@@ -1,14 +1,20 @@
+"""User-reported issue: closet missed before sleep-off; original wording unavailable.
+User expected (approved amended acceptance): continuous ON through the detections.
+Observed: retained fixture records historical OFF checkpoints and thirteen cycles.
+Source: frozen original in /tmp/black-box-migration-baseline.json; Section 17
+REQ-GOV-005's explicit 2026-09-11 continuous-ON amendment for this incident.
+Test scope: both public control-signal branches stay ON, not physical actuation.
+2026-09-12 boundary migration removes only supplementary snapshot/support/token
+checks; all 31 inputs, thirteen cycles, count variants and restore frontier remain.
+"""
+
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from custom_components.predictive_controls.model import PredictiveMap
-from custom_components.predictive_controls.zone_model.engine import ZoneModelEngine
-from custom_components.predictive_controls.zone_model.persistence import (
-    restore_target_state,
-    serialize_target_state,
-)
 from custom_components.predictive_controls.zone_model.types import SensorInput
+from tests.runtime_replay import ActiveEdge, RuntimeScenario
 
 
 def _at(value: str) -> datetime:
@@ -16,17 +22,21 @@ def _at(value: str) -> datetime:
     return parsed.astimezone(UTC)
 
 
+@pytest.mark.scenario
 @pytest.mark.target_model
 @pytest.mark.parametrize("authoritative_count", (1, 2))
 def test_inc_2026_09_05_0116z_settled_closet_reacquires_before_sleep_off(
     authoritative_count: int,
 ) -> None:
+    """Retain the capture; approved 2026-09-11 contract has no timeout-only off."""
+
     top_at = _at("2026-09-05T01:16:30.919930Z")
     entrance_at = _at("2026-09-05T01:16:40.028350Z")
     closet_at = _at("2026-09-05T01:16:41.843671Z")
     closet_clear_at = _at("2026-09-05T01:20:19.951114Z")
-    observed_release_at = _at("2026-09-05T02:11:17.196879Z")
-    model_release_at = _at("2026-09-05T02:11:41.735890Z")
+    # Historical observed/modeled release times are checkpoints, not departures.
+    historical_observed_release_at = _at("2026-09-05T02:11:17.196879Z")
+    historical_model_release_at = _at("2026-09-05T02:11:41.735890Z")
     final_positive_at = _at("2026-09-05T04:36:47.492407Z")
     sleep_off_at = _at("2026-09-05T04:36:57.807707Z")
     cycles = (
@@ -71,87 +81,80 @@ def test_inc_2026_09_05_0116z_settled_closet_reacquires_before_sleep_off(
             }
         }
     )
-    engine = ZoneModelEngine(
-        predictive_map,
-        authoritative_count,
-        top_at - timedelta(seconds=1),
-    )
+    # Original unobserved baseline, not an invented production startup snapshot.
+    # Keep SensorInput's original 1.0 observation weights independently of map
+    # initial_weight; the harness labels this retained-input compatibility seam.
+    with RuntimeScenario(top_at - timedelta(seconds=1)) as scenario:
+        live = scenario.create(predictive_map, authoritative_count)
+        restored = scenario.create(predictive_map, authoritative_count)
+        expected_inputs = []
+        public_states = []
+        initial_edges: tuple[ActiveEdge, ...] = ()
+        for event in (
+            SensorInput("binary_sensor.top", "on", top_at),
+            SensorInput("binary_sensor.entrance", "on", entrance_at),
+            SensorInput("binary_sensor.closet", "on", closet_at),
+            SensorInput("binary_sensor.closet", "off", closet_clear_at),
+        ):
+            expected_inputs.append(event)
+            edge_start = len(live.edges)
+            for replay in (live, restored):
+                state = replay.observe(event)
+                if event.event_at >= closet_at:
+                    public_states.append(state)
+            if event.event_at == closet_at:
+                initial_edges = tuple(live.edges[edge_start:])
 
-    engine.observe(SensorInput("binary_sensor.top", "on", top_at))
-    engine.observe(SensorInput("binary_sensor.entrance", "on", entrance_at))
-    tracked = engine.observe(SensorInput("binary_sensor.closet", "on", closet_at))
-    engine.observe(SensorInput("binary_sensor.closet", "off", closet_clear_at))
-    observed_release = engine.advance(observed_release_at)
-    released = engine.advance(model_release_at)
-    cycle_results = []
-    for asserted_at, cleared_at in cycles:
-        cycle_results.append(
-            engine.observe(
-                SensorInput("binary_sensor.closet", "on", _at(asserted_at))
+        # Checkpoints observe timers/publication only; no extra model advance.
+        for checkpoint_at in (
+            historical_observed_release_at, historical_model_release_at,
+        ):
+            live.advance(checkpoint_at)
+            public_states.extend((live.view(), restored.view()))
+        for asserted_at, cleared_at in cycles:
+            for event in (
+                SensorInput("binary_sensor.closet", "on", _at(asserted_at)),
+                SensorInput("binary_sensor.closet", "off", _at(cleared_at)),
+            ):
+                expected_inputs.append(event)
+                for replay in (live, restored):
+                    public_states.append(replay.observe(event))
+
+        # Strict inference restore at the same original frontier. Both branches
+        # keep their original timer phase; this is not an HA process restart.
+        prefix_lengths = (len(live.edges), len(restored.edges))
+        restored.restore(restored.checkpoint())
+        final_event = SensorInput("binary_sensor.closet", "on", final_positive_at)
+        expected_inputs.append(final_event)
+        final_positive = live.observe(final_event)
+        restored_final_positive = restored.observe(final_event)
+        live.advance(sleep_off_at)
+        sleep_off = live.view()
+        restored_sleep_off = restored.view()
+
+        assert live.normalized_inputs == restored.normalized_inputs == expected_inputs
+        assert initial_edges == (ActiveEdge(closet_at, "closet", True),)
+        for replay in (live, restored):
+            assert replay.input_edges_for("closet")[:1] == (
+                ActiveEdge(closet_at, "closet", True),
             )
-        )
-        engine.observe(SensorInput("binary_sensor.closet", "off", _at(cleared_at)))
+        assert final_positive.active("closet")
+        assert sleep_off.active("closet")
+        assert restored_final_positive.active("closet")
+        assert restored_sleep_off.active("closet")
+        public_states.extend((
+            final_positive, sleep_off, restored_final_positive, restored_sleep_off,
+        ))
+        for state in public_states:
+            assert state.active("closet"), (state.at, live.edges_for("closet"))
+        # All published edges, including between checkpoints: no hidden off/on.
+        for replay in (live, restored):
+            assert replay.edges_for("closet") == (
+                ActiveEdge(closet_at, "closet", True),
+            )
+        assert restored_final_positive == final_positive
+        assert restored_sleep_off == sleep_off
+        assert restored.edges_for("closet") == live.edges_for("closet")
+        assert restored.edges[prefix_lengths[1]:] == live.edges[prefix_lengths[0]:]
+        # Context teardown cancels both branches even when retention is still red.
 
-    restored = restore_target_state(
-        predictive_map,
-        serialize_target_state(predictive_map, engine),
-        engine.snapshot.updated_at,
-    )
-    reacquired = engine.observe(
-        SensorInput("binary_sensor.closet", "on", final_positive_at)
-    )
-    restored_reacquired = restored.observe(
-        SensorInput("binary_sensor.closet", "on", final_positive_at)
-    )
-    sleep_off = engine.advance(sleep_off_at)
-    restored_sleep_off = restored.advance(sleep_off_at)
-
-    assert [(event.zone, event.kind) for event in tracked.policy_events] == [
-        ("closet", "acquired")
-    ]
-    released_policy = next(
-        state for state in released.snapshot.policy_states if state.zone == "closet"
-    )
-    released_belief = next(
-        state for state in released.snapshot.belief_states if state.zone == "closet"
-    )
-    observed_release_policy = next(
-        state
-        for state in observed_release.snapshot.policy_states
-        if state.zone == "closet"
-    )
-    assert observed_release_policy.active is True
-    assert released_policy.active is False, (
-        released_belief.probability,
-        released_policy.pending_release_since,
-    )
-    sleep_off_policy = next(
-        state for state in sleep_off.snapshot.policy_states if state.zone == "closet"
-    )
-    assert sleep_off_policy.active is True
-    post_release_acquisitions = [
-        event
-        for result in (*cycle_results, reacquired)
-        for event in result.policy_events
-        if event.zone == "closet" and event.kind == "acquired"
-    ]
-    assert len(post_release_acquisitions) == 1
-    assert post_release_acquisitions[0].event_at <= final_positive_at
-    reacquired_policy = next(
-        state
-        for state in reacquired.snapshot.policy_states
-        if state.zone == "closet"
-    )
-    assert reacquired_policy.active is True
-    assert restored_reacquired.snapshot == reacquired.snapshot
-    assert restored_sleep_off.snapshot == sleep_off.snapshot
-    assert len(sleep_off.snapshot.anonymous_supports) == 1
-    assert not any(
-        token.episode_id
-        == next(
-            state.episode_id
-            for state in reacquired.snapshot.episode_states
-            if state.node_id == "closet"
-        )
-        for token in reacquired.snapshot.traversal_tokens
-    )

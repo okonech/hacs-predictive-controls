@@ -18,6 +18,7 @@ test = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 markers = [
   "scenario: timestamped acceptance, remediation, restart, or runtime lifecycle scenario",
   "target_model: authoritative graph-local target-model contract",

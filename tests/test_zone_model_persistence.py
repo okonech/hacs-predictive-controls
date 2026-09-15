@@ -5,11 +5,11 @@ import hashlib
 import json
 import zlib
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from importlib import import_module
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -17,9 +17,13 @@ from benchmarks.occupancy_performance import _build_workload
 from custom_components.predictive_controls.model import PredictiveMap
 from custom_components.predictive_controls.yaml_config import load_predictive_map
 from custom_components.predictive_controls.zone_model.engine import ZoneModelEngine
+from custom_components.predictive_controls.zone_model.episodes import PhysicalEpisodes
+from custom_components.predictive_controls.zone_model.filter import ZoneBeliefFilter
+from custom_components.predictive_controls.zone_model.path_health import PathHealth
 from custom_components.predictive_controls.zone_model.persistence import (
     _decode_snapshot,
     _is_pre_feature_v4_snapshot,
+    _json_value,
     _target_map_fingerprint_payload,
     decode_v2_seed,
     legacy_target_map_fingerprint,
@@ -30,10 +34,25 @@ from custom_components.predictive_controls.zone_model.persistence import (
     serialize_target_state,
     target_map_fingerprint,
 )
-from custom_components.predictive_controls.zone_model.policy import POLICY_CALIBRATIONS
+from custom_components.predictive_controls.zone_model.policy import (
+    POLICY_CALIBRATIONS,
+    ZonePolicy,
+)
+from custom_components.predictive_controls.zone_model.profiles import (
+    BELIEF_PROFILES,
+    build_physical_nodes,
+)
+from custom_components.predictive_controls.zone_model.selected_paths import (
+    SelectedPaths,
+)
 from custom_components.predictive_controls.zone_model.types import (
     CountInput,
     SensorInput,
+)
+from tests.persistence_component_fixture import (
+    PersistenceComponents,
+    component_wire,
+    restore_components,
 )
 from tests.test_prediction import NOW as PREDICTION_NOW
 from tests.test_prediction import make_map as prediction_map
@@ -44,7 +63,6 @@ from tests.test_zone_model_count import (
 )
 from tests.test_zone_model_engine import (
     correlated_continuity_map,
-    engine_before_stale_transfer,
     interaction_map,
     mixed_same_zone_map,
     stale_transfer_map,
@@ -55,8 +73,257 @@ NOW = datetime(2026, 7, 18, 23, 0, tzinfo=UTC)
 pytestmark = pytest.mark.target_model
 
 
+def specimen_snapshot(payload: dict[str, object]) -> dict[str, object]:
+    value = payload["snapshot"]
+    assert isinstance(value, dict) and all(isinstance(key, str) for key in value)
+    return cast(dict[str, object], value)
+
+
+def specimen_rows(value: object) -> list[dict[str, object]]:
+    assert isinstance(value, list)
+    assert all(isinstance(row, dict) for row in value)
+    return cast(list[dict[str, object]], value)
+
+
+def checked_current_payload(
+    predictive_map: PredictiveMap, payload: dict[str, object],
+) -> dict[str, object]:
+    """Positive control before mutation; strict whole-reader, never a bypass."""
+    before = deepcopy(payload)
+    at = datetime.fromisoformat(str(specimen_snapshot(payload)["updated_at"]))
+    restored = restore_target_state(predictive_map, payload, at)
+    assert serialize_target_state(predictive_map, restored) == before
+    assert payload == before
+    return payload
+
+
+def structural_payload(
+    predictive_map: PredictiveMap, events: tuple[SensorInput, ...], *,
+    count: int = 1, outward: bool = False, component_policy: bool = False,
+) -> dict[str, object]:
+    """Declared current-format composite, NOT engine-produced legacy authority.
+
+    Selection, physical holds/health and BOTH prediction tables come unchanged
+    from real current observations. Legacy records come from actual standalone
+    components receiving identical inputs. No grants or leases are erased.
+    """
+    engine = ZoneModelEngine(predictive_map, count, events[0].event_at)
+    components = PersistenceComponents(predictive_map, count, events[0].event_at)
+    for event in events:
+        engine.observe(event)
+        components.observe(event)
+    payload = serialize_target_state(predictive_map, engine)
+    original_prediction = deepcopy(payload["prediction"])
+    snapshot = specimen_snapshot(payload)
+    original_grants = deepcopy(snapshot["selected_prediction_grants"])
+    component = component_wire(predictive_map, components)
+    legacy = specimen_snapshot(component)
+    for key in (
+        "traversal_tokens", "retained_traversal_tokens", "current_token_ids",
+        "authorization_uses", "anonymous_supports", "support_token_bindings",
+    ):
+        snapshot[key] = legacy[key]
+    if outward:
+        by_zone = {str(row["zone"]): row
+                   for row in specimen_rows(legacy["belief_states"])}
+        for row in specimen_rows(snapshot["belief_states"]):
+            row["outward_context"] = by_zone[str(row["zone"])]["outward_context"]
+    if component_policy:
+        snapshot["policy_states"] = legacy["policy_states"]
+        payload["audit"] = component["audit"]
+    assert payload["prediction"] == original_prediction
+    assert snapshot["selected_prediction_grants"] == original_grants
+    return checked_current_payload(predictive_map, payload)
+
+
+def two_support_events() -> tuple[SensorInput, ...]:
+    return tuple(
+        SensorInput(f"binary_sensor.{node}", "on", NOW + timedelta(seconds=seconds))
+        for seconds, node in enumerate((
+            "target_source", "target", "a", "am", "as", "d", "dm", "ds",
+        ))
+    )
+
+
+def two_support_engine() -> ZoneModelEngine:
+    predictive_map = conflict_map()
+    payload = structural_payload(predictive_map, two_support_events(), count=2)
+    engine = restore_target_state(predictive_map, payload, NOW + timedelta(seconds=7))
+    assert len(engine.snapshot.anonymous_supports) == 2
+    assert not engine.snapshot.count_conflicts
+    return engine
+
+
+def two_conflict_components() -> PersistenceComponents:
+    components = PersistenceComponents(conflict_map(), 2, NOW)
+    for event in two_support_events():
+        components.observe(event)
+        components.evaluate_count_conflicts(event.event_at)
+    assert len(components.snapshot.count_conflicts) == 1
+    return components
+
+
+def restored_conflict_components(
+    predictive_map: PredictiveMap, payload: object, at: datetime,
+) -> PersistenceComponents:
+    components = restore_components(predictive_map, payload, at)
+    components.evaluate_count_conflicts(at)
+    return components
+
+
+def assert_rejected_atomically(
+    predictive_map: PredictiveMap, valid: dict[str, object],
+    invalid: dict[str, object], message: str | None = None, *, component: bool = False,
+) -> None:
+    """STATE001/002: accept first, reject without mutation, then genuinely continue.
+
+    Component mode certifies only actual codecs/physical/cross-link validators,
+    not engine policy/audit or warning-ledger integrity.
+    """
+    at = datetime.fromisoformat(str(specimen_snapshot(valid)["updated_at"]))
+    before_valid, before_invalid = deepcopy(valid), deepcopy(invalid)
+    if component:
+        receiver = restore_components(predictive_map, valid, at)
+        control = restore_components(predictive_map, valid, at)
+        assert component_wire(predictive_map, receiver) == valid
+        with pytest.raises(ValueError, match=message):
+            restore_components(predictive_map, invalid, at)
+        assert component_wire(predictive_map, receiver) == valid
+        episode = receiver.snapshot.episode_states[0]
+        alias, state = episode.alias_states[0]
+        event = SensorInput(alias, "off" if state == "on" else "on",
+                            at + timedelta(seconds=1))
+        assert receiver.observe(event) == control.observe(event)
+        assert component_wire(predictive_map, receiver) == component_wire(
+            predictive_map, control,
+        )
+    else:
+        live = restore_target_state(predictive_map, valid, at)
+        expected = restore_target_state(predictive_map, valid, at)
+        assert serialize_target_state(predictive_map, live) == valid
+        with pytest.raises(ValueError, match=message):
+            restore_target_state(predictive_map, invalid, at)
+        assert serialize_target_state(predictive_map, live) == valid
+        alias, state = live.snapshot.episode_states[0].alias_states[0]
+        event = SensorInput(alias, "off" if state == "on" else "on",
+                            at + timedelta(seconds=1))
+        assert live.observe(event) == expected.observe(event)
+        assert serialize_target_state(predictive_map, live) == serialize_target_state(
+            predictive_map, expected,
+        )
+    assert valid == before_valid and invalid == before_invalid
+
+
+def legacy_warning_components() -> PersistenceComponents:
+    """Original ON0/OFF10/ON12 component guarantee, not current health timing."""
+    lab = PersistenceComponents(target_map(), 1, NOW)
+    for seconds, state in ((0, "on"), (10, "off"), (12, "on")):
+        lab.observe(SensorInput("binary_sensor.room", state,
+                                NOW + timedelta(seconds=seconds)))
+    return lab
+
+
+def current_warning_engine() -> ZoneModelEngine:
+    """HEALTH002: actual sixth completed cycle, not legacy impossible cadence."""
+    engine = ZoneModelEngine(target_map(), 1, NOW)
+    for cycle in range(6):
+        for offset, state in ((0, "on"), (10, "off")):
+            engine.observe(SensorInput(
+                "binary_sensor.room", state,
+                NOW + timedelta(seconds=cycle * 40 + offset),
+            ))
+        assert bool(engine.snapshot.reliability_warning_occurrences) is (cycle == 5)
+    assert engine.snapshot.updated_at == NOW + timedelta(seconds=210)
+    return engine
+
+
+def stale_transfer_events() -> tuple[SensorInput, ...]:
+    return tuple(SensorInput(f"binary_sensor.{node}", "on", NOW + offset)
+                 for node, offset in (
+                     ("independent_entry", timedelta(microseconds=100000)),
+                     ("independent_transition", timedelta(microseconds=200000)),
+                     ("independent_stay", timedelta(microseconds=300000)),
+                     ("source", timedelta(seconds=1)),
+                     ("bridge", timedelta(seconds=2)),
+                     ("retained", timedelta(seconds=3)),
+                 ))
+
+
+def correlated_prefix() -> tuple[SensorInput, ...]:
+    """Exact six-input prefix of retained Sept6 source; no missing helper import."""
+    return tuple(SensorInput(f"binary_sensor.{node}", state,
+                            datetime.fromisoformat(at)) for node, state, at in (
+        ("master_bedroom_closet", "on", "2026-09-06T19:22:40Z"),
+        ("master_bedroom_closet", "off", "2026-09-06T19:22:54.617693+00:00"),
+        ("fixture_entry", "on", "2026-09-06T19:31:56Z"),
+        ("fixture_bridge", "on", "2026-09-06T19:31:57Z"),
+        ("master_bathroom", "on", "2026-09-06T19:31:58.382096+00:00"),
+        ("master_bedroom_closet", "off", "2026-09-06T19:32:26.372683+00:00"),
+    ))
+
+
+def bathroom_setup_events() -> tuple[SensorInput, ...]:
+    """Sept8's unchanged synthetic 10:00 walk, not captured incident evidence."""
+    at = datetime(2026, 9, 8, 10, tzinfo=UTC)
+    return tuple(SensorInput(f"binary_sensor.{node}", state,
+                            at + timedelta(seconds=start + offset))
+                 for start, state in ((0, "on"), (10, "off"))
+                 for offset, node in enumerate(
+                     ("top", "entrance", "closet", "bathroom"),
+                 ))
+
+
+def token_prediction_payload() -> tuple[PredictiveMap, dict[str, object]]:
+    """Independent token-authority specimen, never repaired selected prediction.
+
+    Real token reducers issue the lease and real ZonePolicy applies it. Independent
+    physical/selection/health reducers supply current structural records. No engine
+    prediction is ever run here, so no generated grant or lease can be erased.
+    """
+    predictive_map = prediction_map()
+    nodes = build_physical_nodes(predictive_map).nodes
+    lab = PersistenceComponents(predictive_map, 1, PREDICTION_NOW)
+    seed_mature_route(lab.prediction_manager)
+    physical = PhysicalEpisodes(nodes, diagnostic_warnings=False)
+    selection = SelectedPaths(predictive_map, nodes, 1)
+    health = PathHealth(nodes)
+    for seconds, node in enumerate(("office", "hall", "kitchen")):
+        at = PREDICTION_NOW + timedelta(seconds=seconds)
+        event = SensorInput(f"binary_sensor.{node}", "on", at)
+        lab.observe(event)
+        assert all(not update.effects for update in physical.advance(at))
+        prior = physical.states
+        selection.reconcile(prior, at)
+        update = physical.observe(event)
+        for effect in update.effects:
+            selection.observe(effect, update.state, physical.states, before=prior)
+        selection.reconcile(physical.states, at)
+        health.observe(physical.states, at, selection.covered_nodes)
+    lease, = lab.prediction_manager.leases
+    assert lease.authority_kind == "token" and lab.prediction_manager.grants == ()
+    update_policy = lab.policies["living"].apply_prediction(
+        lease, lab.filters["living"].state,
+    )
+    assert update_policy is not None and update_policy.state.phase == "predicted"
+    payload = component_wire(predictive_map, lab)
+    payload["schema"] = "zone-belief-v4"
+    snapshot = specimen_snapshot(payload)
+    snapshot["episode_states"] = _json_value([
+        asdict(state) for state in physical.states
+    ])
+    snapshot["selected_paths"] = _json_value([
+        asdict(path) if path is not None else None for path in selection.paths
+    ])
+    snapshot["selected_sources"] = _json_value([
+        asdict(item) for item in selection.sources
+    ])
+    snapshot["path_health"] = _json_value([asdict(item) for item in health.states])
+    checked_current_payload(predictive_map, payload)
+    return predictive_map, payload
+
+
 def test_deterministic_coalesced_origin_later_than_creation_round_trips() -> None:
-    """Retain the semantic workload's real least-ID/min-created writer frontier."""
+    """STATE010/COUNT008: exact component least-ID/min-created writer frontier."""
     predictive_map = load_predictive_map(
         (Path(__file__).parents[1] / "benchmarks/reference-map.yaml").read_text()
     )
@@ -65,7 +332,7 @@ def test_deterministic_coalesced_origin_later_than_creation_round_trips() -> Non
         predictive_map, event_count=100, started_at=started_at,
         occupants=2, trace_profile="deterministic",
     )
-    engine = ZoneModelEngine(predictive_map, 2, workload.bootstrap_at)
+    engine = PersistenceComponents(predictive_map, 2, workload.bootstrap_at)
     for event, receipt in zip(
         workload.events[:30], workload.receive_at[:30], strict=True,
     ):
@@ -88,9 +355,12 @@ def test_deterministic_coalesced_origin_later_than_creation_round_trips() -> Non
     assert origin.track_confidence == "confirmed"
     assert origin.provenance_kind == "adjacent" and len(set(origin.path_node_ids)) == 3
     assert all(a.settled_handoff is None for a in result.authorizations)
-    payload = serialize_target_state(predictive_map, engine)
-    restored = restore_target_state(predictive_map, payload, result.snapshot.updated_at)
-    assert serialize_target_state(predictive_map, restored) == payload
+    # Component wire encodes records, unlike the engine serializer it does not
+    # drain pending learning. Commit real accepted learning before persistence.
+    engine.commit_prediction_learning()
+    payload = component_wire(predictive_map, engine)
+    restored = restore_components(predictive_map, payload, result.snapshot.updated_at)
+    assert component_wire(predictive_map, restored) == payload
     # Descendants need not retain a coalesced last-transition marker. Replay the
     # rest of the identical workload, without changing receipt order or history.
     for event, receipt in zip(
@@ -99,12 +369,14 @@ def test_deterministic_coalesced_origin_later_than_creation_round_trips() -> Non
         assert restored.observe(event, processing_at=receipt) == engine.observe(
             event, processing_at=receipt,
         )
-        state = serialize_target_state(predictive_map, engine)
-        assert serialize_target_state(predictive_map, restored) == state
-        restored = restore_target_state(
+        restored.commit_prediction_learning()
+        engine.commit_prediction_learning()
+        state = component_wire(predictive_map, engine)
+        assert component_wire(predictive_map, restored) == state
+        restored = restore_components(
             predictive_map, state, engine.snapshot.updated_at,
         )
-        assert serialize_target_state(predictive_map, restored) == state
+        assert component_wire(predictive_map, restored) == state
 
 
 # Frozen *actual writer* snapshots, captured by executing the named git revisions
@@ -410,8 +682,23 @@ def test_handoff_fingerprint_discriminator_and_historical_recipes(
     current = _target_map_fingerprint_payload(predictive_map)
     assert type(current["settled_adjacent_transfer_version"]) is int
     assert current["settled_adjacent_transfer_version"] == 1
+    assert type(current["settled_endpoint_release_version"]) is int
+    assert current["settled_endpoint_release_version"] == 1
     old = deepcopy(current)
     old.pop("settled_adjacent_transfer_version")
+    # Reconstruct the same pre-handoff recipe, not a hybrid containing the
+    # later REQ-TRAV-020 discriminator. The archived expected hash stays fixed.
+    old.pop("impossible_cadence_preservation_version")
+    old.pop("supported_gap_acquisition_version")
+    # REQ-STATE-011/012: newer current-only gates never alter archived recipes.
+    old.pop("support_departure_version")
+    old.pop("settled_endpoint_release_version")
+    old.pop("selected_path_version")
+    old.pop("path_health_calibration")
+    old.pop("presence_gated_departure_version")
+    old.pop("selected_prediction_execution_version")
+    old.pop("unsupported_jump_diagnostics_version")
+    old.pop("deferred_prediction_learning_version")
     old_fingerprint = hashlib.sha256(
         json.dumps(old, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -423,6 +710,8 @@ def test_handoff_fingerprint_discriminator_and_historical_recipes(
     )
     historical = _target_map_fingerprint_payload(predictive_map, pre_feature=True)
     assert "settled_adjacent_transfer_version" not in historical
+    assert "support_departure_version" not in historical
+    assert "settled_endpoint_release_version" not in historical
     profiles = historical["profiles"]
     assert isinstance(profiles, dict)
     assert all(
@@ -452,6 +741,7 @@ def test_handoff_fingerprint_discriminator_and_historical_recipes(
     payload = serialize_target_state(predictive_map, engine)
     assert payload["map_fingerprint"] != old_fingerprint
     assert "settled_adjacent_transfer_version" not in payload
+    assert "settled_endpoint_release_version" not in payload
     assert engine.snapshot.anonymous_supports == ()
 
     def unexpected_decode(*args: object, **kwargs: object) -> None:
@@ -489,12 +779,12 @@ def handoff_validation_payload() -> tuple[PredictiveMap, dict[str, Any]]:
             for node, neighbors in adjacency.items()
         }
     })
-    engine = ZoneModelEngine(predictive_map, 1, NOW)
-    for seconds, node in enumerate(("a", "b", "source", "target")):
-        engine.observe(SensorInput(
+    events = tuple(
+        SensorInput(
             f"binary_sensor.{node}", "on", NOW + timedelta(seconds=seconds)
-        ))
-    payload: dict[str, Any] = dict(serialize_target_state(predictive_map, engine))
+        ) for seconds, node in enumerate(("a", "b", "source", "target"))
+    )
+    payload: dict[str, Any] = dict(structural_payload(predictive_map, events))
     snapshot = payload["snapshot"]
     source = next(s for s in snapshot["episode_states"] if s["node_id"] == "source")
     token = next(t for t in snapshot["traversal_tokens"] if t["node_id"] == "target")
@@ -530,9 +820,8 @@ def handoff_validation_payload() -> tuple[PredictiveMap, dict[str, Any]]:
         evidence_ids=[token["episode_id"], source["episode_id"]],
     )
     payload["audit"] = [row]
-    # The provisional projection cannot retain the ordinary confirmed target's
-    # diagnostic prediction leases. Route statistics are independent history.
-    payload["prediction"]["leases"] = []
+    # The independent selected grants/leases do not derive from this token.
+    checked_current_payload(predictive_map, payload)
     return predictive_map, payload
 
 
@@ -579,6 +868,7 @@ def test_forged_support_update_cannot_hide_current_binding_provenance() -> None:
     engine = restore_target_state(predictive_map, payload, NOW + timedelta(seconds=3))
     engine.advance(NOW + timedelta(seconds=4), emit_events=False)
     invalid: dict[str, Any] = dict(serialize_target_state(predictive_map, engine))
+    valid = deepcopy(checked_current_payload(predictive_map, invalid))
     support = invalid["snapshot"]["anonymous_supports"][0]
     support.update(
         updated_at=(NOW + timedelta(seconds=4)).isoformat(),
@@ -586,6 +876,7 @@ def test_forged_support_update_cannot_hide_current_binding_provenance() -> None:
     )
     with pytest.raises(ValueError, match="target binding"):
         restore_target_state(predictive_map, invalid, NOW + timedelta(seconds=4))
+    assert_rejected_atomically(predictive_map, valid, invalid, "target binding")
 
 
 @pytest.mark.parametrize("mutation", (
@@ -596,6 +887,7 @@ def test_forged_support_update_cannot_hide_current_binding_provenance() -> None:
 ))
 def test_handoff_restore_rejects_malformed_cross_component_state(mutation: str) -> None:
     predictive_map, payload = handoff_validation_payload()
+    valid = deepcopy(payload)
     snapshot = payload["snapshot"]
     policy = next(p for p in snapshot["policy_states"] if p["zone"] == "target")
     token = next(t for t in snapshot["traversal_tokens"] if t["node_id"] == "target")
@@ -636,10 +928,36 @@ def test_handoff_restore_rejects_malformed_cross_component_state(mutation: str) 
     else:
         token["provenance_kind"] = "adjacent"
         token["equivalent_confirmed_strength"] = False
+    message = {
+        "no_source": "Evidence-active policy is not bound to its acquisition episode",
+        "self_source": "Evidence-active policy is not bound to its acquisition episode",
+        "multiple_sources": (
+            "Evidence-active policy is not bound to its acquisition episode"
+        ),
+        "wrong_pair_source": (
+            "Evidence-active policy is not bound to its acquisition episode"
+        ),
+        "confirmed_policy": (
+            "Evidence-active policy is not bound to its acquisition episode"
+        ),
+        "policy_two_hop": (
+            "Evidence-active policy is not bound to its acquisition episode"
+        ),
+        "token_two_hop": "Settled-adjacent traversal token is incompatible",
+        "token_confirmed": "Confirmed traversal token lacks a bounded path",
+        "token_not_equivalent": "Settled-adjacent traversal token is incompatible",
+        "support_two_hop": "Anonymous-support current provenance/path is incompatible",
+        "support_one_node": "Anonymous-support current provenance/path is incompatible",
+        "origin_node": "Anonymous-support origin node is incompatible",
+        "origin_precreation": "Anonymous-support origin identity/time is incompatible",
+        "origin_handoff": "Anonymous-support origin lacks valid creation strength",
+        "binding_path": "Anonymous-support target binding is incompatible",
+    }[mutation]
     before = deepcopy(payload)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=f"^{message}$"):
         restore_target_state(predictive_map, payload, NOW + timedelta(seconds=3))
     assert payload == before
+    assert_rejected_atomically(predictive_map, valid, payload, f"^{message}$")
 
 
 @pytest.mark.parametrize("provenance", ("settled_endpoint", "adjacent"))
@@ -699,6 +1017,9 @@ def test_handoff_policy_and_audit_source_references_are_historical(
         policy["activation_source_episode_ids"] = [source["episode_id"]]
         with pytest.raises(ValueError, match="acquisition episode"):
             restore_target_state(predictive_map, invalid, engine.snapshot.updated_at)
+        assert_rejected_atomically(
+            predictive_map, state, invalid, "acquisition episode",
+        )
 
 
 @pytest.mark.parametrize("mutation", (
@@ -707,6 +1028,7 @@ def test_handoff_policy_and_audit_source_references_are_historical(
 ))
 def test_handoff_audit_rejects_malformed_historical_proof(mutation: str) -> None:
     predictive_map, payload = handoff_validation_payload()
+    valid = deepcopy(payload)
     row = payload["audit"][0]
     if mutation == "missing_source":
         row["evidence_ids"] = [row["episode_id"]]
@@ -726,8 +1048,20 @@ def test_handoff_audit_rejects_malformed_historical_proof(mutation: str) -> None
         row["authorization_authorized"] = False
     else:
         row["local_evidence_kind"] = "stable_clear"
-    with pytest.raises(ValueError):
+    message = {
+        "missing_source": "Settled-adjacent audit identity is incomplete",
+        "wrong_source": "Settled-adjacent audit is not episode-derived",
+        "unknown_source": "Episode reference has no stored physical node",
+        "future_event": "Settled-adjacent audit is not episode-derived",
+        "wrong_target": "Settled-adjacent audit is not episode-derived",
+        "repeat_evidence": "Policy decision evidence IDs must be unique and non-empty",
+        "untrusted": "Settled-adjacent audit identity is incomplete",
+        "unauthorized": "Settled-adjacent audit identity is incomplete",
+        "wrong_kind": "Settled-adjacent audit identity is incomplete",
+    }[mutation]
+    with pytest.raises(ValueError, match=f"^{message}$"):
         restore_target_state(predictive_map, payload, NOW + timedelta(seconds=3))
+    assert_rejected_atomically(predictive_map, valid, payload, f"^{message}$")
 
 
 @pytest.mark.parametrize("retain_origin", (False, True))
@@ -743,6 +1077,7 @@ def test_transferred_support_origin_and_endpoint_validation_survive_eviction(
     at = NOW + timedelta(seconds=184 if retain_origin else 1804)
     engine.advance(at, emit_events=False)
     invalid: dict[str, Any] = dict(serialize_target_state(predictive_map, engine))
+    valid = deepcopy(checked_current_payload(predictive_map, invalid))
     snapshot = invalid["snapshot"]
     support = snapshot["anonymous_supports"][0]
     origins = snapshot["retained_traversal_tokens"]
@@ -760,8 +1095,27 @@ def test_transferred_support_origin_and_endpoint_validation_survive_eviction(
         )
     else:
         support["provenance_kind"] = "local_interaction"
-    with pytest.raises(ValueError):
+    message = (
+        "Interaction support provenance is incompatible" if mutation == "interaction"
+        else "Support-token binding references an absent support"
+        if mutation == "origin_identity" and retain_origin
+        else "Anonymous-support origin identity/time is incompatible"
+    )
+    with pytest.raises(ValueError, match=f"^{message}$"):
         restore_target_state(predictive_map, invalid, at)
+    assert_rejected_atomically(predictive_map, valid, invalid, f"^{message}$")
+    if mutation == "origin_identity" and retain_origin:
+        # The original broken binding rejects first. Independently qualify the
+        # deeper origin predicate, without changing or repairing that mutation.
+        qualified = deepcopy(invalid)
+        qualified_snapshot = qualified["snapshot"]
+        qualified_support = qualified_snapshot["anonymous_supports"][0]
+        for binding in qualified_snapshot["support_token_bindings"]:
+            binding["support_id"] = qualified_support["support_id"]
+        assert_rejected_atomically(
+            predictive_map, valid, qualified,
+            "^Anonymous-support origin identity/time is incompatible$",
+        )
 
 
 @pytest.mark.parametrize("path", (["source", "target"], ["target"]))
@@ -769,12 +1123,15 @@ def test_provisional_endpoint_cannot_claim_confirmed_or_equivalent_strength(
     path: list[str],
 ) -> None:
     predictive_map, payload = handoff_validation_payload()
+    valid = deepcopy(payload)
     token = next(
         t for t in payload["snapshot"]["traversal_tokens"] if t["node_id"] == "target"
     )
     token.update(provenance_kind="settled_endpoint", path_node_ids=path)
-    with pytest.raises(ValueError):
+    message = "^Settled-endpoint traversal token is incompatible$"
+    with pytest.raises(ValueError, match=message):
         restore_target_state(predictive_map, payload, NOW + timedelta(seconds=3))
+    assert_rejected_atomically(predictive_map, valid, payload, message)
 
 
 @pytest.mark.parametrize("retain_origin", (False, True))
@@ -782,10 +1139,13 @@ def test_interaction_support_provenance_cannot_hide_behind_forged_update(
     retain_origin: bool,
 ) -> None:
     predictive_map = interaction_map()
-    engine = ZoneModelEngine(predictive_map, 1, NOW)
-    engine.observe(SensorInput("event.room_scene_001", "pressed", NOW))
+    initial = structural_payload(predictive_map, (
+        SensorInput("event.room_scene_001", "pressed", NOW),
+    ), component_policy=True)
+    engine = restore_target_state(predictive_map, initial, NOW)
     engine.advance(NOW + timedelta(seconds=1))
     payload: dict[str, Any] = dict(serialize_target_state(predictive_map, engine))
+    valid = deepcopy(payload)
     snapshot = payload["snapshot"]
     support = snapshot["anonymous_supports"][0]
     support["updated_at"] = snapshot["updated_at"]
@@ -797,6 +1157,7 @@ def test_interaction_support_provenance_cannot_hide_behind_forged_update(
         snapshot["support_token_bindings"] = []
     with pytest.raises(ValueError, match="[Ii]nteraction"):
         restore_target_state(predictive_map, payload, NOW + timedelta(seconds=1))
+    assert_rejected_atomically(predictive_map, valid, payload, "[Ii]nteraction")
 
 
 @pytest.mark.parametrize("retain_origin", (False, True))
@@ -831,6 +1192,7 @@ def test_support_origin_occurrence_outside_lifetime_rejects_atomically(
     # This supplies an authentic later origin reference, but no creation token.
     engine.observe(SensorInput("binary_sensor.d", "on", at))
     payload = dict(serialize_target_state(predictive_map, engine))
+    valid = deepcopy(checked_current_payload(predictive_map, payload))
     snapshot = payload["snapshot"]
     support = snapshot["anonymous_supports"][0]
     assert support["updated_at"] == (NOW + timedelta(seconds=3)).isoformat()
@@ -850,6 +1212,10 @@ def test_support_origin_occurrence_outside_lifetime_rejects_atomically(
     )):
         restore_target_state(predictive_map, payload, at)
     assert payload == before
+    assert_rejected_atomically(predictive_map, valid, payload, (
+        "Episode reference is outside stored state" if mutation == "future"
+        else "Anonymous-support origin identity/time is incompatible"
+    ))
 
 
 @pytest.mark.parametrize("snapshot, expected", (
@@ -897,7 +1263,8 @@ def test_reselected_asserted_context_round_trips_v4() -> None:
 
 def test_reliability_warning_occurrence_round_trips_and_clears_in_place() -> None:
     predictive_map = target_map()
-    engine = ZoneModelEngine(predictive_map, 1, NOW)
+    # Original component timing remains exact; current health has its own proof.
+    engine = PersistenceComponents(predictive_map, 1, NOW)
     engine.observe(SensorInput("binary_sensor.room", "on", NOW))
     engine.observe(
         SensorInput("binary_sensor.room", "off", NOW + timedelta(seconds=10))
@@ -915,8 +1282,8 @@ def test_reliability_warning_occurrence_round_trips_and_clears_in_place() -> Non
     assert occurrence.last_observed_at == NOW + timedelta(seconds=12)
     assert occurrence.cleared_at is None
 
-    payload = serialize_target_state(predictive_map, engine)
-    restored = restore_target_state(
+    payload = component_wire(predictive_map, engine)
+    restored = restore_components(
         predictive_map,
         payload,
         NOW + timedelta(seconds=12),
@@ -938,10 +1305,15 @@ def test_reliability_warning_occurrence_round_trips_and_clears_in_place() -> Non
 
 
 def test_pre_handoff_reselected_context_rejected_atomically() -> None:
-    snapshot = _decode_snapshot(historical_payload("reselected")["snapshot"])
+    # REQ-STATE-005/010/011: defaults belong only to isolated historical reads.
+    snapshot = _decode_snapshot(
+        historical_payload("reselected")["snapshot"], pre_feature_v4=True
+    )
     belief = snapshot.belief_states[0]
     assert belief.context == "asserted"
     assert belief.generation_episode_id == belief.asserted_episode_id
+    assert belief.qualified_departure_at is None
+    assert all(not state.retained_endpoint_hold for state in snapshot.policy_states)
     assert_historical_rejected("reselected")
 
 
@@ -1059,7 +1431,15 @@ def test_restore_rejects_inconsistent_reliability_warning_ledger(
     mutation: str,
     message: str,
 ) -> None:
+    """STATE001/002, HEALTH002: strict current ledger and legacy incompatibility.
+
+    User-approved 2026-09-14 disposition retains all five IDs and legacy
+    mutations, but retires only unsupported legacy component cross-link
+    rejection. Historical decoding remains separately tested; current stale
+    proof is six-to-five completed cycles, not obsolete episode warning flags.
+    """
     predictive_map = target_map()
+    lab = legacy_warning_components()
     engine = ZoneModelEngine(predictive_map, 1, NOW)
     engine.observe(SensorInput("binary_sensor.room", "on", NOW))
     engine.observe(
@@ -1069,8 +1449,19 @@ def test_restore_rejects_inconsistent_reliability_warning_ledger(
         SensorInput("binary_sensor.room", "on", NOW + timedelta(seconds=12))
     )
     payload = serialize_target_state(predictive_map, engine)
+    valid = deepcopy(payload)
     snapshot = payload["snapshot"]
     assert isinstance(snapshot, dict)
+    legacy = specimen_snapshot(component_wire(predictive_map, lab))
+    snapshot["reliability_warning_occurrences"] = legacy[
+        "reliability_warning_occurrences"
+    ]
+    legacy_room = next(row for row in specimen_rows(legacy["episode_states"])
+                       if row["node_id"] == "room")
+    current_room = next(row for row in specimen_rows(snapshot["episode_states"])
+                        if row["node_id"] == "room")
+    for key in ("cadence_warning", "cadence_warning_reason"):
+        current_room[key] = legacy_room[key]
     occurrences = snapshot["reliability_warning_occurrences"]
     episodes = snapshot["episode_states"]
     assert isinstance(occurrences, list) and isinstance(occurrences[0], dict)
@@ -1093,13 +1484,107 @@ def test_restore_rejects_inconsistent_reliability_warning_ledger(
     else:
         occurrences.clear()
 
-    with pytest.raises(ValueError, match=message):
-        restore_target_state(predictive_map, payload, NOW + timedelta(seconds=12))
+    # Retain every original legacy mutation, including future13 and stale flags.
+    # Current strict rejection is intentionally earlier; no legacy ledger validator
+    # is claimed for restore_components. The current equivalent below reaches it.
+    legacy_error = ("cannot restore legacy warnings" if mutation == "missing"
+                    else "Path health warning identity or reason is invalid")
+    assert_rejected_atomically(predictive_map, valid, payload, legacy_error)
+
+    current = current_warning_engine()
+    canonical = serialize_target_state(predictive_map, current)
+    invalid = deepcopy(canonical)
+    current_snapshot = specimen_snapshot(invalid)
+    rows = specimen_rows(current_snapshot["reliability_warning_occurrences"])
+    warning = rows[0]
+    if mutation == "unknown_node":
+        warning["node_id"] = "missing"
+    elif mutation == "wrong_zone":
+        warning["zone"] = "hall"
+    elif mutation == "future":
+        warning["last_observed_at"] = (
+            current.snapshot.updated_at + timedelta(seconds=1)
+        ).isoformat()
+    elif mutation == "stale":
+        health = next(row for row in specimen_rows(current_snapshot["path_health"])
+                      if row["node_id"] == "room")
+        cycles = health["completed_cycles"]
+        assert isinstance(cycles, list) and len(cycles) == 6
+        health["completed_cycles"] = cycles[1:]
+    else:
+        rows.clear()
+    # Explicit mapping retains the original parameter IDs/messages without making
+    # their old wording an alternate accepted failure signature.
+    assert message == {
+        "unknown_node": "occurrence is incompatible",
+        "wrong_zone": "occurrence is incompatible",
+        "future": "occurrence is incompatible",
+        "stale": "occurrence is stale", "missing": "occurrence is missing",
+    }[mutation]
+    error = {
+        "unknown_node": "Path health warning identity or reason is invalid",
+        "wrong_zone": "Path health warning identity or reason is invalid",
+        "future": "Path health warning timestamp is in the future",
+        "stale": "Path health warning and physical ledger disagree",
+        "missing": "Path health warning and physical ledger disagree",
+    }[mutation]
+    assert_rejected_atomically(predictive_map, canonical, invalid, error)
+    # Actual production PathHealth.restore, with a populated receiver, also must
+    # reject atomically. A real next ON makes every receiver component distinct
+    # from the rejected OFF210 specimen, so partial installation cannot hide.
+    current.observe(SensorInput(
+        "binary_sensor.room", "on",
+        current.snapshot.updated_at + timedelta(seconds=2),
+    ))
+    assert not any(current.snapshot.selected_paths)
+    nodes = build_physical_nodes(predictive_map).nodes
+    receiver, control = PathHealth(nodes), PathHealth(nodes)
+    for tracker in (receiver, control):
+        tracker.restore(current.snapshot.path_health,
+                        current.snapshot.reliability_warning_occurrences,
+                        current.snapshot.updated_at)
+    decoded = _decode_snapshot(current_snapshot)
+    before_decoded = deepcopy(decoded)
+    # Inspect without advance(), which could normalize a partially installed
+    # ledger/frontier and conceal a non-atomic failure.
+    before_health = (receiver.states, receiver._occurrences.copy(), receiver._at)
+    assert receiver.states != decoded.path_health
+    assert receiver._at != decoded.updated_at
+    assert tuple(receiver._occurrences.values()) != (
+        decoded.reliability_warning_occurrences
+    )
+    with pytest.raises(ValueError, match=error):
+        receiver.restore(decoded.path_health, decoded.reliability_warning_occurrences,
+                         decoded.updated_at)
+    assert (receiver.states, receiver._occurrences, receiver._at) == before_health
+    assert decoded == before_decoded
+
+    # A genuine next OFF completes another quick cycle. Compare the rejected
+    # receiver against both a pristine control and the live production snapshot.
+    current.observe(SensorInput(
+        "binary_sensor.room", "off",
+        current.snapshot.updated_at + timedelta(seconds=10),
+    ))
+    assert not any(current.snapshot.selected_paths)
+    for tracker in (receiver, control):
+        tracker.observe(current.snapshot.episode_states,
+                        current.snapshot.updated_at, frozenset())
+    assert (receiver.states, receiver._occurrences, receiver._at) == (
+        control.states, control._occurrences, control._at,
+    )
+    assert receiver.states == current.snapshot.path_health
+    assert tuple(receiver._occurrences.values()) == (
+        current.snapshot.reliability_warning_occurrences
+    )
+    assert receiver._at == current.snapshot.updated_at
+    assert receiver.states != before_health[0]
+    assert receiver._occurrences != before_health[1]
+    assert receiver._at != before_health[2]
 
 
 def test_restore_accepts_cleared_reliability_warning_history() -> None:
     predictive_map = target_map()
-    engine = ZoneModelEngine(predictive_map, 1, NOW)
+    engine = PersistenceComponents(predictive_map, 1, NOW)
     engine.observe(SensorInput("binary_sensor.room", "on", NOW))
     engine.observe(
         SensorInput("binary_sensor.room", "off", NOW + timedelta(seconds=10))
@@ -1110,9 +1595,9 @@ def test_restore_accepts_cleared_reliability_warning_history() -> None:
     engine.observe(
         SensorInput("binary_sensor.room", "unavailable", NOW + timedelta(seconds=13))
     )
-    payload = serialize_target_state(predictive_map, engine)
+    payload = component_wire(predictive_map, engine)
 
-    restored = restore_target_state(
+    restored = restore_components(
         predictive_map,
         payload,
         NOW + timedelta(seconds=13),
@@ -1123,7 +1608,12 @@ def test_restore_accepts_cleared_reliability_warning_history() -> None:
     )
 
 
-def test_interaction_episode_round_trips_and_releases_on_the_same_frontier() -> None:
+def test_interaction_settled_endpoint_retains_across_restart_until_count_zero() -> None:
+    """Replace timeout release with POLICY-013 retention and COUNT-001 release.
+
+    Preserve STATE-003/009/010 clear-frontier and strict restart coverage; test
+    before/at/after an actual categorical release, not an invented departure.
+    """
     predictive_map = PredictiveMap.from_mapping(
         {
             "nodes": {
@@ -1141,7 +1631,13 @@ def test_interaction_episode_round_trips_and_releases_on_the_same_frontier() -> 
     engine = ZoneModelEngine(predictive_map, 1, NOW)
     press_at = NOW + timedelta(seconds=1)
     engine.observe(SensorInput("event.room_scene_001", "pressed", press_at))
-    assert len(engine.snapshot.anonymous_supports) == 1
+    components = PersistenceComponents(predictive_map, 1, NOW)
+    components.observe(SensorInput("event.room_scene_001", "pressed", press_at))
+    support, = components.snapshot.anonymous_supports
+    assert support.state == "settled"
+    assert support.provenance_kind == "local_interaction"
+    selected = engine.snapshot.selected_paths
+    assert any(path is not None and path.endpoint.zone == "room" for path in selected)
     payload = serialize_target_state(predictive_map, engine)
     clear_at = engine.snapshot.episode_states[0].clear_deadline
     assert clear_at is not None
@@ -1158,44 +1654,117 @@ def test_interaction_episode_round_trips_and_releases_on_the_same_frontier() -> 
         expected = uninterrupted.advance(restore_at)
         restored = restore_target_state(predictive_map, payload, restore_at)
         assert restored.snapshot == expected.snapshot
-
-    pending = ZoneModelEngine(predictive_map, 1, NOW)
-    pending.observe(SensorInput("event.room_scene_001", "pressed", press_at))
-    pending.advance(press_at + timedelta(minutes=61))
-    pending_since = pending.snapshot.policy_states[0].pending_release_since
-    assert pending_since is not None
-    release_at = (
-        pending_since
-        + POLICY_CALIBRATIONS["stay_presence"].release_dwell
-    )
-    pending_payload = serialize_target_state(predictive_map, pending)
-
-    restored_release = None
-    for restore_at in (
-        release_at - timedelta(microseconds=1),
-        release_at,
-        release_at + timedelta(microseconds=1),
-    ):
-        uninterrupted = ZoneModelEngine(predictive_map, 1, NOW)
-        uninterrupted.observe(
-            SensorInput("event.room_scene_001", "pressed", press_at)
-        )
-        uninterrupted.advance(press_at + timedelta(minutes=61))
-        expected_release = uninterrupted.advance(restore_at)
-        restored_release = restore_target_state(
+        assert expected.policy_events == ()
+        assert restored.snapshot.policy_states[0].active
+        assert restored.snapshot.policy_states[0].retained_endpoint_hold
+        assert restored.snapshot.belief_states[0].qualified_departure_at is None
+        current_payload = serialize_target_state(predictive_map, restored)
+        assert serialize_target_state(
             predictive_map,
-            pending_payload,
-            restore_at,
-        )
-        assert restored_release.snapshot == expected_release.snapshot
+            restore_target_state(predictive_map, current_payload, restore_at),
+        ) == current_payload
 
-    assert restored_release is not None
-    room = next(
-        state
-        for state in restored_release.snapshot.policy_states
-        if state.zone == "room"
+    retained_at = press_at + timedelta(minutes=61)
+    retained = engine.advance(retained_at)
+    assert retained.policy_events == ()
+    assert retained.snapshot.belief_states[0].probability < (
+        POLICY_CALIBRATIONS["stay_presence"].off_threshold
     )
-    assert room.active is False
+    assert retained.snapshot.traversal_tokens == ()
+    assert retained.snapshot.retained_traversal_tokens == ()
+    assert retained.snapshot.support_token_bindings == ()
+    # Stable clear removes branch authority, not the retained endpoint/identity.
+    initial_path, = selected
+    selected = retained.snapshot.selected_paths
+    retained_path, = selected
+    assert initial_path is not None and retained_path is not None
+    assert retained_path.endpoint.episode_id == initial_path.endpoint.episode_id
+    assert not retained_path.endpoint.branch_active and retained_path.endpoint_eligible
+    retained_payload = serialize_target_state(predictive_map, engine)
+    restored = restore_target_state(predictive_map, retained_payload, retained_at)
+    assert serialize_target_state(predictive_map, restored) == retained_payload
+
+    # The former 61-minute-plus-dwell timeout is not a release boundary. Even
+    # 24 hours of clear/low belief cannot turn retained evidence into departure.
+    timeout_at = retained_at + POLICY_CALIBRATIONS["stay_presence"].release_dwell
+    zero_at = press_at + timedelta(hours=24)
+    for at in (
+        retained_at,
+        timeout_at - timedelta(microseconds=1),
+        timeout_at,
+        timeout_at + timedelta(microseconds=1),
+        zero_at - timedelta(microseconds=1),
+    ):
+        expected = engine.advance(at)
+        actual = restored.advance(at)
+        assert actual == expected
+        assert actual.policy_events == ()
+        room = actual.snapshot.policy_states[0]
+        assert room.active and room.retained_endpoint_hold
+        assert room.pending_release_since is None
+        assert actual.snapshot.belief_states[0].qualified_departure_at is None
+        assert actual.snapshot.selected_paths == selected
+        components.advance(at)
+        assert components.snapshot.anonymous_supports == (support,)
+        specimen = component_wire(predictive_map, components)
+        assert component_wire(predictive_map, restore_components(
+            predictive_map, specimen, at,
+        )) == specimen
+        current_payload = serialize_target_state(predictive_map, engine)
+        assert serialize_target_state(predictive_map, restored) == current_payload
+        restored = restore_target_state(predictive_map, current_payload, at)
+        assert serialize_target_state(predictive_map, restored) == current_payload
+
+    zero = CountInput("interaction-count-zero", 0, True, zero_at)
+    component_before_zero = component_wire(predictive_map, components)
+    component_restored = restore_components(
+        predictive_map, component_before_zero, components.snapshot.updated_at,
+    )
+    assert components.snapshot.anonymous_supports == (support,)
+    component_release = components.observe_count(zero)
+    assert component_restored.observe_count(zero) == component_release
+    assert component_release.snapshot.anonymous_supports == ()
+    assert component_release.snapshot.support_token_bindings == ()
+    assert component_release.snapshot.traversal_tokens == ()
+    assert component_release.snapshot.count_state.expected_count == 0
+    assert [(event.zone, event.kind, event.event_at, event.policy_reason)
+            for event in component_release.policy_events] == [
+                ("room", "released", zero_at, "count_zero"),
+            ]
+    component_after_zero = component_wire(predictive_map, components)
+    assert component_wire(predictive_map, component_restored) == component_after_zero
+    component_restored = restore_components(
+        predictive_map, component_after_zero, zero_at,
+    )
+    assert component_restored.advance(zero_at + timedelta(microseconds=1)) == (
+        components.advance(zero_at + timedelta(microseconds=1))
+    )
+    expected_release = engine.observe_count(zero)
+    actual_release = restored.observe_count(zero)
+    assert actual_release == expected_release
+    release, = actual_release.policy_events
+    assert (release.zone, release.kind, release.event_at, release.policy_reason) == (
+        "room", "released", zero_at, "count_zero"
+    )
+    assert actual_release.snapshot.count_state.expected_count == 0
+    assert actual_release.snapshot.anonymous_supports == ()
+    room = actual_release.snapshot.policy_states[0]
+    assert not room.active and not room.retained_endpoint_hold
+    assert room.pending_release_since is None
+    assert actual_release.snapshot.belief_states[0].qualified_departure_at is None
+    released_payload = serialize_target_state(predictive_map, engine)
+    assert serialize_target_state(predictive_map, restored) == released_payload
+    restored = restore_target_state(predictive_map, released_payload, zero_at)
+    assert serialize_target_state(predictive_map, restored) == released_payload
+    after_zero = zero_at + timedelta(microseconds=1)
+    expected = engine.advance(after_zero)
+    restored = restore_target_state(predictive_map, released_payload, after_zero)
+    assert restored.snapshot == expected.snapshot
+    assert expected.policy_events == ()
+    assert not restored.snapshot.policy_states[0].active
+    assert serialize_target_state(predictive_map, restored) == (
+        serialize_target_state(predictive_map, engine)
+    )
 
 
 @pytest.mark.parametrize(
@@ -1220,7 +1789,10 @@ def test_v4_restore_rejects_malformed_interaction_provenance(
     engine = ZoneModelEngine(predictive_map, 1, NOW)
     press_at = NOW + timedelta(seconds=1)
     engine.observe(SensorInput("event.room_scene_001", "pressed", press_at))
-    payload = serialize_target_state(predictive_map, engine)
+    payload = structural_payload(predictive_map, (
+        SensorInput("event.room_scene_001", "pressed", press_at),
+    ), component_policy=mutation.startswith("audit_"))
+    valid = deepcopy(payload)
     snapshot = payload["snapshot"]
     assert isinstance(snapshot, dict)
 
@@ -1277,11 +1849,24 @@ def test_v4_restore_rejects_malformed_interaction_provenance(
 
     with pytest.raises(ValueError, match="[Ii]nteraction"):
         restore_target_state(predictive_map, payload, press_at)
+    assert_rejected_atomically(predictive_map, valid, payload, "[Ii]nteraction")
+    if mutation.startswith("audit_"):
+        current = serialize_target_state(predictive_map, engine)
+        selected_invalid = deepcopy(current)
+        original = specimen_rows(selected_invalid["audit"])[0]
+        if mutation == "audit_contract":
+            original["local_evidence_kind"] = "positive"
+        elif mutation == "audit_identity":
+            original["node_id"] = None
+        else:
+            original["local_trustworthy"] = False
+        assert_rejected_atomically(predictive_map, current, selected_invalid,
+                                   "Selected-path audit")
 
 
 def test_correlated_continuity_lineage_round_trips_dormant_and_reopened() -> None:
     predictive_map = correlated_continuity_map()
-    engine = ZoneModelEngine(predictive_map, 2, NOW)
+    engine = PersistenceComponents(predictive_map, 2, NOW)
     top_at = NOW + timedelta(seconds=7)
     top_off_at = NOW + timedelta(seconds=50)
     dormant_at = top_at + timedelta(seconds=45, milliseconds=100)
@@ -1297,20 +1882,20 @@ def test_correlated_continuity_lineage_round_trips_dormant_and_reopened() -> Non
     assert engine.snapshot.traversal_tokens == ()
     assert engine.snapshot.retained_traversal_tokens
 
-    dormant_payload = serialize_target_state(predictive_map, engine)
-    dormant = restore_target_state(predictive_map, dormant_payload, dormant_at)
+    dormant_payload = component_wire(predictive_map, engine)
+    dormant = restore_components(predictive_map, dormant_payload, dormant_at)
     assert dormant.snapshot == engine.snapshot
-    assert serialize_target_state(predictive_map, dormant) == dormant_payload
+    assert component_wire(predictive_map, dormant) == dormant_payload
 
     reopened = dormant.observe(SensorInput("binary_sensor.top", "on", reasserted_at))
     assert any(token.node_id == "top" for token in reopened.snapshot.traversal_tokens)
     assert all(
         token.node_id != "top" for token in reopened.snapshot.retained_traversal_tokens
     )
-    reopened_payload = serialize_target_state(predictive_map, dormant)
-    restored = restore_target_state(predictive_map, reopened_payload, reasserted_at)
+    reopened_payload = component_wire(predictive_map, dormant)
+    restored = restore_components(predictive_map, reopened_payload, reasserted_at)
     assert restored.snapshot == dormant.snapshot
-    assert serialize_target_state(predictive_map, restored) == reopened_payload
+    assert component_wire(predictive_map, restored) == reopened_payload
 
 
 @pytest.mark.parametrize("frontier", ("idle", "unavailable", "count_arrival"))
@@ -1416,7 +2001,9 @@ def test_restore_rejects_lease_canceled_by_later_target_evidence() -> None:
     assert isinstance(prediction, dict)
     prediction["leases"] = stale_lease
 
-    with pytest.raises(ValueError, match="contradictory target evidence"):
+    with pytest.raises(
+        ValueError, match="(contradictory target evidence|no matching selected grant)",
+    ):
         restore_target_state(
             predictive_map,
             payload,
@@ -1425,12 +2012,16 @@ def test_restore_rejects_lease_canceled_by_later_target_evidence() -> None:
 
 
 def test_count_conflict_dwell_survives_restart_without_extension() -> None:
-    engine = engine_with_two_front_conflict()
+    engine = two_conflict_components()
     predictive_map = conflict_map()
     conflict = engine.snapshot.count_conflicts[0]
-    payload = serialize_target_state(predictive_map, engine)
+    assert conflict.deadline == NOW + timedelta(seconds=67)
+    payload = component_wire(predictive_map, engine)
+    assert component_wire(predictive_map, restore_components(
+        predictive_map, payload, engine.snapshot.updated_at,
+    )) == payload
 
-    before = restore_target_state(
+    before = restored_conflict_components(
         predictive_map,
         payload,
         conflict.deadline - timedelta(microseconds=1),
@@ -1443,7 +2034,7 @@ def test_count_conflict_dwell_survives_restart_without_extension() -> None:
     assert not before_target.health_warning
     assert before.snapshot.count_conflicts[0].deadline == conflict.deadline
 
-    exact = restore_target_state(predictive_map, payload, conflict.deadline)
+    exact = restored_conflict_components(predictive_map, payload, conflict.deadline)
     exact_target = next(
         state
         for state in exact.snapshot.episode_states
@@ -1458,9 +2049,10 @@ def test_count_conflict_dwell_survives_restart_without_extension() -> None:
 
 def test_restored_count_degraded_assertion_cancels_legacy_pending_release() -> None:
     predictive_map = conflict_map()
-    engine = engine_with_two_front_conflict()
+    engine = two_conflict_components()
     conflict = engine.snapshot.count_conflicts[0]
     engine.advance(conflict.deadline)
+    engine.evaluate_count_conflicts(conflict.deadline)
     snapshot = engine.snapshot
     pending_at = conflict.deadline
     legacy_pending = replace(
@@ -1473,22 +2065,37 @@ def test_restored_count_degraded_assertion_cancels_legacy_pending_release() -> N
         ),
     )
 
-    restored = ZoneModelEngine.restore(
-        predictive_map,
-        legacy_pending,
-        tuple(engine.audit_rows),
-        pending_at,
+    # This is the real ZonePolicy restoration boundary. Current engine restore
+    # intentionally rejects count degradation, not an alternate inference mode.
+    restored = restore_components(
+        predictive_map, component_wire(predictive_map, engine), pending_at,
+    )
+    target_state = next(state for state in legacy_pending.policy_states
+                        if state.zone == "target")
+    restored.policies["target"] = ZonePolicy(
+        "target", POLICY_CALIBRATIONS["stay_pir"], pending_at,
+        state=target_state, audit=restored.policies["target"].audit,
     )
     due_at = pending_at + POLICY_CALIBRATIONS["stay_pir"].release_dwell
     replayed = restored.observe(
         SensorInput("binary_sensor.as", "on", due_at),
     )
-    target_policy = next(
-        state for state in replayed.snapshot.policy_states if state.zone == "target"
+    # The lab deliberately returns early on duplicate inputs; explicitly exercise
+    # the real policy boundary instead of claiming full engine timer scheduling.
+    episode = next(state for state in restored.snapshot.episode_states
+                   if state.node_id == "target")
+    belief = restored.filters["target"].state
+    evaluation = restored.policies["target"].evaluate(
+        due_at, belief, belief, local_state=None, local_effect=None,
+        authorization=None,
+        asserted_stay_hold=(episode.degradation_reason == "count_conflict"
+                            and episode.status in {"degraded", "clearing"}),
     )
+    target_policy = evaluation.state
 
     assert target_policy.active
     assert target_policy.pending_release_since is None
+    assert evaluation.event is None
     assert not any(
         event.zone == "target" and event.kind == "released"
         for event in replayed.policy_events
@@ -1529,7 +2136,7 @@ def test_historical_v3_decoder_invents_no_support(degraded: bool) -> None:
 
 def test_settled_supports_survive_restart_after_source_tokens_expire() -> None:
     predictive_map = conflict_map()
-    engine = engine_with_two_front_conflict()
+    engine = two_support_engine()
     engine.advance(NOW + timedelta(seconds=100))
     assert engine.snapshot.traversal_tokens == ()
     supports = engine.snapshot.anonymous_supports
@@ -1546,9 +2153,11 @@ def test_settled_supports_survive_restart_after_source_tokens_expire() -> None:
 
 def test_stale_transfer_authority_is_restart_equivalent() -> None:
     predictive_map = stale_transfer_map()
-    engine = engine_before_stale_transfer(NOW)
-    payload = serialize_target_state(predictive_map, engine)
-    restored = restore_target_state(
+    engine = PersistenceComponents(predictive_map, 2, NOW)
+    for event in stale_transfer_events():
+        engine.observe(event)
+    payload = component_wire(predictive_map, engine)
+    restored = restore_components(
         predictive_map,
         payload,
         engine.snapshot.updated_at,
@@ -1597,13 +2206,17 @@ def test_correlated_support_continuation_is_restart_equivalent() -> None:
         "test_inc_2026_09_06_1931z_correlated_intermediate_splits_support_lineage"
     )
     predictive_map = correlated_incident.incident_map()
-    engine = correlated_incident.engine_before_correlated_intermediate()
+    engine = PersistenceComponents(
+        predictive_map, 2, datetime(2026, 9, 6, 19, 22, 39, tzinfo=UTC),
+    )
+    for event in correlated_prefix():
+        engine.observe(event)
     correlated_at = datetime.fromisoformat("2026-09-06T19:32:54.617692+00:00")
     restore_at = correlated_at - timedelta(microseconds=1)
     engine.advance(restore_at)
-    restored = restore_target_state(
+    restored = restore_components(
         predictive_map,
-        serialize_target_state(predictive_map, engine),
+        component_wire(predictive_map, engine),
         restore_at,
     )
     correlated = SensorInput(
@@ -1670,7 +2283,17 @@ def assert_stay_presence_deadline_restore(
         "test_inc_2026_09_08_1213z_stay_presence_authority_expires_before_closet_return"
     )
     predictive_map = incident._incident_map()
-    engine = incident._engine_with_settled_bathroom_support(predictive_map, 1)
+    events = bathroom_setup_events()
+    engine = PersistenceComponents(predictive_map, 1,
+                                   events[0].event_at - timedelta(seconds=1))
+    for event in events:
+        engine.observe(event)
+    engine.advance(datetime(2026, 9, 8, 11, tzinfo=UTC))
+    assert [(support.current_node_id, support.current_zone, support.state)
+            for support in engine.snapshot.anonymous_supports] == [
+                ("bathroom", "bathroom", "settled"),
+            ]
+    assert engine.snapshot.traversal_tokens == ()
     source_at = datetime.fromisoformat("2026-09-08T12:14:24.044050+00:00")
     source = engine.observe(
         SensorInput("binary_sensor.bathroom", "on", source_at)
@@ -1678,25 +2301,15 @@ def assert_stay_presence_deadline_restore(
     if not eligible_source:
         # Synthetic inverse: retain identical physical episodes and ordinary
         # token authority, but no alternative count-support authority.
-        engine = ZoneModelEngine.restore(
-            predictive_map,
-            replace(
-                engine.snapshot,
-                anonymous_supports=(),
-                support_token_bindings=(),
-                count_conflicts=(),
-            ),
-            tuple(engine.audit_rows),
-            source_at,
-        )
+        engine.supports.clear(source_at)
     target_at = source_at + target_offset
     restore_at = target_at - timedelta(microseconds=1)
     engine.advance(restore_at)
-    payload = serialize_target_state(predictive_map, engine)
-    restored = restore_target_state(predictive_map, payload, restore_at)
+    payload = component_wire(predictive_map, engine)
+    restored = restore_components(predictive_map, payload, restore_at)
 
     assert source.authorizations[0].reason == "settled_endpoint_reacquired"
-    assert serialize_target_state(predictive_map, restored) == payload
+    assert component_wire(predictive_map, restored) == payload
 
     target = SensorInput("binary_sensor.closet", "on", target_at)
     processing_at = source_at + timedelta(seconds=181)
@@ -1722,14 +2335,15 @@ def assert_stay_presence_deadline_restore(
     assert restored_result.policy_decisions == uninterrupted_result.policy_decisions
     assert restored_result.authorizations == uninterrupted_result.authorizations
     assert restored.audit_rows == engine.audit_rows
-    post = serialize_target_state(predictive_map, engine)
-    reloaded = restore_target_state(predictive_map, post, target_at)
-    assert serialize_target_state(predictive_map, reloaded) == post
+    post = component_wire(predictive_map, engine)
+    reloaded = restore_components(predictive_map, post, target_at)
+    assert component_wire(predictive_map, reloaded) == post
 
 
 def test_weak_clear_retained_support_survives_restart() -> None:
+    """COUNT-011/STATE-005/010: weak outward is not qualified departure."""
     predictive_map = conflict_map()
-    engine = engine_with_two_front_conflict()
+    engine = two_support_engine()
     support = engine.snapshot.anonymous_supports[0]
     clear_started_at = engine.snapshot.updated_at + timedelta(seconds=1)
     engine.observe(
@@ -1767,10 +2381,11 @@ def test_weak_clear_retained_support_survives_restart() -> None:
 
     assert restored.snapshot == engine.snapshot
 
-    invalid = deepcopy(payload)
-    invalid_snapshot = invalid["snapshot"]
-    assert isinstance(invalid_snapshot, dict)
-    beliefs = invalid_snapshot["belief_states"]
+    # Synthetic legacy object-bearing committed shape, not a physical departure.
+    # Current nullable fields must be present so normalization/support validation
+    # are reached instead of an unrelated missing-field decoder rejection.
+    weak: dict[str, Any] = deepcopy(payload)
+    beliefs = weak["snapshot"]["belief_states"]
     assert isinstance(beliefs, list)
     endpoint_belief = next(
         item
@@ -1778,26 +2393,126 @@ def test_weak_clear_retained_support_survives_restart() -> None:
         if isinstance(item, dict) and item["zone"] == retained.current_zone
     )
     endpoint_belief["context"] = "cleared_with_outward"
+    assert endpoint_belief["qualified_departure_at"] is None
     endpoint_belief["outward_context"] = {
         "source_episode_id": retained.current_episode_id,
         "valid_until": (
             engine.snapshot.updated_at + timedelta(seconds=1)
         ).isoformat(),
+        "qualified_until": None,
     }
+    at = engine.snapshot.updated_at
+    before = deepcopy(weak)
+    outward_restored = restore_target_state(predictive_map, weak, at)
+    assert weak == before
+    assert outward_restored.snapshot == replace(
+        engine.snapshot,
+        belief_states=tuple(
+            replace(belief, context="cleared_with_outward")
+            if belief.zone == retained.current_zone else belief
+            for belief in engine.snapshot.belief_states
+        ),
+    )
+    room = next(
+        state for state in outward_restored.snapshot.policy_states
+        if state.zone == retained.current_zone
+    )
+    assert room.active and room.retained_endpoint_hold
+    assert room.pending_release_since is None
+    assert outward_restored.audit_rows == engine.audit_rows
+    canonical = serialize_target_state(predictive_map, outward_restored)
+    assert serialize_target_state(
+        predictive_map, restore_target_state(predictive_map, canonical, at)
+    ) == canonical
 
-    with pytest.raises(ValueError, match="Settled anonymous support"):
-        restore_target_state(
-            predictive_map,
-            invalid,
-            engine.snapshot.updated_at,
+    other_episode = next(
+        state.episode_id for state in engine.snapshot.episode_states
+        if state.episode_id is not None and state.node_id != retained.current_node_id
+    )
+    for field, value, message in (
+        (
+            "qualified_until", at.isoformat(),
+            "Stored outward context is inconsistent",
+        ),
+        (
+            "qualified_until", (at - timedelta(microseconds=1)).isoformat(),
+            "Stored outward context is inconsistent",
+        ),
+        (
+            "qualified_until", (at + timedelta(seconds=2)).isoformat(),
+            "Qualified outward expiry exceeds outward validity",
+        ),
+        (
+            "qualified_until", at.replace(tzinfo=None).isoformat(),
+            "Target qualified outward expiry must be timezone-aware UTC",
+        ),
+        (
+            "source_episode_id", other_episode,
+            "Stored committed outward context is inconsistent",
+        ),
+        (
+            "valid_until", at.isoformat(),
+            "Stored committed outward context is inconsistent",
+        ),
+    ):
+        invalid = deepcopy(weak)
+        invalid_belief = next(
+            item for item in invalid["snapshot"]["belief_states"]
+            if item["zone"] == retained.current_zone
         )
+        invalid_belief["outward_context"][field] = value
+        before = deepcopy(invalid)
+        with pytest.raises(ValueError, match=f"^{message}$"):
+            restore_target_state(predictive_map, invalid, at)
+        assert invalid == before
+        assert_rejected_atomically(predictive_map, canonical, invalid, f"^{message}$")
+
+    # These complete canonical shapes pass leaf decoding except for the named
+    # qualification invariant; the pre-generation case reaches engine validation.
+    for field, departure_value, message in (
+        (
+            "qualified_departure_at", (at + timedelta(microseconds=1)).isoformat(),
+            "Qualified departure is inconsistent with belief",
+        ),
+        (
+            "qualified_departure_at", at.replace(tzinfo=None).isoformat(),
+            "Target qualified departure must be timezone-aware UTC",
+        ),
+        (
+            "qualified_departure_at",
+            (support.created_at - timedelta(microseconds=1)).isoformat(),
+            "Qualified departure predates belief generation",
+        ),
+        (
+            "generation_episode_id", None,
+            "Qualified departure is inconsistent with belief",
+        ),
+        (
+            "context", "cleared_without_outward",
+            "Qualified departure is inconsistent with belief",
+        ),
+    ):
+        invalid = deepcopy(weak)
+        invalid_belief = next(
+            item for item in invalid["snapshot"]["belief_states"]
+            if item["zone"] == retained.current_zone
+        )
+        invalid_belief["outward_context"] = None
+        invalid_belief["qualified_departure_at"] = at.isoformat()
+        invalid_belief[field] = departure_value
+        before = deepcopy(invalid)
+        with pytest.raises(ValueError, match=f"^{message}$"):
+            restore_target_state(predictive_map, invalid, at)
+        assert invalid == before
+        assert_rejected_atomically(predictive_map, canonical, invalid, f"^{message}$")
+    assert serialize_target_state(predictive_map, engine) == payload
 
 
 def test_moving_support_with_exact_target_binding_survives_restart() -> None:
     predictive_map = conflict_map()
     payload = serialize_target_state(
         predictive_map,
-        engine_with_two_front_conflict(),
+        two_support_engine(),
     )
     snapshot = payload["snapshot"]
     assert isinstance(snapshot, dict)
@@ -1845,7 +2560,7 @@ def test_moving_support_with_exact_target_binding_survives_restart() -> None:
 
 def test_late_count_conflict_degradation_round_trips_after_trust_horizon() -> None:
     predictive_map = conflict_map()
-    engine = ZoneModelEngine(predictive_map, 2, NOW)
+    engine = PersistenceComponents(predictive_map, 2, NOW)
     engine.observe(SensorInput("binary_sensor.target_source", "on", NOW))
     engine.observe(
         SensorInput("binary_sensor.target", "on", NOW + timedelta(seconds=1))
@@ -1866,12 +2581,14 @@ def test_late_count_conflict_degradation_round_trips_after_trust_horizon() -> No
                 NOW + timedelta(seconds=seconds),
             )
         )
+        engine.evaluate_count_conflicts(NOW + timedelta(seconds=seconds))
     conflict = engine.snapshot.count_conflicts[0]
     assert conflict.deadline == NOW + timedelta(seconds=967)
     engine.advance(conflict.deadline)
-    payload = serialize_target_state(predictive_map, engine)
+    engine.evaluate_count_conflicts(conflict.deadline)
+    payload = component_wire(predictive_map, engine)
 
-    restored = restore_target_state(predictive_map, payload, conflict.deadline)
+    restored = restore_components(predictive_map, payload, conflict.deadline)
 
     target = next(
         state for state in restored.snapshot.episode_states if state.node_id == "target"
@@ -2016,8 +2733,13 @@ def test_restore_advances_each_frontier_exactly_once(
 
     assert restored.snapshot == expected.snapshot
     if frontier == "release_dwell":
-        assert expected.policy_events[0].kind == "released"
-        assert restored.audit_rows[-1].reason == "released"
+        # PATH002: all original frontiers retained, but no physical onward path
+        # occurred. Silence cannot create the former hypothetical departure.
+        assert expected.policy_events == ()
+        room = next(state for state in restored.snapshot.policy_states
+                    if state.zone == "room")
+        assert room.active and room.pending_release_since is None
+        assert restored.audit_rows[-1].reason == "retained_endpoint_hold"
         assert restored.audit_rows[-1].event_kind is None
 
 
@@ -2027,16 +2749,30 @@ def test_external_positive_at_release_deadline_cannot_extend_old_active_phase() 
     room = next(
         state for state in engine.snapshot.policy_states if state.zone == "room"
     )
-    assert room.pending_release_since is not None
-    deadline = room.pending_release_since + timedelta(seconds=60)
+    assert room.active and room.pending_release_since is None
+    # Preserve the original hypothetical release instant using the actual old
+    # filter calculation, not its rounded documentation value (608.9235s).
+    historical = PersistenceComponents(target_map(), 1, NOW)
+    for event in (
+        SensorInput("binary_sensor.hall", "on", NOW),
+        SensorInput("binary_sensor.room", "on", NOW + timedelta(seconds=2)),
+        SensorInput("binary_sensor.room", "off", NOW + timedelta(seconds=3)),
+    ):
+        historical.observe(event)
+    historical.advance(NOW + timedelta(seconds=8))
+    crossing = historical.filters["room"].threshold_crossed_at(
+        historical.filters["room"].state, 0.3, NOW + timedelta(seconds=660),
+    )
+    assert crossing is not None
+    deadline = crossing + timedelta(seconds=60)
 
     result = engine.observe(SensorInput("binary_sensor.room", "on", deadline))
 
     room = next(
         state for state in result.snapshot.policy_states if state.zone == "room"
     )
-    assert not room.active
-    assert [event.kind for event in result.policy_events] == ["released"]
+    assert room.active and room.pending_release_since is None
+    assert all(event.kind != "released" for event in result.policy_events)
 
 
 def test_target_restore_rejects_incompatible_state_atomically() -> None:
@@ -2199,14 +2935,20 @@ def test_zero_count_migrations_never_restore_active_zones() -> None:
 
 def test_v3_restore_rejects_zero_count_with_active_policy() -> None:
     payload = serialize_target_state(target_map(), occupied_engine())
+    valid = deepcopy(payload)
     snapshot = payload["snapshot"]
     assert isinstance(snapshot, dict)
     count_state = snapshot["count_state"]
     assert isinstance(count_state, dict)
     count_state["expected_count"] = 0
 
-    with pytest.raises(ValueError, match="Zero-count snapshot"):
+    with pytest.raises(
+        ValueError, match="Selected snapshot count or physical-node ledger",
+    ):
         restore_target_state(target_map(), payload, NOW + timedelta(seconds=2))
+    assert_rejected_atomically(
+        target_map(), valid, payload, "Selected snapshot count or physical-node ledger",
+    )
 
 
 @pytest.mark.parametrize(
@@ -2217,6 +2959,7 @@ def test_v3_restore_rejects_invalid_active_policy_provenance(
     provenance: str | None,
 ) -> None:
     payload = serialize_target_state(target_map(), occupied_engine())
+    valid = deepcopy(payload)
     snapshot = payload["snapshot"]
     assert isinstance(snapshot, dict)
     policies = snapshot["policy_states"]
@@ -2228,8 +2971,22 @@ def test_v3_restore_rejects_invalid_active_policy_provenance(
     )
     room["activation_provenance"] = provenance
 
-    with pytest.raises(ValueError, match="provenance"):
+    with pytest.raises(
+        ValueError, match="Retained-endpoint hold requires evidence-active policy",
+    ):
         restore_target_state(target_map(), payload, NOW + timedelta(seconds=2))
+    assert_rejected_atomically(target_map(), valid, payload,
+                               "Retained-endpoint hold requires evidence-active policy")
+    # Actual component policy without a selected endpoint hold qualifies the
+    # deeper provenance guard; no malformed snapshot is sanitized to reach it.
+    deeper = structural_payload(target_map(), (
+        SensorInput("binary_sensor.hall", "on", NOW),
+        SensorInput("binary_sensor.room", "on", NOW + timedelta(seconds=2)),
+    ), component_policy=True)
+    bad = deepcopy(deeper)
+    next(row for row in specimen_rows(specimen_snapshot(bad)["policy_states"])
+         if row["zone"] == "room")["activation_provenance"] = provenance
+    assert_rejected_atomically(target_map(), deeper, bad, "provenance")
 
 
 def test_v3_restore_rejects_self_declared_evidence_active_policy() -> None:
@@ -2273,6 +3030,7 @@ def test_v3_restore_rejects_self_declared_evidence_active_policy() -> None:
 
 def test_v3_restore_rejects_immature_or_lease_free_predicted_policy() -> None:
     predictive_map, valid = predicted_payload()
+    checked_current_payload(predictive_map, valid)
     immature = deepcopy(valid)
     snapshot = immature["snapshot"]
     assert isinstance(snapshot, dict)
@@ -2285,6 +3043,7 @@ def test_v3_restore_rejects_immature_or_lease_free_predicted_policy() -> None:
     )
     living["prediction_probability"] = 0.1
     living["prediction_support"] = 0.0
+    assert_rejected_atomically(predictive_map, valid, immature, "Predicted policy")
     with pytest.raises(ValueError, match="Predicted policy"):
         restore_target_state(
             predictive_map,
@@ -2296,16 +3055,28 @@ def test_v3_restore_rejects_immature_or_lease_free_predicted_policy() -> None:
     prediction = lease_free["prediction"]
     assert isinstance(prediction, dict)
     prediction["leases"] = []
-    with pytest.raises(ValueError, match="matching mature lease"):
+    with pytest.raises(
+        ValueError, match="Selected prediction grant has no matching lease",
+    ):
         restore_target_state(
             predictive_map,
             lease_free,
             PREDICTION_NOW + timedelta(seconds=2),
         )
+    assert_rejected_atomically(predictive_map, valid, lease_free,
+                               "Selected prediction grant has no matching lease")
+    _, token_valid = token_prediction_payload()
+    token_invalid = deepcopy(token_valid)
+    prediction = token_invalid["prediction"]
+    assert isinstance(prediction, dict)
+    prediction["leases"] = []
+    assert_rejected_atomically(predictive_map, token_valid, token_invalid,
+                               "matching mature lease")
 
 
 def test_v3_restore_rejects_prediction_support_or_source_without_state() -> None:
     predictive_map, support_mismatch = predicted_payload()
+    valid = deepcopy(checked_current_payload(predictive_map, support_mismatch))
     prediction = support_mismatch["prediction"]
     assert isinstance(prediction, dict)
     counts = prediction["counts"]
@@ -2313,6 +3084,9 @@ def test_v3_restore_rejects_prediction_support_or_source_without_state() -> None
     kitchen = counts["kitchen"]
     assert isinstance(kitchen, dict)
     kitchen["living"] = 4.0
+    assert_rejected_atomically(
+        predictive_map, valid, support_mismatch, "support exceeds",
+    )
     with pytest.raises(ValueError, match="support exceeds"):
         restore_target_state(
             predictive_map,
@@ -2337,7 +3111,11 @@ def test_v3_restore_rejects_prediction_support_or_source_without_state() -> None
         if isinstance(item, dict) and item.get("zone") == "living"
     )
     living["prediction_source_episode_id"] = leases[0]["source_episode_id"]
-    with pytest.raises(ValueError, match="Episode reference"):
+    assert_rejected_atomically(predictive_map, valid, forged_source,
+                               "Prediction lease has no matching selected grant")
+    with pytest.raises(
+        ValueError, match="Prediction lease has no matching selected grant",
+    ):
         restore_target_state(
             predictive_map,
             forged_source,
@@ -2359,6 +3137,8 @@ def test_v3_restore_rejects_prediction_support_or_source_without_state() -> None
         if isinstance(item, dict) and item.get("zone") == "living"
     )
     living["prediction_probability"] = 1.0
+    assert_rejected_atomically(predictive_map, valid, inflated_probability,
+                               "probability exceeds")
     with pytest.raises(ValueError, match="probability exceeds"):
         restore_target_state(
             predictive_map,
@@ -2374,6 +3154,9 @@ def test_v3_restore_rejects_prediction_support_or_source_without_state() -> None
     kitchen = counts["kitchen"]
     assert isinstance(kitchen, dict)
     kitchen["hall"] = 100.0
+    assert_rejected_atomically(
+        predictive_map, valid, competing_counts, "probability exceeds",
+    )
     with pytest.raises(ValueError, match="probability exceeds"):
         restore_target_state(
             predictive_map,
@@ -2389,6 +3172,9 @@ def test_v3_restore_rejects_prediction_support_or_source_without_state() -> None
     kitchen = counts["kitchen"]
     assert isinstance(kitchen, dict)
     kitchen["living"] = 6.0
+    assert_rejected_atomically(
+        predictive_map, valid, understated_support, "support disagrees",
+    )
     with pytest.raises(ValueError, match="support disagrees"):
         restore_target_state(
             predictive_map,
@@ -2411,6 +3197,8 @@ def test_v3_restore_rejects_prediction_support_or_source_without_state() -> None
         if isinstance(item, dict) and item.get("zone") == "living"
     )
     living["prediction_probability"] = 0.855
+    assert_rejected_atomically(predictive_map, valid, understated_probability,
+                               "probability disagrees")
     with pytest.raises(ValueError, match="probability disagrees"):
         restore_target_state(
             predictive_map,
@@ -2425,6 +3213,7 @@ def test_v3_restore_rejects_mature_lease_from_isolated_source_episode() -> None:
     seed_mature_route(engine.prediction_manager)
     engine.observe(SensorInput("binary_sensor.kitchen", "on", PREDICTION_NOW))
     payload = serialize_target_state(predictive_map, engine)
+    valid = deepcopy(checked_current_payload(predictive_map, payload))
     snapshot = payload["snapshot"]
     prediction = payload["prediction"]
     assert isinstance(snapshot, dict) and isinstance(prediction, dict)
@@ -2456,6 +3245,7 @@ def test_v3_restore_rejects_mature_lease_from_isolated_source_episode() -> None:
             "expires_at": (PREDICTION_NOW + timedelta(seconds=10)).isoformat(),
             "mature": True,
             "reason": "confirmed-track prediction",
+            "authority_kind": "token",
         }
     ]
     living.update(
@@ -2474,11 +3264,14 @@ def test_v3_restore_rejects_mature_lease_from_isolated_source_episode() -> None:
 
     with pytest.raises(ValueError, match="confirmed traversal provenance"):
         restore_target_state(predictive_map, payload, PREDICTION_NOW)
+    assert_rejected_atomically(
+        predictive_map, valid, payload, "confirmed traversal provenance",
+    )
 
 
 def test_v3_restore_accepts_unexpired_tokens_from_overlapping_generations() -> None:
     predictive_map = target_map()
-    engine = ZoneModelEngine(predictive_map, 1, NOW)
+    engine = PersistenceComponents(predictive_map, 1, NOW)
     engine.observe(SensorInput("binary_sensor.hall", "on", NOW))
     engine.observe(SensorInput("binary_sensor.room", "on", NOW + timedelta(seconds=2)))
     engine.observe(SensorInput("binary_sensor.room", "off", NOW + timedelta(seconds=3)))
@@ -2489,8 +3282,8 @@ def test_v3_restore_accepts_unexpired_tokens_from_overlapping_generations() -> N
     assert len(room_tokens) == 2
     assert len({token.episode_id for token in room_tokens}) == 2
 
-    payload = serialize_target_state(predictive_map, engine)
-    restored = restore_target_state(predictive_map, payload, engine.snapshot.updated_at)
+    payload = component_wire(predictive_map, engine)
+    restored = restore_components(predictive_map, payload, engine.snapshot.updated_at)
 
     assert restored.snapshot == engine.snapshot
     assert (
@@ -2499,10 +3292,11 @@ def test_v3_restore_accepts_unexpired_tokens_from_overlapping_generations() -> N
 
 
 def test_v3_restore_rejects_fabricated_token_path_and_pending_episode() -> None:
-    engine = ZoneModelEngine(target_map(), 1, NOW)
-    engine.observe(SensorInput("binary_sensor.hall", "on", NOW))
-    engine.observe(SensorInput("binary_sensor.room", "on", NOW + timedelta(seconds=1)))
-    fabricated_token = serialize_target_state(target_map(), engine)
+    valid = structural_payload(target_map(), (
+        SensorInput("binary_sensor.hall", "on", NOW),
+        SensorInput("binary_sensor.room", "on", NOW + timedelta(seconds=1)),
+    ))
+    fabricated_token = deepcopy(valid)
     snapshot = fabricated_token["snapshot"]
     assert isinstance(snapshot, dict)
     tokens = snapshot["traversal_tokens"]
@@ -2514,6 +3308,7 @@ def test_v3_restore_rejects_fabricated_token_path_and_pending_episode() -> None:
     )
     room["track_confidence"] = "confirmed"
     room["path_node_ids"] = ["missing", "hall", "room"]
+    assert_rejected_atomically(target_map(), valid, fabricated_token, "unknown node")
     with pytest.raises(ValueError, match="unknown node"):
         restore_target_state(
             target_map(),
@@ -2534,9 +3329,13 @@ def test_v3_restore_rejects_fabricated_token_path_and_pending_episode() -> None:
     )
     empty_snapshot = empty_payload["snapshot"]
     assert isinstance(empty_snapshot, dict)
+    valid_empty = deepcopy(checked_current_payload(target_map(), empty_payload))
     empty_snapshot["pending_candidates"] = deepcopy(pending)
     with pytest.raises(ValueError, match="Episode reference"):
         restore_target_state(target_map(), empty_payload, NOW)
+    assert_rejected_atomically(
+        target_map(), valid_empty, empty_payload, "Episode reference",
+    )
 
 
 @pytest.mark.parametrize("component", ("belief", "episode", "policy", "count"))
@@ -2602,22 +3401,44 @@ def test_v4_restore_rejects_cross_component_fabricated_authority(
 ) -> None:
     predictive_map = target_map()
     engine = occupied_engine()
+    component = mutation in {"count_conflict", "conflict_deadline"}
+    if component:
+        predictive_map = conflict_map()
+        payload = component_wire(predictive_map, two_conflict_components())
+    elif mutation == "anonymous_support":
+        predictive_map = conflict_map()
+        engine = two_support_engine()
+        payload = serialize_target_state(predictive_map, engine)
+    elif mutation in {
+        "duplicate_token", "token_frontier", "token_expiry", "token_provenance",
+        "confirmed_without_path", "equivalent_strength", "graph_path",
+        "noncurrent_token", "outward_expiry", "missing_use_source", "use_before_target",
+    }:
+        payload = structural_payload(predictive_map, (
+            SensorInput("binary_sensor.hall", "on", NOW),
+            SensorInput("binary_sensor.room", "on", NOW + timedelta(seconds=2)),
+        ), outward=mutation == "outward_expiry")
+        engine = restore_target_state(
+            predictive_map, payload, NOW + timedelta(seconds=2),
+        )
+    else:
+        payload = serialize_target_state(predictive_map, engine)
     if mutation == "noncurrent_token":
-        engine = occupied_engine()
         engine.observe(
             SensorInput("binary_sensor.hall", "off", NOW + timedelta(seconds=3))
         )
+        payload = serialize_target_state(predictive_map, engine)
     elif mutation == "pending_calibration":
         engine = ZoneModelEngine(predictive_map, 1, NOW)
         engine.observe(SensorInput("binary_sensor.hall", "on", NOW))
-    elif mutation in {
-        "anonymous_support",
-        "count_conflict",
-        "conflict_deadline",
-    }:
-        predictive_map = conflict_map()
-        engine = engine_with_two_front_conflict()
-    payload = serialize_target_state(predictive_map, engine)
+        payload = serialize_target_state(predictive_map, engine)
+    valid = deepcopy(payload)
+    if component:
+        assert component_wire(predictive_map, restore_components(
+            predictive_map, valid, NOW + timedelta(seconds=7),
+        )) == valid
+    else:
+        checked_current_payload(predictive_map, valid)
     snapshot = payload["snapshot"]
     assert isinstance(snapshot, dict)
     restore_at = datetime.fromisoformat(str(snapshot["updated_at"]))
@@ -2737,8 +3558,9 @@ def test_v4_restore_rejects_cross_component_fabricated_authority(
         started_at = datetime.fromisoformat(str(conflicts[0]["started_at"]))
         conflicts[0]["deadline"] = (started_at + timedelta(days=1)).isoformat()
 
-    with pytest.raises(ValueError, match=message):
-        restore_target_state(predictive_map, payload, restore_at)
+    assert_rejected_atomically(predictive_map, valid, payload, message,
+                               component=component)
+    assert datetime.fromisoformat(str(snapshot["updated_at"])) == restore_at
 
 
 @pytest.mark.parametrize(
@@ -2766,8 +3588,9 @@ def test_v4_restore_strictly_rejects_malformed_support_tables(
     predictive_map = conflict_map()
     payload = serialize_target_state(
         predictive_map,
-        engine_with_two_front_conflict(),
+        two_support_engine(),
     )
+    valid = deepcopy(checked_current_payload(predictive_map, payload))
     snapshot = payload["snapshot"]
     assert isinstance(snapshot, dict)
     supports = snapshot["anonymous_supports"]
@@ -2857,33 +3680,42 @@ def test_v4_restore_strictly_rejects_malformed_support_tables(
             + timedelta(seconds=1)
         ).isoformat()
 
-    expected_message = (
-        "unique and sorted"
-        if mutation
-        in {
-            "duplicate_support",
-            "unsorted_supports",
-            "duplicate_binding",
-            "unsorted_bindings",
-        }
-        else None
-    )
-    with pytest.raises(ValueError, match=expected_message):
+    expected_message = {
+        "missing_support_field": "Target current_zone must be a string",
+        "missing_binding_field": "Target support_id must be a string",
+        "duplicate_support": "Anonymous supports must be unique and sorted",
+        "unsorted_supports": "Anonymous supports must be unique and sorted",
+        "over_cap": "Anonymous-support snapshot exceeds its bound",
+        "future_support": "Anonymous-support endpoint is incompatible",
+        "graph_path": (
+            "Interaction or traversal support creation provenance is incompatible"
+        ),
+        "missing_binding_token": "Support-token binding is incompatible",
+        "missing_binding_support": "Support-token binding references an absent support",
+        "duplicate_binding": "Support-token bindings must be unique and sorted",
+        "unsorted_bindings": "Support-token bindings must be unique and sorted",
+        "moving_without_target_binding": "Moving support lacks its target binding",
+        "moving_deadline_mismatch": "Moving support lacks its target binding",
+        "settled_with_deadline": "Settled support cannot retain an expiry",
+    }[mutation]
+    with pytest.raises(ValueError, match=f"^{expected_message}$"):
         restore_target_state(
             predictive_map,
             payload,
             datetime.fromisoformat(str(snapshot["updated_at"])),
         )
+    assert_rejected_atomically(predictive_map, valid, payload, f"^{expected_message}$")
 
 
 def test_v3_restore_rejects_historical_episode_after_current_generation_start() -> None:
     predictive_map = target_map()
-    engine = ZoneModelEngine(predictive_map, 1, NOW)
+    engine = PersistenceComponents(predictive_map, 1, NOW)
     engine.observe(SensorInput("binary_sensor.hall", "on", NOW))
     engine.observe(SensorInput("binary_sensor.room", "on", NOW + timedelta(seconds=2)))
     engine.observe(SensorInput("binary_sensor.room", "off", NOW + timedelta(seconds=3)))
     engine.observe(SensorInput("binary_sensor.room", "on", NOW + timedelta(seconds=33)))
-    payload = serialize_target_state(predictive_map, engine)
+    payload = component_wire(predictive_map, engine)
+    valid = deepcopy(payload)
     snapshot = payload["snapshot"]
     assert isinstance(snapshot, dict)
     episodes = snapshot["episode_states"]
@@ -2909,7 +3741,9 @@ def test_v3_restore_rejects_historical_episode_after_current_generation_start() 
     old["valid_until"] = (started_at + timedelta(seconds=90)).isoformat()
 
     with pytest.raises(ValueError, match="outside stored state"):
-        restore_target_state(predictive_map, payload, started_at)
+        restore_components(predictive_map, payload, started_at)
+    assert_rejected_atomically(predictive_map, valid, payload, "outside stored state",
+                               component=True)
 
 
 def test_v3_restore_rejects_extended_count_transition_and_invalid_seen_ids() -> None:
@@ -2939,28 +3773,40 @@ def test_v3_restore_rejects_zero_count_with_residual_belief_and_pending_track() 
     engine = ZoneModelEngine(target_map(), 1, NOW)
     engine.observe(SensorInput("binary_sensor.room", "on", NOW))
     payload = serialize_target_state(target_map(), engine)
+    valid = deepcopy(checked_current_payload(target_map(), payload))
     snapshot = payload["snapshot"]
     assert isinstance(snapshot, dict)
     count_state = snapshot["count_state"]
     assert isinstance(count_state, dict)
     count_state["expected_count"] = 0
 
-    with pytest.raises(ValueError, match="Zero-count snapshot"):
+    with pytest.raises(
+        ValueError, match="Selected snapshot count or physical-node ledger",
+    ):
         restore_target_state(target_map(), payload, NOW)
+    assert_rejected_atomically(
+        target_map(), valid, payload, "Selected snapshot count or physical-node ledger",
+    )
 
 
 def test_v3_restore_rejects_zero_count_unavailable_belief_context() -> None:
     engine = ZoneModelEngine(target_map(), 1, NOW)
     engine.observe(SensorInput("binary_sensor.room", "unavailable", NOW))
     payload = serialize_target_state(target_map(), engine)
+    valid = deepcopy(checked_current_payload(target_map(), payload))
     snapshot = payload["snapshot"]
     assert isinstance(snapshot, dict)
     count = snapshot["count_state"]
     assert isinstance(count, dict)
     count["expected_count"] = 0
 
-    with pytest.raises(ValueError, match="nonbaseline belief"):
+    with pytest.raises(
+        ValueError, match="Selected snapshot count or physical-node ledger",
+    ):
         restore_target_state(target_map(), payload, NOW)
+    assert_rejected_atomically(
+        target_map(), valid, payload, "Selected snapshot count or physical-node ledger",
+    )
 
 
 def test_v3_zero_count_restore_accepts_only_baseline_belief_and_policy() -> None:
@@ -3018,13 +3864,31 @@ def test_zero_count_prediction_restore_rejects_lease_atomically() -> None:
     empty = ZoneModelEngine(predictive_map, 0, PREDICTION_NOW)
     baseline = empty.prediction_manager.serialize()
 
-    with pytest.raises(ValueError, match="Zero-count state"):
+    original = deepcopy(lease_payload)
+    with pytest.raises(
+        ValueError, match="Prediction lease has no matching selected grant",
+    ):
         empty.restore_prediction_state(
             lease_payload,
             PREDICTION_NOW + timedelta(seconds=2),
         )
 
     assert empty.prediction_manager.serialize() == baseline
+    assert lease_payload == original
+    _, token_valid = token_prediction_payload()
+    token_prediction = token_valid["prediction"]
+    original_token = deepcopy(token_prediction)
+    with pytest.raises(ValueError, match="Zero-count state"):
+        empty.restore_prediction_state(
+            token_prediction, PREDICTION_NOW + timedelta(seconds=2),
+        )
+    assert empty.prediction_manager.serialize() == baseline
+    assert token_prediction == original_token
+    control = ZoneModelEngine(predictive_map, 0, PREDICTION_NOW)
+    event = SensorInput(
+        "binary_sensor.kitchen", "on", PREDICTION_NOW + timedelta(seconds=3),
+    )
+    assert empty.observe(event) == control.observe(event)
 
 
 def legacy_v2_payload(*, traversal_reason: str) -> dict[str, object]:
@@ -3111,3 +3975,321 @@ def test_v2_import_rejects_incompatible_map_or_structure_atomically() -> None:
     policy_states[0]["zone"] = "missing"
     with pytest.raises(ValueError, match="zone is incompatible"):
         decode_v2_seed(target_map(), wrong_zone)
+
+
+def test_current_deterministic_100_event_workload_restarts_without_legacy_support(
+) -> None:
+    """PERF004/STATE003: additive current-engine execution of the same100 inputs."""
+    predictive_map = load_predictive_map(
+        (Path(__file__).parents[1] / "benchmarks/reference-map.yaml").read_text()
+    )
+    workload = _build_workload(
+        predictive_map, event_count=100,
+        started_at=datetime(2026, 7, 18, 12, tzinfo=UTC),
+        occupants=2, trace_profile="deterministic",
+    )
+    live = ZoneModelEngine(predictive_map, 2, workload.bootstrap_at)
+    restored = restore_target_state(
+        predictive_map, serialize_target_state(predictive_map, live),
+        workload.bootstrap_at,
+    )
+    for event, receipt in zip(workload.events, workload.receive_at, strict=True):
+        assert restored.observe(event, processing_at=receipt) == live.observe(
+            event, processing_at=receipt,
+        )
+        payload = serialize_target_state(predictive_map, live)
+        assert serialize_target_state(predictive_map, restored) == payload
+        restored = restore_target_state(
+            predictive_map, payload, live.snapshot.updated_at,
+        )
+        assert serialize_target_state(predictive_map, restored) == payload
+    assert len(workload.events) == 100
+    assert any(path is not None for path in live.snapshot.selected_paths)
+
+
+def test_current_sixth_cycle_and_cleared_history_strict_restart() -> None:
+    """HEALTH002/STATE011: five never warns; sixth OFF qualifies and age clears."""
+    engine = current_warning_engine()
+    predictive_map = target_map()
+    occurrence, = engine.snapshot.reliability_warning_occurrences
+    assert (occurrence.node_id, occurrence.kind, occurrence.reason) == (
+        "room", "flapping", "sustained_flapping",
+    )
+    assert occurrence.first_observed_at == occurrence.last_observed_at == (
+        NOW + timedelta(seconds=210)
+    )
+    assert occurrence.cleared_at is None
+    payload = serialize_target_state(predictive_map, engine)
+    restored = restore_target_state(predictive_map, payload, engine.snapshot.updated_at)
+    clear_at = NOW + timedelta(seconds=3610)
+    assert restored.advance(clear_at) == engine.advance(clear_at)
+    row, = restored.snapshot.reliability_warning_occurrences
+    assert row.first_observed_at == occurrence.first_observed_at
+    assert row.last_observed_at == row.cleared_at == clear_at
+    checked_current_payload(
+        predictive_map, serialize_target_state(predictive_map, restored),
+    )
+
+
+def test_current_600_second_warning_restores_without_policy_suppression() -> None:
+    """HEALTH001/003: real unsupported warning remains downstream of selection."""
+    engine = ZoneModelEngine(target_map(), 1, NOW)
+    engine.observe(SensorInput("binary_sensor.room", "on", NOW))
+    engine.advance(NOW + timedelta(seconds=599))
+    assert not engine.snapshot.reliability_warning_occurrences
+    engine.advance(NOW + timedelta(seconds=600))
+    warning, = engine.snapshot.reliability_warning_occurrences
+    assert warning.reason == "assertion_timeout" and warning.cleared_at is None
+    assert warning.first_observed_at == NOW + timedelta(seconds=600)
+    assert all(not item.health_warning for item in engine.snapshot.episode_states)
+    payload = serialize_target_state(target_map(), engine)
+    restored = restore_target_state(target_map(), payload, engine.snapshot.updated_at)
+    event = SensorInput("binary_sensor.hall", "on", NOW + timedelta(seconds=601))
+    result = restored.observe(event)
+    assert result == engine.observe(event)
+    assert result.authorizations[0].authorized
+    assert next(
+        item for item in result.snapshot.policy_states if item.zone == "hall"
+    ).active
+    assert result.snapshot.reliability_warning_occurrences[0].cleared_at == (
+        event.event_at
+    )
+
+
+def test_current_count_conflicts_reject_but_diagnostics_never_degrade() -> None:
+    """COUNT009 is a component contract, not selected-engine restore authority."""
+    predictive_map = conflict_map()
+    current = engine_with_two_front_conflict()  # Original helper stays current.
+    assert current.snapshot.count_conflicts == ()
+    valid = serialize_target_state(predictive_map, current)
+    invalid = deepcopy(valid)
+    legacy = specimen_snapshot(component_wire(
+        predictive_map, two_conflict_components(),
+    ))
+    specimen_snapshot(invalid)["count_conflicts"] = legacy["count_conflicts"]
+    assert_rejected_atomically(predictive_map, valid, invalid,
+                               "Selected-path engine cannot restore count degradation")
+    for seconds in (67, 967):
+        current.advance(NOW + timedelta(seconds=seconds))
+        assert current.snapshot.count_conflicts == ()
+        assert all(
+            item.degradation_reason != "count_conflict" and not item.health_warning
+            for item in current.snapshot.episode_states
+        )
+        assert not any(
+            row.reason == "stuck_count_conflict" for row in current.audit_rows
+        )
+        checked_current_payload(
+            predictive_map, serialize_target_state(predictive_map, current),
+        )
+
+
+@pytest.mark.parametrize("scenario", (
+    "dormant", "overlap", "stale", "correlated", "presence-before",
+    "presence-equality", "presence-after",
+))
+def test_current_lineage_restart_has_no_component_token_ttl(scenario: str) -> None:
+    """PATH002/003/STATE003: additive selected continuation, exact component inputs."""
+    count = 2
+    if scenario == "dormant":
+        predictive_map = correlated_continuity_map()
+        events = tuple(SensorInput(f"binary_sensor.{node}", state,
+                                   NOW + timedelta(seconds=seconds))
+                       for node, state, seconds in (
+                           ("bottom", "on", 0), ("top", "on", 7),
+                           ("bottom", "off", 21), ("top", "off", 50),
+                       ))
+        restore_at = NOW + timedelta(seconds=52, milliseconds=100)
+        next_event = SensorInput("binary_sensor.top", "on",
+                                 NOW + timedelta(seconds=52, milliseconds=200))
+    elif scenario == "stale":
+        predictive_map = stale_transfer_map()
+        events = stale_transfer_events()
+        restore_at = NOW + timedelta(seconds=3)
+        next_event = SensorInput(
+            "binary_sensor.second", "on", NOW + timedelta(seconds=4),
+        )
+    elif scenario == "correlated":
+        incident = import_module("tests.incidents."
+                                "test_inc_2026_09_06_1931z_correlated_intermediate_splits_support_lineage")
+        predictive_map = incident.incident_map()
+        events = correlated_prefix()
+        next_event = SensorInput("binary_sensor.master_bedroom_closet", "on",
+                                 datetime.fromisoformat("2026-09-06T19:32:54.617692+00:00"))
+        restore_at = next_event.event_at - timedelta(microseconds=1)
+    elif scenario.startswith("presence"):
+        incident = import_module("tests.incidents."
+                                "test_inc_2026_09_08_1213z_stay_presence_authority_expires_before_closet_return")
+        predictive_map = incident._incident_map()
+        count = 1
+        source_at = datetime.fromisoformat("2026-09-08T12:14:24.044050+00:00")
+        events = (
+            *bathroom_setup_events(),
+            SensorInput("binary_sensor.bathroom", "on", source_at),
+        )
+        offset = {
+            "presence-before": -1, "presence-equality": 0, "presence-after": 1,
+        }[scenario]
+        next_event = SensorInput(
+            "binary_sensor.closet", "on",
+            source_at + timedelta(seconds=180, microseconds=offset),
+        )
+        restore_at = next_event.event_at - timedelta(microseconds=1)
+    else:
+        predictive_map = target_map()
+        count = 1
+        events = tuple(SensorInput(f"binary_sensor.{node}", state,
+                                   NOW + timedelta(seconds=seconds))
+                       for node, state, seconds in (
+                           ("hall", "on", 0), ("room", "on", 2),
+                           ("room", "off", 3), ("room", "on", 33),
+                       ))
+        restore_at = NOW + timedelta(seconds=33)
+        next_event = SensorInput(
+            "binary_sensor.room", "off", NOW + timedelta(seconds=34),
+        )
+    engine = ZoneModelEngine(predictive_map, count, events[0].event_at)
+    for event in events:
+        engine.observe(event)
+    engine.advance(restore_at)
+    before = engine.snapshot.selected_paths
+    payload = serialize_target_state(predictive_map, engine)
+    restored = restore_target_state(predictive_map, payload, restore_at)
+    assert restored.snapshot.selected_paths == before
+    assert serialize_target_state(predictive_map, restored) == payload
+    result = restored.observe(next_event)
+    assert result == engine.observe(next_event)
+    if scenario.startswith("presence"):
+        assert result.authorizations[0].authorized
+        assert next(
+            item for item in result.snapshot.policy_states if item.zone == "closet"
+        ).active
+    checked_current_payload(
+        predictive_map, serialize_target_state(predictive_map, restored),
+    )
+
+
+def test_token_prediction_forged_source_reaches_episode_validation() -> None:
+    """STATE001/PRED008: deeper inverse alongside unchanged selected-grant rejection."""
+    predictive_map, valid = token_prediction_payload()
+    invalid = deepcopy(valid)
+    prediction = invalid["prediction"]
+    assert isinstance(prediction, dict)
+    lease = specimen_rows(prediction["leases"])[0]
+    lease["source_episode_id"] = "kitchen:1:2026-07-18T11:59:59+00:00"
+    living = next(
+        row for row in specimen_rows(specimen_snapshot(invalid)["policy_states"])
+        if row["zone"] == "living"
+    )
+    living["prediction_source_episode_id"] = lease["source_episode_id"]
+    assert_rejected_atomically(predictive_map, valid, invalid, "Episode reference")
+
+
+@pytest.mark.parametrize(
+    "mutation", ("active", "belief", "unavailable", "pending", "candidate"),
+)
+def test_coherent_zero_count_baseline_reaches_policy_and_belief_guards(
+    mutation: str,
+) -> None:
+    """STATE002: no selected-count repair; independently start with valid count0."""
+    predictive_map = target_map()
+    empty = ZoneModelEngine(predictive_map, 0, NOW)
+    if mutation == "active":
+        for seconds, node in ((0, "hall"), (2, "room")):
+            empty.observe(SensorInput(
+                f"binary_sensor.{node}", "on", NOW + timedelta(seconds=seconds),
+            ))
+    elif mutation == "candidate":
+        empty.observe(SensorInput("binary_sensor.room", "on", NOW))
+    valid = serialize_target_state(predictive_map, empty)
+    invalid = deepcopy(valid)
+    snapshot = specimen_snapshot(invalid)
+    if mutation == "active":
+        donor = specimen_snapshot(serialize_target_state(
+            predictive_map, occupied_engine(),
+        ))
+        source = next(
+            row for row in specimen_rows(donor["policy_states"])
+            if row["zone"] == "room"
+        )
+        policies = specimen_rows(snapshot["policy_states"])
+        policies[1] = deepcopy(source)
+        error = "Zero-count snapshot cannot restore active zones"
+    elif mutation == "pending":
+        specimen_rows(snapshot["policy_states"])[0]["phase"] = "pending"
+        error = "policy authority"
+    elif mutation == "candidate":
+        # Authentic same-episode pending candidate, not merely a pending policy.
+        donor_engine = ZoneModelEngine(predictive_map, 1, NOW)
+        donor_engine.observe(SensorInput("binary_sensor.room", "on", NOW))
+        donor = specimen_snapshot(serialize_target_state(predictive_map, donor_engine))
+        assert len(specimen_rows(donor["pending_candidates"])) == 1
+        snapshot["pending_candidates"] = deepcopy(donor["pending_candidates"])
+        error = "Zero-count snapshot contains acquisition state"
+    else:
+        belief = specimen_rows(snapshot["belief_states"])[0]
+        if mutation == "belief":
+            value = belief["log_odds"]
+            assert isinstance(value, float)
+            belief["log_odds"] = value + 0.1
+        else:
+            belief["context"] = "unavailable"
+        error = "nonbaseline belief"
+    assert_rejected_atomically(predictive_map, valid, invalid, error)
+
+
+def displaced_release_engine() -> tuple[ZoneModelEngine, datetime]:
+    """Actual room->hall return displaces the old room, never private deletion."""
+    engine = occupied_engine()
+    for seconds, node, state in (
+        (3, "room", "off"), (4, "hall", "off"), (40, "hall", "on"),
+    ):
+        engine.observe(SensorInput(
+            f"binary_sensor.{node}", state, NOW + timedelta(seconds=seconds),
+        ))
+    belief = next(item for item in engine.snapshot.belief_states if item.zone == "room")
+    assert belief.path_displaced_at == NOW + timedelta(seconds=40)
+    filter_ = ZoneBeliefFilter.restore(BELIEF_PROFILES[belief.profile_name], belief)
+    crossing = filter_.threshold_crossed_at(belief, 0.3, NOW + timedelta(seconds=1000))
+    assert crossing == NOW + timedelta(seconds=68, microseconds=446175)
+    return engine, crossing
+
+
+@pytest.mark.parametrize("offset", (-1, 0, 1))
+def test_genuinely_displaced_restart_preserves_full_release_dwell(offset: int) -> None:
+    """POLICY014/STATE009: no lost crossing, exact60s and half-open deadline."""
+    engine, crossing = displaced_release_engine()
+    engine.advance(crossing)
+    policy = next(item for item in engine.snapshot.policy_states if item.zone == "room")
+    assert policy.pending_release_since == crossing
+    deadline = crossing + POLICY_CALIBRATIONS["stay_pir"].release_dwell
+    assert deadline - crossing == timedelta(seconds=60)
+    payload = serialize_target_state(target_map(), engine)
+    at = deadline + timedelta(microseconds=offset)
+    result = engine.advance(at, emit_events=False)
+    restored = restore_target_state(target_map(), payload, at)
+    assert restored.snapshot == result.snapshot
+    assert serialize_target_state(target_map(), restored) == serialize_target_state(
+        target_map(), engine,
+    )
+    assert next(
+        item for item in restored.snapshot.policy_states if item.zone == "room"
+    ).active is (offset < 0)
+
+
+def test_genuinely_displaced_external_positive_releases_before_reacquisition() -> None:
+    """STATE009: a real new arrival may reacquire, but cannot extend old activity."""
+    engine, crossing = displaced_release_engine()
+    engine.advance(crossing)
+    deadline = crossing + timedelta(seconds=60)
+    payload = serialize_target_state(target_map(), engine)
+    restored = restore_target_state(target_map(), payload, crossing)
+    event = SensorInput("binary_sensor.room", "on", deadline)
+    result = engine.observe(event)
+    assert restored.observe(event) == result
+    assert [(item.zone, item.kind, item.event_at) for item in result.policy_events] == [
+        ("room", "released", deadline), ("room", "acquired", deadline),
+    ]
+    assert next(
+        item for item in result.snapshot.policy_states if item.zone == "room"
+    ).activation_at == deadline
