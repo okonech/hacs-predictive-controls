@@ -2324,15 +2324,15 @@ locked dependencies and checks strict types and nonwriting freshness. No loader,
 inference, persistence or fingerprint changes. The larger asset includes the
 local YAML serializer instead of external runtime imports.
 
-| Current gate                                                 | Result after final code changes                                                                                                                                         |
-| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Full Python `.venv/bin/pytest -q`                            | **3234 passed**,263.34s pytest /264.900s outer (4m25s); **100% statement/branch**,7874 statements/3002 branches, zero missing/partial |
-| Explicit `.venv/bin/pytest --no-cov -q tests -k 'test_inc_'` | **76 passed**,58.83s /59.038s outer |
-| Separate `.venv/bin/pytest --no-cov -q -m scenario`          | **104 passed**,37.35s /37.534s outer |
-| `npm run test:frontend`                                      | **209 passed**,4299.981228ms; zero failures/skips |
-| Ruff / mypy                                                  | Pass;161 source files |
-| Strict typecheck / build / freshness                         | Pass; deterministic self-contained artifacts and unchanged0.2.6registration                                                                                             |
-| Editor / diff / frozen-source preservation                   | Pass; all preexisting incidents/harnesses/benchmark unchanged; performance intake index4df4a32342f256f569547e9b4536c33494fa762c7a694a9cd4c27f1bdbe01e6f preserved |
+| Current gate                                                 | Result after final code changes                                                                                                                                               |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Full Python `.venv/bin/pytest -q`                            | **3234 passed**,263.34s pytest /264.900s outer (4m25s); **100% statement/branch**,7874 statements/3002 branches, zero missing/partial                                         |
+| Explicit `.venv/bin/pytest --no-cov -q tests -k 'test_inc_'` | **76 passed**,58.83s /59.038s outer                                                                                                                                           |
+| Separate `.venv/bin/pytest --no-cov -q -m scenario`          | **104 passed**,37.35s /37.534s outer                                                                                                                                          |
+| `npm run test:frontend`                                      | **209 passed**,4299.981228ms; zero failures/skips                                                                                                                             |
+| Ruff / mypy                                                  | Pass;161 source files                                                                                                                                                         |
+| Strict typecheck / build / freshness                         | Pass; deterministic self-contained artifacts and unchanged0.2.6registration                                                                                                   |
+| Editor / diff / frozen-source preservation                   | Pass; all preexisting incidents/harnesses/benchmark unchanged; performance intake index4df4a32342f256f569547e9b4536c33494fa762c7a694a9cd4c27f1bdbe01e6f preserved             |
 | Standalone100-event benchmark                                | **Pass**; positive worst p99 **3.728227ms**, max **3.860557ms**; rejected p99 **3.938146ms**, max **4.304092ms**; all qualification, count, fanout, timer and hard gates pass |
 
 Fresh final artifacts: `/tmp/callback-perf-20260915/` (rebuilt-* Python logs,
