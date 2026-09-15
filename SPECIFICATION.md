@@ -5,8 +5,8 @@
 **Supported occupants:** 0 through 2, with 2 as the primary operating profile.
 **Implementation status:** Repository version `0.2.6` implements the approved
 selected-path, presence-gated departure, diagnostic-health and durable-learning
-contracts and is locally conformant after the verified final2 gates on
-2026-09-14. [Section 19.0](#current-local-conformance) records the final evidence
+contracts and is locally conformant after full parallel coverage and the separate
+validation gates recorded on 2026-09-15. [Section 19.0](#current-local-conformance) records the evidence
 separately from historical failures. This is not a deployed-state claim: no
 deployment, live restart or physical-actuation verification is claimed.
 
@@ -2241,7 +2241,72 @@ references remain in [Section 19.5](#deferred-operational-obligations) and
 
 <a id="current-local-conformance"></a>
 
-### 19.0 Current local conformance — 2026-09-14, final2 verified
+### 19.0 Current local conformance — validation recorded 2026-09-15
+
+**Latest verification:** the first fresh process-parallel coverage attempt passed
+all **3217 unchanged tests** in **260.403s outer elapsed / 258.45s pytest elapsed**,
+below the user-requested **300s** local coverage-command target. Collection, worker
+startup, all fixtures, teardown, fresh coverage combination and JSON reporting were
+inside the measured process boundary; a monotonic 300s supervisor would terminate
+the controller/workers on timeout. No timeout occurred. Ordinary pytest itself has
+no new wall-time enforcement. The canceled earlier serial documentation-validation
+run remains incomplete evidence, not a passing run.
+The request/artifact prefix is dated2026-09-14; actual JUnit execution starts at
+2026-09-15T10:59:27.244636-04:00 and coverage records2026-09-15T11:03:44.617808.
+Execution timestamps, not the filename prefix, date this verification.
+
+The only execution change is a test-only `pytest-xdist>=3.8` dependency and default
+`-n auto --maxprocesses=16 --dist=load --maxschedchunk=1 --max-worker-restart=0
+--durations=20` arguments. xdist3.8.0 and execnet2.1.2 were installed without
+upgrading existing packages; Python3.12 and coverage7.14.1/CTracer are unchanged.
+Individual test cases distribute across processes, never across threads or partial
+scenario timelines. No production/test/fixture/harness or benchmark source changed.
+Use `-n0` for focused debugging; lower worker counts suit smaller machines.
+No Turborepo, prior-result cache, coverage append, skipped case or altered threshold
+contributed to this result. Current CI inherits the options through its existing
+pytest command; five-minute completion on a smaller CI runner is unmeasured.
+
+The serial baseline was **1712.380s**. One long-stay incident module accounted for
+**686.016s**, including four 24-hour replay cases of104–106s each; benchmark tests
+accounted for214.162s. These execute genuine callbacks and retain their exact proof.
+The new outer elapsed is **6.58× faster** on the Ryzen 9 7950X3D (16cores/32threads).
+Replicated fixtures and contention remain real overhead: individual long cases
+took123–134s and semantic fixture setup reached24.30s in the parallel run. Child
+maximum RSS was191544KiB; this is not aggregate process-tree peak memory, which
+was not sampled. The subsequent verbose incident run confirms16workers; no worker
+override was set in the full run. No universal speedup or no-swapping claim follows.
+
+| Latest completed gate                | Verified result                                                                                                                                                                                                     |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Full Python / fresh coverage         | **3217 passed**, zero failures/errors/skips; **100%**, identical42Python-file coverage inventory,7867statements/2996branches and exact executed-line/arc sets; zero missing/partial,12existing exclusions unchanged |
+| Explicit retained `test_inc_` corpus | **69 passed**,37.48s pytest /37.673s outer                                                                                                                                                                          |
+| Separate scenario marker             | **103 passed**,62.08s pytest /62.256s outer                                                                                                                                                                         |
+| Frontend / build                     | **31 passed**,91.707255ms test runner; build passed,74425bytes                                                                                                                                                      |
+| Ruff / mypy                          | Both pass; mypy157source files                                                                                                                                                                                      |
+| Standalone100-event benchmark        | All gates pass;11positive/1negative/2timer workloads each100/100                                                                                                                                                    |
+| Positive acquisition                 | Worst p99 **3.886930ms**, max **4.324091ms**; unchanged p99<=5ms/hard<10ms                                                                                                                                          |
+| Mature prediction                    | p99 **2.935525ms**, max **2.976738ms**                                                                                                                                                                              |
+| Rejected jump                        | p99 **3.803794ms**, max **4.347036ms**,100qualified/zeroON                                                                                                                                                          |
+| Timers / core                        | Timer maxima0.329255/1.267318ms; core p954.425681/max4.941158ms; bounded-state and byte-stable persistence pass                                                                                                     |
+| Diff / preservation                  | Worktree and cached diff checks pass; existing sources/tests unchanged; current staged-entry digest retained exactly                                                                                                |
+
+Fresh full-run artifacts are `/tmp/test-runtime-20260914-parallel-1/` (run JSON,
+log, JUnit, unique coverage database and coverage JSON); remaining gates and the
+benchmark are under `/tmp/test-runtime-20260914-gates/`. Exact testcase identity
+multiplicity, measured source inventory and covered arcs were compared with final2,
+not merely counts/percentages. All required processes exited0; no tests remain
+running. The additional gate commands sum122.232s: full coverage plus those distinct
+checks totals **382.635s (6m23s)** in command time, not an under-five-minute claim
+for the whole redundant validation sequence. Standalone benchmark SHA256:
+`2cf75b622dd5a0a7d610afea27bda28507874ad8f1f13be9887d42414fc352ea`.
+
+The current intake index is
+`1310bc69d61a1699ab1d1c80dc1f6a1d9293d60d066f2593e761bfd057cf4f10`;
+older index hashes below are historical. This tooling optimization changes only
+test configuration and current documentation; no deployment, staging or commit.
+Its temporary design record was deleted after independent review, exact proof
+preservation and canonical reconciliation. The review distinguished42Python
+coverage files from47preserved production files/assets and verified146local links.
 
 The approved selected-path, presence, warning/release and selected-prediction
 contracts are implemented locally. Durable learning is also implemented:

@@ -29,9 +29,10 @@ adjacent learning is retained as bounded statistical debt after publication and
 across compatible saves. A row commits only after its live prediction leases end;
 unsaved operations are not claimed crash-durable.
 
-**Validation status:** local implementation and final2 repository validation are
-complete (2026-09-14): 3217 Python tests pass at 100% statement/branch coverage,
-with the distinct incident/scenario, frontend, static and performance gates passed.
+**Validation status (execution recorded 2026-09-15):** the complete uncached Python coverage run
+passes all 3217 tests in **260.40 seconds (4m20s)**, including worker startup,
+coverage merging and reporting, at **100% statement/branch coverage**. Separate
+incident/scenario, frontend, static, build and performance checks also passed.
 See [current local conformance](SPECIFICATION.md#current-local-conformance) for
 exact evidence, preservation/diff caveats and deferred operational obligations,
 not historical green or failed baselines. No deployment, live Home Assistant
@@ -216,8 +217,28 @@ npm run test:frontend
   --output /tmp/predictive-controls-performance.json
 ```
 
-The Python suite enforces 100% branch coverage. Routine benchmarks use 100
-events, and every benchmark entry point must reject more than 1,000 events.
+The Python suite enforces 100% branch coverage and uses `pytest-xdist` by default:
+automatic worker selection capped at 16 processes, item-level `load` scheduling
+with small chunks, no worker-crash retries, and the 20 slowest durations reported.
+Install the full test extra when updating an existing environment. Use `-n 0`
+for focused serial debugging, or `-n 4`/`-n 8` to limit CPU use. Each worker retains
+normal test execution; no scenarios, callbacks or assertions are skipped.
+
+On the 16-core Ryzen 9 7950X3D reference host, the first fresh parallel coverage
+run took **4m20s**, versus **28m32s** serial (about **6.6× faster**). This is not a
+cache hit or a five-minute guarantee on smaller CI runners. All 3217 testcase
+identities and measured lines/branches were preserved exactly. Qualification was
+supervised with a 300-second process deadline; ordinary pytest does not itself
+enforce that deadline. For measurement, use a fresh attempt-specific
+`COVERAGE_FILE`, retain JUnit/coverage JSON and outer elapsed time, and never append
+prior coverage or accept artifacts from a canceled run. The complete set including
+the separate incident/scenario reruns and other checks took **6m23s** in summed
+command time; the five-minute result is for the full coverage command.
+
+Run standalone performance qualification after coverage workers exit, not under
+coverage or concurrent heavy tests. Routine benchmarks use 100 events, and every
+benchmark entry point must reject more than 1,000 events. Turborepo/result caching
+is not required; it would not reduce the uncached work measured here.
 
 Reported behavior failures follow
 [the regression-review workflow](.github/skills/predictive-controls-regression-review/SKILL.md): preserve the
@@ -235,5 +256,5 @@ quality gates.
   deferred device research, live rollout verification and the unresolved external
   office-device incident. These are not completed migration stages.
 - [PERFORMANCE_RESULTS.json](PERFORMANCE_RESULTS.json): checked-in performance
-  artifact retained as historical evidence; the verified final2 benchmark is
+  artifact retained as historical evidence; the latest standalone benchmark is
   recorded in [current local conformance](SPECIFICATION.md#current-local-conformance).

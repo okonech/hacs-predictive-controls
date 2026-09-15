@@ -12,6 +12,7 @@ dependencies = [
 test = [
   "pytest>=8.3",
   "pytest-cov>=5.0",
+  "pytest-xdist>=3.8",
   "ruff>=0.8",
   "mypy>=1.13",
 ]
@@ -24,6 +25,12 @@ markers = [
   "target_model: authoritative graph-local target-model contract",
 ]
 addopts = [
+  "-n", "auto",
+  "--maxprocesses=16",
+  "--dist=load",
+  "--maxschedchunk=1",
+  "--max-worker-restart=0",
+  "--durations=20",
   "--cov=custom_components.predictive_controls",
   "--cov-report=term-missing",
   "--cov-fail-under=100",

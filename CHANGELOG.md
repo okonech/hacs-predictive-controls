@@ -39,6 +39,15 @@ entries below describe earlier releases and may contain superseded behavior.
 	reports after reconciling permanent contracts, regression provenance and current
 	evidence. Retain unresolved operational work and factual incident fixtures.
 
+### Development
+
+- Run pytest in isolated processes with automatic worker selection capped at16,
+	small item-level scheduling chunks, no worker-crash retries and slow-test reports.
+	The first full uncached coverage qualification took4m20s versus28m32s serial on
+	the reference16-core host:3217unchanged tests,100% statement/branch coverage.
+	No scenario, callback, assertion or production behavior was modified. Standalone
+	latency benchmarks remain separate from coverage and concurrent test workers.
+
 ## 0.2.6
 
 ### Fixed
