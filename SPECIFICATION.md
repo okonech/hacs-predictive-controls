@@ -1883,6 +1883,14 @@ live episode-fault inference.
   controls and scroll during routine refresh; bound requests and prevent stale
   async responses or disconnect/reconnect from corrupting current state. Keep
   save and stale-entity preview/confirmation contracts with duplicate-write guards.
+  Match the actual producer's nullable diagnostic-count contract:
+  `occupancy_diagnostics.unsupported_count` is null when supported, otherwise the
+  rejected integer greater than two; it is not a Boolean. Preserve an omitted
+  historical field, reject invalid values without coercion, and keep valid
+  beliefs/policies visible even when an unsupported count disables path display.
+  Cross-language tests must feed real runtime status payloads through both the
+  source decoder and shipped panel, including stale-response recovery; duplicated
+  hand-authored frontend mocks alone do not establish wire compatibility.
 - **REQ-DIAG-010:** HACS consumes prebuilt self-contained JavaScript inside the
   integration; it never runs a source build. Retain the native custom element,
   existing module_url/admin registration and version agreement. Locked development
@@ -2314,11 +2322,12 @@ the approved wording; no other old test assertion/fixture/harness changed.
 
 Frontend uses19strict TypeScript modules including9typed view components.
 Selected paths/current-presence/history/candidate rules implement DIAG008, with
-all old workspaces/cards preserved.209frontend cases cover31baseline,
-117pure/layout/decoder/YAML,56shipped-bundle DOM and5artifact gates. Browser
+all old workspaces/cards preserved.231frontend cases cover31baseline,
+117pure/layout/decoder/YAML,56shipped-bundle DOM,5artifact gates and22additional
+strict diagnostic-count contracts. Browser
 smoke at desktop/390px retains16zone cards,17Map nodes, no card overlap or page
 overflow, equal ON3 roles, retained first2OFF history and warning-red border/bar.
-Only local mock data was used. The self-contained0.2.6panel is336775bytes;
+That layout smoke used only local mock data. The self-contained0.2.6panel is337083bytes;
 compatibility panel has identical bytes; generated helpers7280bytes. CI installs
 locked dependencies and checks strict types and nonwriting freshness. No loader,
 inference, persistence or fingerprint changes. The larger asset includes the
@@ -2326,22 +2335,59 @@ local YAML serializer instead of external runtime imports.
 
 | Current gate                                                 | Result after final code changes                                                                                                                                               |
 | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Full Python `.venv/bin/pytest -q`                            | **3234 passed**,263.34s pytest /264.900s outer (4m25s); **100% statement/branch**,7874 statements/3002 branches, zero missing/partial                                         |
-| Explicit `.venv/bin/pytest --no-cov -q tests -k 'test_inc_'` | **76 passed**,58.83s /59.038s outer                                                                                                                                           |
-| Separate `.venv/bin/pytest --no-cov -q -m scenario`          | **104 passed**,37.35s /37.534s outer                                                                                                                                          |
-| `npm run test:frontend`                                      | **209 passed**,4299.981228ms; zero failures/skips                                                                                                                             |
-| Ruff / mypy                                                  | Pass;161 source files                                                                                                                                                         |
+| Full Python `.venv/bin/pytest -q`                            | **3238 passed**,275.24s pytest /276.990s outer (4m37s); **100% statement/branch**,7874 statements/3002 branches, zero missing/partial                                         |
+| Explicit `.venv/bin/pytest --no-cov -q tests -k 'test_inc_'` | **77 passed**,37.98s /38.176s outer                                                                                                                                           |
+| Separate `.venv/bin/pytest --no-cov -q -m scenario`          | **105 passed**,37.07s /37.266s outer                                                                                                                                          |
+| `npm run test:frontend`                                      | **231 passed**,4664.833793ms; zero failures/skips                                                                                                                             |
+| Ruff / mypy                                                  | Pass; repository-default mypy162 files; explicit custom_components/tests/benchmarks163 also passed                                                                            |
 | Strict typecheck / build / freshness                         | Pass; deterministic self-contained artifacts and unchanged0.2.6registration                                                                                                   |
-| Editor / diff / frozen-source preservation                   | Pass; all preexisting incidents/harnesses/benchmark unchanged; performance intake index4df4a32342f256f569547e9b4536c33494fa762c7a694a9cd4c27f1bdbe01e6f preserved             |
-| Standalone100-event benchmark                                | **Pass**; positive worst p99 **3.728227ms**, max **3.860557ms**; rejected p99 **3.938146ms**, max **4.304092ms**; all qualification, count, fanout, timer and hard gates pass |
+| Editor / diff / frozen-source preservation                   | Pass; all preexisting Python incidents/harnesses/benchmark unchanged; current intake index a9d3d97e52126735741cc85be70a32be620acf0f11f108e0055d246062b29d87 preserved         |
+| Standalone100-event benchmark                                | **Pass**; positive worst p99 **4.072413ms**, max **4.710787ms**; rejected p99 **4.101953ms**, max **4.242862ms**; all qualification, count, fanout, timer and hard gates pass |
 
-Fresh final artifacts: `/tmp/callback-perf-20260915/` (rebuilt-* Python logs,
-final-frontend-rebuilt.log, final-performance.json and semantic/profile comparisons).
-Coverage is a fresh non-append run; all gates finished. The first frontend gate
+Fresh final artifacts: sibling Homelab's ignored tmp/panel-unavailable-20260915/
+(final-* logs and final-performance.json). Coverage is fresh/non-append and all
+gates finished. Prior allocation artifacts remain in `/tmp/callback-perf-20260915/`.
+During that earlier task the first frontend gate
 correctly rejected stale generated assets after intervening source formatting.
 The ordinary build regenerated only settings-callback formatting; strict freshness
 and all frontend tests passed, and Python/corpus/scenario gates were rerun after
 that final asset change. No failed attempt is counted as passing.
+
+**2056Z panel-unavailable incident resolved locally:** the user reported all
+cards unavailable after walking from Alex Office to Upstairs Hallway. Screenshot
+time/movement onset are unknown; report receipt20:56UTC identifies the retained
+[incident test](tests/incidents/test_inc_2026_09_15_2056z_panel_status_unavailable.py).
+Approved read-only WebSocket status succeeded: count2,17zones,31nodes,two selected
+paths, `unsupported_count=null`, policy frontier20:56:48.839419UTC. Raw capture
+SHA256 `901a1e1ca49366ab990c299bed788fcc1528ae236c0979616d56a5cd1088652d`.
+At capture office belief0.816069260847201/active and hallway0.050341895826638734/
+inactive were valid; no claim about their exact screenshot-time state or physical
+actuation. The frontend Boolean decoder rejected legitimate null and discarded
+the entire status. Removing only this field in a private diagnostic copy decoded
+all17zones/two paths, disconfirming other consumed-field failures in this capture.
+
+Only the TS field type/validator changed, with rebuilt337083byte bundles. Null
+and finite integers>2 are accepted without coercion; all true Boolean fields
+remain strict. Three old synthetic frontend fixtures incorrectly used false/true;
+they now use producer-faithful null/3. The old null-rejection assertion for this
+non-Boolean field was replaced by22 dedicated strict domain/inverse cases, not
+relaxed globally. No Python model, physical input, scenario, timing, layout or
+benchmark changed. The sourced two-zone slice failed the actual shipped-panel
+unavailable-banner oracle before edits (1failed0.50s), then passed immediately
+(1passed0.36s). Full35,998,166byte capture also renders all17cards/two paths offline,
+including bad-response stale retention and subsequent recovery.
+
+[Producer-to-consumer tests](tests/test_status_wire_contract.py) feed actual
+runtime_status_payload outputs through the source decoder and shipped JSDOM panel
+for count0/1/2, authoritative unsupported3/5 and recovery (12cases in3Python tests).
+Larger diagnostic counts have separate decoder checks; HA's existing state parser
+accepts only0..5. The test runner compiles only the source decoder in memory using
+esbuild for Node22 compatibility; it never repairs shipped assets. Python quality
+gates now require installed frontend dev dependencies as CI already supplies.
+Independent preimplementation/final reviews found no blocker. The working spec
+is reconciled and removed; the sourced regression remains. Live HA was read only:
+deploy rebuilt frontend assets and refresh browser cache before claiming live
+recovery. No restart/deployment, staging or commit was performed.
 
 **Performance blocker resolved without raising limits:** earlier UI qualification
 under observed unrelated CPU contention failed (positive p99 5.634570ms/rejected
@@ -2375,7 +2421,8 @@ Unchanged5ms p99 and hard<10ms gates apply. No unrelated process was stopped.
 
 Independent preimplementation and final read-only reviews found no blocker.
 Canonical contracts and results are reconciled; the completed warning, UX and
-allocation working specs are removed, with both report regressions retained.
+allocation working specs and the later panel-status working spec are removed,
+with their permanent regressions retained.
 The unresolved external-office working record remains separate. No deployment,
 restart, staging, commit or physical-light verification occurred.
 

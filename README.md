@@ -29,18 +29,23 @@ adjacent learning is retained as bounded statistical debt after publication and
 across compatible saves. A row commits only after its live prediction leases end;
 unsaved operations are not claimed crash-durable.
 
-**Validation recorded 2026-09-15:** **3234 Python tests pass**, with **100%
-statement/branch coverage** in **264.90 seconds (4m25s)** including worker startup
-and coverage reporting. Separate **76 incident cases**, **104 scenarios**, and
-**209 frontend tests** pass, as do Ruff, mypy, strict TypeScript, build and asset
+**Validation recorded 2026-09-15:** **3238 Python tests pass**, with **100%
+statement/branch coverage** in **276.99 seconds (4m37s)** including worker startup
+and coverage reporting. Separate **77 incident cases**, **105 scenarios**, and
+**231 frontend tests** pass, as do Ruff, mypy, strict TypeScript, build and asset
 freshness checks. The [occupied-room warning regression](tests/incidents/test_inc_2026_09_15_1724z_occupied_rooms_stuck_warning.py)
 now passes; unsupported continuous presence is no longer labeled a stuck sensor.
-**The standalone performance gate now passes:** worst positive p99 **3.728ms**,
-rejected-jump p99 **3.938ms**, with the unchanged **5ms** limit and complete
+**The standalone performance gate passes:** worst positive p99 **4.072ms**,
+rejected-jump p99 **4.102ms**, with the unchanged **5ms** limit and complete
 100-sample qualification. Equivalent health/audit allocation reductions preserve
 exact results and persisted state across1500 comparison events. No model rules,
 scenarios or thresholds changed. Completed warning/UX/performance working specs
 have been reconciled and removed; permanent regressions remain.
+The [all-unavailable panel regression](tests/incidents/test_inc_2026_09_15_2056z_panel_status_unavailable.py)
+also passes: the frontend now accepts the server's null-or-integer diagnostic
+count instead of incorrectly requiring a Boolean. Real producer-to-panel tests
+protect this boundary; the full captured17-zone response renders offline. The
+rebuilt frontend still needs deployment and browser refresh for live recovery.
 See [current local conformance](SPECIFICATION.md#current-local-conformance) for
 exact evidence, preservation/diff caveats and deferred operational obligations,
 not historical green or failed baselines. No deployment, live Home Assistant
@@ -256,7 +261,10 @@ The [local preview](tests/frontend/occupancy_preview.html) uses mock data only.
 ### Repository quality gates
 
 Create the Python environment and install the development dependencies declared
-in [pyproject.toml](pyproject.toml), then use these quality gates:
+in [pyproject.toml](pyproject.toml), and run `npm ci` for the locked frontend
+dependencies before these quality gates. Python's producer-to-panel/incident
+tests also invoke Node and JSDOM; missing frontend prerequisites fail rather than
+silently skipping wire-contract coverage:
 
 ```bash
 .venv/bin/python -m pytest -q

@@ -31,6 +31,13 @@ function bool(value: unknown): boolean {
     if (typeof value !== 'boolean') throw new Error('Expected a Boolean');
     return value;
 }
+function unsupportedCount(value: unknown): number | null {
+    if (value === null) return null;
+    if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value) || value <= 2) {
+        throw new Error('unsupported_count must be null or an integer greater than two');
+    }
+    return value;
+}
 function nullableText(value: unknown): string | null { return value === null ? null : text(value); }
 export function list<T>(value: unknown, decode: (value: unknown) => T): T[] {
     if (!Array.isArray(value)) throw new Error('Expected an array');
@@ -199,7 +206,7 @@ export function decodeDiagnostics(value: unknown): Diagnostics {
     const r = record(value); const d: Diagnostics = {};
     optional(r, 'model', text, v => d.model = v);
     optional(r, 'expected_occupants', finite, v => d.expected_occupants = v);
-    optional(r, 'unsupported_count', bool, v => d.unsupported_count = v);
+    optional(r, 'unsupported_count', unsupportedCount, v => d.unsupported_count = v);
     optional(r, 'beliefs', v => dictionary(v, probability), v => d.beliefs = v);
     optional(r, 'policy', v => dictionary(v, policy), v => d.policy = v);
     optional(r, 'policy_audit', v => list(v, audit), v => d.policy_audit = v);

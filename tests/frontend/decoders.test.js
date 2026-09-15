@@ -343,7 +343,7 @@ test("full current status shapes separate episodes, physical health, policy and 
         transition_counts: { a: { b: 2.5 } },
         authoritative_count: { source: "sensor.people", accepted: 1, available: true },
         occupancy_diagnostics: {
-            model: "zone_belief", expected_occupants: 1, requested_occupants: 1, unsupported_count: false,
+            model: "zone_belief", expected_occupants: 1, requested_occupants: 1, unsupported_count: null,
             selected_paths: [selected({ route, endpoint: route[1], covered_node_ids: ["a", "b"], covered_zones: ["za", "zb"], eligible_node_ids: ["a", "b"] })],
             episodes: [{ node_id: "a", zone: "za", episode_id: "a:1", status: "asserted", reliability: 0.75, profile: "stay_presence" }],
             path_health: [{ node_id: "a", zone: "za", phase: "on", on_since: "2026-09-15T17:24:15Z", coverage_lost_at: null }],
@@ -415,7 +415,7 @@ test("all consumed probability surfaces reject nonfinite and out-of-range values
 test("policy, warning, audit and authorization Boolean fields reject strings and numbers", () => {
     for (const value of badBooleans) {
         for (const raw of [
-            { unsupported_count: value }, { policy: { za: { active: value } } },
+            { policy: { za: { active: value } } },
             { reliability_warnings: [warningWire({ active: value })] },
             { policy_audit: [{ active_before: value }] }, { policy_audit: [{ active_after: value }] },
             { authorizations: [{ authorized: value }] },

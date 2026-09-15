@@ -84,7 +84,7 @@ function statusWire(overrides = {}) {
         transition_counts: { a: { b: 7 }, b: { c: 3 } },
         ...overrides,
         occupancy_diagnostics: {
-            model: "zone_belief", expected_occupants: count, unsupported_count: false,
+            model: "zone_belief", expected_occupants: count, unsupported_count: null,
             beliefs: Object.fromEntries(ids.map(id => [id, id === "e" ? 0.99 : 0.8])),
             // Presence styling must not depend on the policy being active.
             policy: Object.fromEntries(ids.map(id => [id, { active: id === "c", profile: "stay_presence" }])),

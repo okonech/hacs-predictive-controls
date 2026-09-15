@@ -31,10 +31,14 @@ entries below describe earlier releases and may contain superseded behavior.
 
 ### Fixed
 
+- Fix the panel showing every zone unavailable with “Expected a Boolean”:
+	decode `unsupported_count` as the server's null-or-unsupported-integer value,
+	not a Boolean. Retain the live-response regression, add real runtime-to-shipped
+	panel tests and strict malformed-count/recovery checks; inference is unchanged.
 - Avoid reconstructing unchanged immutable health records and deep-copying flat
 	audit decisions during byte sizing. Preserve exact warning frontiers, canonical
 	audit bytes, retention and model results; retain the computational regression.
-	Final worst positive/rejected p99 is3.728/3.938ms; the5ms limit is unchanged.
+	Latest worst positive/rejected p99 is4.072/4.102ms; the5ms limit is unchanged.
 - Describe assertion-timeout-only diagnostics as “Continuous presence detected;
 	path unverified” rather than a stuck-sensor fault. Machine fields,600s timing,
 	recovery, inference and persistence are unchanged; retain the reported regression.
@@ -56,7 +60,7 @@ entries below describe earlier releases and may contain superseded behavior.
 ### Development
 
 - Add locked TypeScript/esbuild/YAML/DOM-test dependencies, strict typechecking,
-  deterministic build and nonwriting asset-freshness CI gates. All209frontend
+	deterministic build and nonwriting asset-freshness CI gates. All231frontend
   tests pass, including the original31 and shipped-bundle interaction/race tests.
 - Run pytest in isolated processes with automatic worker selection capped at16,
 	small item-level scheduling chunks, no worker-crash retries and slow-test reports.

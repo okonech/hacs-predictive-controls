@@ -291,7 +291,7 @@ test("unsupported or inconsistent finite counts make selection unavailable witho
         const wire = { ...diagnosticsWire(), ...legacyWire(), expected_occupants: count };
         assertUnavailable(project(wire, mapWire(), 1).result);
     }
-    assertUnavailable(project({ ...diagnosticsWire(), unsupported_count: true }).result);
+    assertUnavailable(project({ ...diagnosticsWire(), unsupported_count: 3 }).result);
     assertUnavailable(project({ ...diagnosticsWire([]), expected_occupants: 1 }).result);
     assertUnavailable(project(diagnosticsWire([null, null]), mapWire(), 1).result);
 });

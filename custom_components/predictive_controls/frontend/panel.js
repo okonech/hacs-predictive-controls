@@ -51,6 +51,13 @@
     if (typeof value !== "boolean") throw new Error("Expected a Boolean");
     return value;
   }
+  function unsupportedCount(value) {
+    if (value === null) return null;
+    if (typeof value !== "number" || !Number.isFinite(value) || !Number.isInteger(value) || value <= 2) {
+      throw new Error("unsupported_count must be null or an integer greater than two");
+    }
+    return value;
+  }
   function nullableText(value) {
     return value === null ? null : text(value);
   }
@@ -240,7 +247,7 @@
     const d = {};
     optional(r, "model", text, (v) => d.model = v);
     optional(r, "expected_occupants", finite, (v) => d.expected_occupants = v);
-    optional(r, "unsupported_count", bool, (v) => d.unsupported_count = v);
+    optional(r, "unsupported_count", unsupportedCount, (v) => d.unsupported_count = v);
     optional(r, "beliefs", (v) => dictionary(v, probability), (v) => d.beliefs = v);
     optional(r, "policy", (v) => dictionary(v, policy), (v) => d.policy = v);
     optional(r, "policy_audit", (v) => list(v, audit), (v) => d.policy_audit = v);

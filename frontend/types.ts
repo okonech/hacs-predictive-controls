@@ -107,7 +107,7 @@ export interface Authorization {
 export interface Diagnostics {
     model?: string;
     expected_occupants?: number;
-    unsupported_count?: boolean;
+    unsupported_count?: number | null;
     beliefs?: Record<string, number>;
     policy?: Record<string, Policy>;
     policy_audit?: AuditEntry[];
