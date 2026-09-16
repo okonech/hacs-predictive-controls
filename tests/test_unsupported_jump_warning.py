@@ -456,9 +456,11 @@ def test_strict_restore_rejection_is_atomic(mutation: str) -> None:
 def test_coexisting_kinds_and_strict_day_projection() -> None:
     with RuntimeScenario(at(0)) as scenario:
         replay = scenario.create(graph(), 1).watch_reliability()
-        for cycle in range(6):
-            replay.send("binary_sensor.c", "on", at(cycle * 20))
-            replay.send("binary_sensor.c", "off", at(cycle * 20 + 1))
+        # Preserve the original six pairs and later warning/day frontiers;
+        # four inserted real cycles meet the approved ten-cycle calibration.
+        for start in (0, 10, 20, 30, 40, 50, 60, 70, 80, 100):
+            replay.send("binary_sensor.c", "on", at(start))
+            replay.send("binary_sensor.c", "off", at(start + 1))
         replay.send("binary_sensor.a", "on", at(120))
         replay.send("binary_sensor.b", "on", at(121))
         replay.send("binary_sensor.c", "on", at(122))

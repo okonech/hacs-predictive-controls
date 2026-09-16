@@ -29,17 +29,25 @@ adjacent learning is retained as bounded statistical debt after publication and
 across compatible saves. A row commits only after its live prediction leases end;
 unsaved operations are not claimed crash-durable.
 
-**Validation recorded 2026-09-15:** **3238 Python tests pass**, with **100%
-statement/branch coverage** in **276.99 seconds (4m37s)** including worker startup
-and coverage reporting. Separate **77 incident cases**, **105 scenarios**, and
+Flapping warnings require **10 completed short ON→OFF cycles within a rolling
+20 minutes**, with each ON lasting at most60seconds. Nine cycles do not warn;
+the warning clears when fewer than ten remain. Aliases, duplicates and timers do
+not add cycles. This diagnostic-only rule replaces the former six-cycles/hour rule.
+
+**Validation recorded 2026-09-16:** **3245 Python tests pass**, with **100%
+statement/branch coverage** in **169.43 seconds (2m49s)** including worker startup
+and coverage reporting. Separate **82 incident cases**, **110 scenarios**, and
 **231 frontend tests** pass, as do Ruff, mypy, strict TypeScript, build and asset
 freshness checks. The [occupied-room warning regression](tests/incidents/test_inc_2026_09_15_1724z_occupied_rooms_stuck_warning.py)
 now passes; unsupported continuous presence is no longer labeled a stuck sensor.
-**The standalone performance gate passes:** worst positive p99 **4.072ms**,
-rejected-jump p99 **4.102ms**, with the unchanged **5ms** limit and complete
-100-sample qualification. Equivalent health/audit allocation reductions preserve
-exact results and persisted state across1500 comparison events. No model rules,
-scenarios or thresholds changed. Completed warning/UX/performance working specs
+**The standalone performance gate passes:** worst positive p99 **2.095ms**,
+rejected-jump p99 **2.188ms**, with the unchanged **5ms** limit and complete
+100-sample qualification. The earlier equivalent health/audit allocation reductions
+preserved exact results and persisted state across1500 comparison events without
+changing model rules or thresholds. The later approved flapping calibration changes
+only diagnostics and their fingerprint; original incident primary inputs and lighting
+expectations remain intact. The [foyer regression](tests/incidents/test_inc_2026_09_16_0418z_foyer_flapping_warning.py)
+reproduced the old warning and now passes. Completed warning/UX/performance working specs
 have been reconciled and removed; permanent regressions remain.
 The [all-unavailable panel regression](tests/incidents/test_inc_2026_09_15_2056z_panel_status_unavailable.py)
 also passes: the frontend now accepts the server's null-or-integer diagnostic
@@ -58,6 +66,9 @@ restart or physical-light verification is claimed.
   selected, physical, policy and prediction/deferred-learning records. Old v4
   fingerprints, all v3 inference and v1 inference are rejected; a schema label
   or edited fingerprint cannot supply missing authority.
+- The ten-cycle/20-minute warning calibration changes that fingerprint. Deploying
+  it rejects old full inference and cold-reconstructs from subsequent evidence;
+  configuration is retained. No live deployment or restart was performed here.
 - The separate schema-6 and v2 import paths retain only validated count/Boolean
   active seeds; v2 requires a retained allowed non-source-free acquisition edge.
   Both cold-build from current raw sensors and prefer the valid authoritative

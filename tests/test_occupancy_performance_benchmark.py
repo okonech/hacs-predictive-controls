@@ -655,7 +655,7 @@ def test_target_benchmark_reports_required_bounded_metrics() -> None:
     assert core["selected_route_max"] <= 4
     assert core["selected_source_max"] == core["selected_source_limit"] == 17
     assert core["health_state_max"] == core["health_state_limit"] == 17
-    assert core["health_cycle_max"] <= core["health_cycle_limit"] == 6
+    assert core["health_cycle_max"] <= core["health_cycle_limit"] == 10
     assert all(value for gate, value in instrumented["counts"]["2"]["gates"].items()
                if gate not in {"preferred_callback", "hard_callback"})
     assert core["event_count"] == 1

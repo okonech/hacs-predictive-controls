@@ -363,8 +363,8 @@ def test_covered_fresh_on_does_not_record_jump() -> None:
 
 
 @pytest.mark.parametrize(("mutation", "message"), (
-    ("seventh", "Path health must retain at most six cycle timestamps"),
-    ("list", "Path health must retain at most six cycle timestamps"),
+    ("eleventh", "Path health must retain at most ten cycle timestamps"),
+    ("list", "Path health must retain at most ten cycle timestamps"),
     ("reversed", "Path health completions must be ordered"),
     ("after_on", "Completed cycle cannot follow the current ON start"),
 ))
@@ -376,22 +376,22 @@ def test_health_record_bound_preserves_real_completions(
     episodes.reconcile_startup_snapshot((sensor("binary_sensor.a2", "off", 0),), at(0))
     health = PathHealth(NODES)
     covered = frozenset({"a"})
-    for start in range(0, 140, 20):
+    for start in range(0, 220, 20):
         for seconds, level in ((start, "on"), (start + 10, "off")):
             episodes.observe(sensor("binary_sensor.a", level, seconds))
             health.observe(episodes.states, at(seconds), covered)
-    episodes.observe(sensor("binary_sensor.a", "on", 140))
-    health.observe(episodes.states, at(140), covered)
+    episodes.observe(sensor("binary_sensor.a", "on", 220))
+    health.observe(episodes.states, at(220), covered)
     state = health.states[0]
-    assert state.completed_cycles == tuple(at(s) for s in range(30, 140, 20))
-    assert len(state.completed_cycles) == 6 and state.on_started_at == at(140)
+    assert state.completed_cycles == tuple(at(s) for s in range(30, 220, 20))
+    assert len(state.completed_cycles) == 10 and state.on_started_at == at(220)
     assert replace(state) == state
     ledger = tuple(item for _, item in health_snapshot(health)[1])
     control = PathHealth(NODES)
-    control.restore(health.states, ledger, at(140))
+    control.restore(health.states, ledger, at(220))
     assert health_snapshot(control) == health_snapshot(health)
     invalid: object
-    if mutation == "seventh":
+    if mutation == "eleventh":
         invalid = (at(10), *state.completed_cycles)
     elif mutation == "list":
         invalid = list(state.completed_cycles)
@@ -399,7 +399,7 @@ def test_health_record_bound_preserves_real_completions(
         invalid = tuple(reversed(state.completed_cycles))
     else:
         assert mutation == "after_on"
-        invalid = (*state.completed_cycles[:-1], at(140.000001))
+        invalid = (*state.completed_cycles[:-1], at(220.000001))
     incoming, before = deepcopy(invalid), health_snapshot(health)
     if isinstance(invalid, tuple):
         assert_error(lambda: replace(state, completed_cycles=invalid), message)
@@ -408,19 +408,20 @@ def test_health_record_bound_preserves_real_completions(
             lambda: _reconstruct_invalid(state, {"completed_cycles": invalid}), message,
         )
     assert incoming == invalid and health_snapshot(health) == before
-    for expiry_seconds, count in ((3629.999999, 6), (3630, 5)):
+    for expiry_seconds, count in ((1229.999999, 10), (1230, 9)):
         assert health.advance(at(expiry_seconds), covered) == (
             control.advance(at(expiry_seconds), covered)
         )
         assert len(health.states[0].completed_cycles) == count
     warning = health._occurrences[("a", "sustained_flapping")]
-    assert warning.first_observed_at == at(110) and warning.cleared_at == at(3630)
-    for seconds, level in ((3631, "off"), (3640, "on"), (3650, "off")):
+    assert warning.first_observed_at == at(190) and warning.cleared_at == at(1230)
+    assert warning.cleared_at - state.completed_cycles[0] == timedelta(seconds=1200)
+    for seconds, level in ((1231, "off"), (1240, "on"), (1250, "off")):
         episodes.observe(sensor("binary_sensor.a", level, seconds))
         for diagnostic in (health, control):
             diagnostic.observe(episodes.states, at(seconds), covered)
         assert health_snapshot(health) == health_snapshot(control)
-    assert health.states[0].completed_cycles[-1] == at(3650)
+    assert health.states[0].completed_cycles[-1] == at(1250)
 
 
 def displaced_filter() -> ZoneBeliefFilter:

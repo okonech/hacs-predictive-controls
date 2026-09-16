@@ -6,9 +6,8 @@
 **Implementation status:** Repository version `0.2.6` implements the approved
 selected-path, presence-gated departure, diagnostic-health, durable-learning and
 strict modular panel contracts. The presentation-only occupied-room warning fix
-passes its frozen regression. Full Python/incident/scenario/frontend and static
-gates pass; **final conformance is blocked by standalone p99 performance** under
-the current loaded host, also reproduced with the original status code.
+and approved ten-cycle/twenty-minute flapping calibration pass their regressions.
+Full Python/incident/scenario/frontend, static and standalone p99 gates pass.
 [Section 19.0](#current-local-conformance) distinguishes current results from
 historical green. No deployment, live restart or physical actuation is claimed.
 
@@ -62,11 +61,16 @@ their local validation. Frozen incident assertions remain retained.
 - **REQ-HEALTH-001:** Report a diagnostic warning after600 uninterrupted observed
   seconds ON without selected path support, starting at the later ON/support-loss
   frontier. Recover on OFF/support; unknown intervals cannot count as known ON.
-- **REQ-HEALTH-002:** Warn at the sixth completed quick physical ON/OFF cycle in
-  `(now-3600s,now]`, not at five. Initial shared quick-cycle calibration is ON<=60s;
+- **REQ-HEALTH-002, user-approved recalibration (2026-09-16):** Warn at the tenth
+  completed quick physical ON/OFF cycle in `(now-1200s,now]`, not at nine.
+  Shared quick-cycle calibration remains ON<=60s;
   this is an implementation calibration, not a claimed device minimum. Count
-  aggregate physical edges, not aliases/duplicates/timers; retain last6 qualifying
-  completions. Recover when fewer than6 remain. No earlier low-count warning bypass.
+  aggregate physical edges, not aliases/duplicates/timers; retain last10 qualifying
+  completions. Recover when fewer than10 remain, expiring the left boundary before
+  any same-time new input. No earlier low-count warning bypass. This supersedes
+  the September12 six-cycle/hour calibration. The user approved updating synthetic
+  threshold/expiry checks, not original incident inputs or lighting expectations.
+  STATE011's fingerprint changes with calibration; old full inference rejects.
 - **REQ-HEALTH-003:** These warnings do not evict selected occupancy, suppress
   accepted movement, or change hardware. Correlation suppression remains separate.
   This supersedes release-dwell/count-conflict health degradation in COUNT009 and
@@ -102,7 +106,7 @@ boundary and mature prediction behavior remain valid.
   count0 alone does not clear history. Event-only occurrences retain their observed
   timestamps across timers; clearing sets last/clear to the actual clear frontier.
   Use existing strict24h cleared-history projection; active warnings remain visible.
-  Existing600s and sixthcycle diagnoses stay independent. Reliability/graph show
+  Existing600s and quick-cycle diagnoses stay independent. Reliability/graph show
   all active kinds, the diagnostic sensor retains history, and Problem identifies
   unsupported spatial evidence separately from physical sensor health. No warning
   changes occupancy, acquisition eligibility, learning or hardware.
@@ -1326,7 +1330,7 @@ profile because software timing must reflect actual hardware behavior.
 Traversal/bootstrap windows bound ordinary component tokens/candidates, not
 selected endpoint retention or ordinary live-origin pairing. The three-hour
 cadence-warning window below is a legacy component calibration, not the live
-sixth-cycle diagnostic trigger. Device-parameter discovery/adaptation is deferred;
+ten-cycle diagnostic trigger. Device-parameter discovery/adaptation is deferred;
 unknown device timing must not invalidate selected-path correctness.
 See [deferred operational obligations](#deferred-operational-obligations) for the
 retained timing research, historical evidence and unverified rollout requirements.
@@ -1733,6 +1737,10 @@ Persist only state needed to reproduce the next decision:
   `path_health_calibration` includes unsupported-ON duration, quick-cycle window,
   maximum ON duration and completion count. Retained component keys do not enable
   those components as current acquisition/health policy.
+  The September16 HEALTH002 amendment changes window/count from3600s/6 to1200s/10;
+  unsupported600s and maximumON60s remain. Old fingerprints reject before snapshot
+  decoding; the user approved cold inference rather than a partial health migration.
+  No Store/schema bump, fingerprint rewriting or configuration reset is required.
 
   Required current state includes selected paths/sources, path health, displacement
   and physical-hold fields, selected prediction grants, lease `authority_kind` and
@@ -2093,6 +2101,20 @@ synthetic five/six completed-cycle cases proving no warning atfive and a warning
 at the next actual publication aftersix, with sixth-OFF occurrence timestamp.
 Warnings remain diagnostic and do not activate/release lighting.
 
+**Named health recalibration amendment, 2026-09-16:** the user approved10 completed
+short ON/OFF cycles in20minutes, including synthetic boundary-test updates and
+old-fingerprint rejection. The original Aug23 2318 primary's five timestamped
+inputs and expectations remain unchanged. Its synthetic5/6 cases now stay quiet;
+additional9/10 cases retain sampled-publication and exact tenthOFF/20minute expiry
+proof. The Sep15 allocation primary remains verbatim; only its synthetic pruning
+supplement adopts10/1200 while retaining immutable-state/exact-expiry/restore
+checks. Nonincident count-reset, alias, coexistence, status/Problem, selected-path,
+corruption, restart and benchmark-report state-cap qualifications use the new
+boundary. No original lighting oracle, benchmark workload/sample or latency limit
+changes. The separately retained
+[foyer incident](tests/incidents/test_inc_2026_09_16_0418z_foyer_flapping_warning.py)
+protects the newly reported sparse-motion warning failure.
+
 **Named follow-up acceptance amendment, 2026-09-13:** September8's primary keeps
 all14 original inputs, effective reliability1.0, counts1/2, setup, and pre-return
 restore. Require closet input-phaseON12:13:34.142281 and uninterruptedON through
@@ -2294,9 +2316,45 @@ references remain in [Section 19.5](#deferred-operational-obligations) and
 
 <a id="current-local-conformance"></a>
 
-### 19.0 Current local conformance — validation recorded 2026-09-15
+### 19.0 Current local conformance — validation recorded 2026-09-16
 
-**Current warning-label and strict-panel qualification:** the user approved
+**Foyer flapping recalibration:** approved read-only status/logbook captures in
+sibling Homelab's ignored tmp/foyer-flapping-20260916/ confirm the former6/hour
+predicate, not a panel defect. At05:40:32.801267UTC the foyer was5%/inactive with
+an active sustained_flapping warning qualified05:32:26.113086UTC. Its latest six
+OFFs span48m16.944002s; only two fall in the latest20minutes. Count2; physical
+episode cadence/health flags false. Status SHA256
+`7d5cd76082a87090b57ce3b4ca35046b02f17f1890e2e4c2d919899952423b55`; history SHA256
+`5307463b23f65ba82003b8172e67a349a6a533c8b011dce845981f3d49b14ded`.
+The [permanent replay](tests/incidents/test_inc_2026_09_16_0418z_foyer_flapping_warning.py)
+retains all18 exact state/time/entity inputs from04:18:01.614430 to05:32:26.113086
+UTC and uses real scheduled Reliability publications through the capture frontier.
+It uses the causal one-node map slice at0.85, not invented neighbors, receipt times,
+selected paths or latent posterior. It proves warning behavior, not actuation.
+
+The disconfirming check was unchanged-runtime replay: it reproduced a public
+flapping warning at04:46:31.614430, qualified at the sixthOFF04:46:23.110889.
+Exact test failed0.35s before edits and passed0.33s immediately after the first
+production edit. Only path_health.py's window/count constants and matching
+comment/error wording changed. No occupancy algorithm, frontend, hardware setting,
+original incident primary, harness, package or benchmark source changed. The user
+explicitly approved10/1200 and the named synthetic qualification migrations above.
+The wider state cap remains bounded at10; old fingerprints reject before decode,
+new snapshots round-trip before/during/after qualification. Independent reviews
+found no grounded blocker. Exactly three spec hardening passes completed.
+
+Focused194cases passed4.47s. The first full run found two additional old6-cycle
+synthetic expectations: benchmark-report state cap and coexistence of three warning
+kinds. These now preserve the new10 cap and original coexistence event pairs/day
+frontiers, respectively; focused3cases passed1.30s. Every final gate was rerun
+after those edits; final2 results below supersede the retained failed first run.
+Canonical requirements/results are reconciled; the completed foyer working spec
+is removed and its exact regression retained. Nothing was deployed/restarted.
+Deployment must use the updated backend, expect old inference rejection/cold
+reconstruction, and retain configuration/backups; rollback needs a matching snapshot
+or cold bootstrap. Do not clear state or edit fingerprints to force compatibility.
+
+**Earlier warning-label and strict-panel qualification:** the user approved
 a presentation-only fix followed by a strict modular UX refactor. Approved
 read-only diagnostics/history in sibling Homelab's ignored
 tmp/occupied-room-warning-20260915 capture count2/U-U after incompatible-fingerprint
@@ -2333,20 +2391,21 @@ locked dependencies and checks strict types and nonwriting freshness. No loader,
 inference, persistence or fingerprint changes. The larger asset includes the
 local YAML serializer instead of external runtime imports.
 
-| Current gate                                                 | Result after final code changes                                                                                                                                               |
-| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Full Python `.venv/bin/pytest -q`                            | **3238 passed**,275.24s pytest /276.990s outer (4m37s); **100% statement/branch**,7874 statements/3002 branches, zero missing/partial                                         |
-| Explicit `.venv/bin/pytest --no-cov -q tests -k 'test_inc_'` | **77 passed**,37.98s /38.176s outer                                                                                                                                           |
-| Separate `.venv/bin/pytest --no-cov -q -m scenario`          | **105 passed**,37.07s /37.266s outer                                                                                                                                          |
-| `npm run test:frontend`                                      | **231 passed**,4664.833793ms; zero failures/skips                                                                                                                             |
-| Ruff / mypy                                                  | Pass; repository-default mypy162 files; explicit custom_components/tests/benchmarks163 also passed                                                                            |
-| Strict typecheck / build / freshness                         | Pass; deterministic self-contained artifacts and unchanged0.2.6registration                                                                                                   |
-| Editor / diff / frozen-source preservation                   | Pass; all preexisting Python incidents/harnesses/benchmark unchanged; current intake index a9d3d97e52126735741cc85be70a32be620acf0f11f108e0055d246062b29d87 preserved         |
-| Standalone100-event benchmark                                | **Pass**; positive worst p99 **4.072413ms**, max **4.710787ms**; rejected p99 **4.101953ms**, max **4.242862ms**; all qualification, count, fanout, timer and hard gates pass |
+| Current gate                                                 | Result after final code changes                                                                                                                                                        |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Full Python `.venv/bin/pytest -q`                            | **3245 passed**,168.32s pytest /169.425s outer (2m49s); **100% statement/branch**,7874 statements/3002 branches, zero missing/partial                                                  |
+| Explicit `.venv/bin/pytest --no-cov -q tests -k 'test_inc_'` | **82 passed**,48.59s /48.739s outer                                                                                                                                                    |
+| Separate `.venv/bin/pytest --no-cov -q -m scenario`          | **110 passed**,48.32s /48.453s outer                                                                                                                                                   |
+| `npm run test:frontend`                                      | **231 passed**,3229.811516ms; zero failures/skips                                                                                                                                      |
+| Ruff / mypy                                                  | Pass; repository-default mypy163 files                                                                                                                                                 |
+| Strict typecheck / build / freshness                         | Pass; deterministic self-contained artifacts and unchanged0.2.6registration                                                                                                            |
+| Editor / diff / frozen-source preservation                   | Pass; original incident primary bodies verbatim; harness/benchmark/frontend/packages unchanged; intake index9eddf4c4797446b4fdcdee778b37830859a13447a2b8ab26a99b2a36d4b6e909 preserved |
+| Standalone100-event benchmark                                | **Pass**,14.924s; positive worst p99 **2.094580ms**, max **2.192460ms**; rejected p99 **2.188260ms**, max **2.724374ms**; all qualification, count, fanout, timer and hard gates pass  |
 
-Fresh final artifacts: sibling Homelab's ignored tmp/panel-unavailable-20260915/
-(final-* logs and final-performance.json). Coverage is fresh/non-append and all
-gates finished. Prior allocation artifacts remain in `/tmp/callback-perf-20260915/`.
+Fresh final artifacts: sibling Homelab's ignored tmp/foyer-flapping-20260916/
+(final2-* logs and final-performance.json). Coverage is fresh/non-append and all
+gates finished. Earlier panel artifacts remain in tmp/panel-unavailable-20260915/;
+prior allocation artifacts remain in `/tmp/callback-perf-20260915/`.
 During that earlier task the first frontend gate
 correctly rejected stale generated assets after intervening source formatting.
 The ordinary build regenerated only settings-callback formatting; strict freshness
@@ -2745,7 +2804,7 @@ results; those local results do not close the obligations below.
   retriggers are not independent movement, cycles or occupancy evidence. Never turn
   settings into occupancy/adjacency TTLs, subtract them to invent departure, or
   rewrite shared profiles per device. Do not silently change the **600-second**
-  unsupported-ON or **sixth-cycle** health rules; handling a genuinely long hardware
+  unsupported-ON or **ten-cycle/20-minute** health rules; handling a genuinely long hardware
   latch under the unsupported-ON warning remains deferred, not an approved exception.
 - Retain the future proof matrix: all six A/B/C clear orders; unequal/equal/unknown
   holds; retrigger without ON; middle-node flap/unavailability; restart before/after

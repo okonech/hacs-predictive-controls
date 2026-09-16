@@ -243,35 +243,35 @@ def test_problem_warning_publishes_and_saves_at_next_registered_timer(
 
 
 @pytest.mark.parametrize("count", (0, 1, 2))
-def test_problem_six_quick_cycles_only_and_rolling_recovery(count: int) -> None:
+def test_problem_ten_quick_cycles_only_and_rolling_recovery(count: int) -> None:
     with RuntimeScenario(at(0)) as scenario:
         replay = scenario.create(graph(), count)
         with problem_sensor(replay) as (entity, writes):
-            for cycle in range(6):
+            for cycle in range(10):
                 replay.send("binary_sensor.a", "on", at(cycle * 10))
                 assert not entity.is_on
                 replay.send("binary_sensor.a", "off", at(cycle * 10 + 1))
-                assert bool(entity.is_on) is (cycle == 5)
+                assert bool(entity.is_on) is (cycle == 9)
                 result = payload(replay)
                 assert result["health_warnings"] == []  # Stuck-only legacy summary.
-                if cycle < 5:
+                if cycle < 9:
                     assert result["reliability_warnings"] == []
                     assert writes == []
-            assert writes == [(at(51), True)]
+            assert writes == [(at(91), True)]
             assert replay.runtime.problem_reasons == ("sensor_health_degraded",)
             assert result["reliability_warnings"][0]["kind"] == "flapping"
             assert result["path_health"][0]["completed_cycles"] == [
-                at(cycle * 10 + 1).isoformat() for cycle in range(6)
+                at(cycle * 10 + 1).isoformat() for cycle in range(10)
             ]
-            replay.advance(at(3600))
+            replay.advance(at(1200))
             assert entity.is_on
-            replay.advance(at(3605))
+            replay.advance(at(1205))
             assert not entity.is_on
-            assert writes == [(at(51), True), (at(3605), False)]
+            assert writes == [(at(91), True), (at(1205), False)]
             result = payload(replay)
             assert result["reliability_warnings"] == []
             assert result["reliability_warning_occurrences"][0]["cleared_at"] == (
-                at(3601).isoformat()
+                at(1201).isoformat()
             )
             assert not replay.edges
 

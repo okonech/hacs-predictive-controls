@@ -10,6 +10,8 @@ forced diagnostic write or checkpoint shift. 2026-09-12 user-approved amendment:
 the original two completed quick cycles must NOT warn. Separate synthetic extensions
 complete five/six cycles and check the actual sampled warning and hourly recovery.
 The original stale-warning report remains provenance, not current threshold policy.
+2026-09-16 user-approved recalibration: preserve the original primary and5/6-cycle
+extensions as quiet cases; add9/10 boundaries and20minute warning recovery.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -103,11 +105,11 @@ def test_inc_2026_08_23_2318z_fresh_transition_episode_clears_cadence_warning(
 @pytest.mark.target_model
 @pytest.mark.scenario
 @pytest.mark.parametrize("count", (1, 2))
-@pytest.mark.parametrize("cycles", (5, 6))
-def test_aug23_2318z_synthetic_five_six_cycle_warning_boundary(
+@pytest.mark.parametrize("cycles", (5, 6, 9, 10))
+def test_aug23_2318z_synthetic_cycle_warning_boundary(
     count: int, cycles: int,
 ) -> None:
-    """Original five inputs, then explicitly synthetic OFF/ON cycles within 1h."""
+    """Original five inputs, then explicitly synthetic OFF/ON cycles within20min."""
     origin = datetime(2026, 8, 23, 23, 18, 9, 318691, tzinfo=UTC)
     first_off = datetime(2026, 8, 23, 23, 18, 22, 409960, tzinfo=UTC)
     recovered = datetime(2026, 8, 23, 23, 19, 42, 568890, tzinfo=UTC)
@@ -139,9 +141,9 @@ def test_aug23_2318z_synthetic_five_six_cycle_warning_boundary(
         published = replay.reliability_attributes
         assert published is not None
         assert replay.reliability_writes[-1].at == sample_at
-        assert published["active_count"] == (1 if cycles == 6 else 0)
+        assert published["active_count"] == (1 if cycles == 10 else 0)
         rows = cast(list[dict[str, object]], published["warnings"])
-        if cycles == 5:
+        if cycles < 10:
             assert rows == []
         else:
             assert len(rows) == 1
@@ -152,15 +154,15 @@ def test_aug23_2318z_synthetic_five_six_cycle_warning_boundary(
             assert rows[0]["active"] is True
         assert all(write.value == 0 for write in replay.reliability_writes
                    if write.at < last_off)
-        # Expiring the first completion leaves fewer than six in the rolling hour.
-        expires_at = first_off + timedelta(hours=1)
+        # Expiring the first completion leaves fewer than ten in20minutes.
+        expires_at = first_off + timedelta(minutes=20)
         recovery_sample = origin + timedelta(
             seconds=30 * (int((expires_at - origin).total_seconds()) // 30 + 1),
         )
         replay.advance(recovery_sample)
         cleared = replay.reliability_attributes
         assert cleared is not None and cleared["active_count"] == 0
-        if cycles == 6:
+        if cycles == 10:
             history = cast(list[dict[str, object]], cleared["warnings"])
             assert len(history) == 1 and history[0]["active"] is False
             assert history[0]["cleared_at"] == expires_at.isoformat()

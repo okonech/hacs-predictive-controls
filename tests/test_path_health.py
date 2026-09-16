@@ -185,55 +185,55 @@ def test_deadline_before_same_time_recovery_is_retained(recovery: str) -> None:
 
 
 @pytest.mark.parametrize("duration,qualifies", ((0, True), (60, True), (60.001, False)))
-def test_five_six_quick_cycles_and_inclusive_duration(
+def test_nine_ten_quick_cycles_and_inclusive_duration(
     duration: float, qualifies: bool,
 ) -> None:
     scene = Scene()
-    for index in range(5):
+    for index in range(9):
         scene.cycle(index * 100, duration)
         assert scene.advance(index * 100 + duration) == ()
-    scene.cycle(500, duration)
-    assert scene.advance(500 + duration) == (() if not qualifies else (
-        warning("a", "sustained_flapping", 500 + duration, 500 + duration),
+    scene.cycle(900, duration)
+    assert scene.advance(900 + duration) == (() if not qualifies else (
+        warning("a", "sustained_flapping", 900 + duration, 900 + duration),
     ))
 
 
-def test_rolling_hour_is_open_left_and_long_cycles_do_not_evict_completions() -> None:
+def test_rolling_twenty_minutes_is_open_left_and_long_cycles_do_not_evict() -> None:
     scene = Scene()
-    for start in range(0, 500, 100):
+    for start in range(0, 900, 100):
         scene.cycle(start)
     saved = scene.health.states[0].completed_cycles
-    scene.cycle(500, 61)
+    scene.cycle(900, 61)
     assert scene.health.states[0].completed_cycles == saved
-    scene.cycle(3500)
-    assert scene.advance(3609.999) == (
-        warning("a", "sustained_flapping", 3510, 3609.999),
+    scene.cycle(1100)
+    assert scene.advance(1209.999999) == (
+        warning("a", "sustained_flapping", 1110, 1209.999999),
     )
-    assert scene.advance(3610) == (
-        warning("a", "sustained_flapping", 3510, 3610, 3610),
+    assert scene.advance(1210) == (
+        warning("a", "sustained_flapping", 1110, 1210, 1210),
     )
-    assert len(scene.health.states[0].completed_cycles) == 5
+    assert len(scene.health.states[0].completed_cycles) == 9
 
 
-def test_sixth_completion_at_oldest_expiry_does_not_qualify() -> None:
+def test_tenth_completion_at_oldest_expiry_does_not_qualify() -> None:
     scene = Scene()
-    for start in range(0, 500, 100):
+    for start in range(0, 900, 100):
         scene.cycle(start)
-    scene.cycle(3600)
-    assert scene.advance(3610) == ()
-    assert len(scene.health.states[0].completed_cycles) == 5
+    scene.cycle(1200)
+    assert scene.advance(1210) == ()
+    assert len(scene.health.states[0].completed_cycles) == 9
 
 
-def test_sliding_six_preserves_occurrence_start_and_exact_expiry() -> None:
+def test_sliding_ten_preserves_occurrence_start_and_exact_expiry() -> None:
     scene = Scene()
     for start in range(0, 2000, 100):
         scene.cycle(start)
     assert scene.health.states[0].completed_cycles == tuple(
-        at(s) for s in range(1410, 2000, 100)
+        at(s) for s in range(1010, 2000, 100)
     )
-    assert scene.advance(5009) == (warning("a", "sustained_flapping", 510, 5009),)
+    assert scene.advance(2209) == (warning("a", "sustained_flapping", 910, 2209),)
     assert scene.advance(20000) == (
-        warning("a", "sustained_flapping", 510, 5010, 5010),
+        warning("a", "sustained_flapping", 910, 2210, 2210),
     )
     assert scene.health.states[0].completed_cycles == ()
 
@@ -274,42 +274,42 @@ def test_duplicates_generations_legacy_flags_and_timers_are_not_edges() -> None:
         scene.advance(10)
     assert scene.health.states[0].completed_cycles == (at(10),)
     # Repeated real raw transitions count even when no generation changes.
-    for start in range(20, 120, 20):
+    for start in range(20, 200, 20):
         scene.cycle(start)
-    assert scene.advance(110) == (warning("a", "sustained_flapping", 110, 110),)
-    assert scene.advance(7200) == (warning("a", "sustained_flapping", 110, 3610, 3610),)
+    assert scene.advance(190) == (warning("a", "sustained_flapping", 190, 190),)
+    assert scene.advance(7200) == (warning("a", "sustained_flapping", 190, 1210, 1210),)
 
 
 def test_two_counters_are_independent_and_support_clears_only_stuck() -> None:
     scene = Scene()
-    for start in range(0, 120, 20):
+    for start in range(0, 200, 20):
         scene.cycle(start)
-    scene.send(120, ("on", "off"))
-    assert scene.advance(720) == (
-        warning("a", "assertion_timeout", 720, 720),
-        warning("a", "sustained_flapping", 110, 720),
+    scene.send(200, ("on", "off"))
+    assert scene.advance(800) == (
+        warning("a", "assertion_timeout", 800, 800),
+        warning("a", "sustained_flapping", 190, 800),
     )
     scene.covered = frozenset({"a"})
-    assert scene.advance(730) == (
-        warning("a", "assertion_timeout", 720, 730, 730),
-        warning("a", "sustained_flapping", 110, 730),
+    assert scene.advance(810) == (
+        warning("a", "assertion_timeout", 800, 810, 810),
+        warning("a", "sustained_flapping", 190, 810),
     )
-    scene.send(740, ("off", "off"))
-    assert scene.advance(740)[1] == warning("a", "sustained_flapping", 110, 740)
+    scene.send(820, ("off", "off"))
+    assert scene.advance(820)[1] == warning("a", "sustained_flapping", 190, 820)
 
 
 @pytest.mark.parametrize("restart", (False, True))
 def test_coarse_fine_advance_have_identical_logical_ledgers(restart: bool) -> None:
     scenes = (Scene(), Scene())
     for scene in scenes:
-        for start in range(0, 120, 20):
+        for start in range(0, 200, 20):
             scene.cycle(start, b="on")
         if restart:
-            scene.restart(110)
-    for seconds in range(111, 8001):
+            scene.restart(190)
+    for seconds in range(191, 8001):
         scenes[1].advance(seconds)
     assert scenes[0].advance(8000) == scenes[1].advance(8000) == (
-        warning("a", "sustained_flapping", 110, 3610, 3610),
+        warning("a", "sustained_flapping", 190, 1210, 1210),
         warning("b", "assertion_timeout", 600, 8000),
     )
     assert scenes[0].health.states == scenes[1].health.states
@@ -361,18 +361,18 @@ def test_bootstrap_breaks_restored_gap_without_crediting_outside_time(
 def test_warning_occurrences_are_bounded_latest_rows_and_roundtrip() -> None:
     scene = Scene()
     for offset in range(0, 30000, 10000):
-        for start in range(offset, offset + 120, 20):
+        for start in range(offset, offset + 200, 20):
             scene.cycle(start, b="on")
-        scene.send(offset + 120, ("on", "off"), "on")
-        scene.advance(offset + 720)
-        scene.restart(offset + 720)
-        assert len(scene.advance(offset + 720)) == 3
-        scene.send(offset + 800, ("off", "off"))
+        scene.send(offset + 200, ("on", "off"), "on")
+        scene.advance(offset + 800)
+        scene.restart(offset + 800)
+        assert len(scene.advance(offset + 800)) == 3
+        scene.send(offset + 880, ("off", "off"))
         scene.advance(offset + 5000)
     assert scene.advance(30000) == (
-        warning("a", "assertion_timeout", 20720, 20800, 20800),
-        warning("a", "sustained_flapping", 20110, 23610, 23610),
-        warning("b", "assertion_timeout", 20600, 20800, 20800),
+        warning("a", "assertion_timeout", 20800, 20880, 20880),
+        warning("a", "sustained_flapping", 20190, 21210, 21210),
+        warning("b", "assertion_timeout", 20600, 20880, 20880),
     )
     scene.restart(30000)
 
@@ -401,7 +401,7 @@ def test_invalid_datetime_arguments_are_rejected_without_mutation(value: Any) ->
     {"phase": "on", "on_started_at": at(10), "unsupported_started_at": NOW},
     {"completed_cycles": []}, {"completed_cycles": (True,)},
     {"completed_cycles": (at(10), NOW)},
-    {"completed_cycles": tuple(at(i) for i in range(7))},
+    {"completed_cycles": tuple(at(i) for i in range(11))},
     {"phase": "on", "on_started_at": NOW, "completed_cycles": (at(1),)},
 ))
 def test_health_state_rejects_malformed_fields(change: dict[str, Any]) -> None:
@@ -416,7 +416,7 @@ def test_health_state_rejects_malformed_fields(change: dict[str, Any]) -> None:
     {"on_started_at": "2026-09-12T00:00:00+01:00"},
     {"on_started_at": "invalid"}, {"unsupported_started_at": 1},
     {"completed_cycles": ()}, {"completed_cycles": [None]},
-    {"completed_cycles": [True]}, {"completed_cycles": [NOW.isoformat()] * 7},
+    {"completed_cycles": [True]}, {"completed_cycles": [NOW.isoformat()] * 11},
 ))
 def test_strict_json_field_decoder(change: dict[str, Any]) -> None:
     record = wire(PathHealth(NODES))[0] | change
@@ -496,10 +496,10 @@ def test_strict_atomic_restore_rejects_malformed_snapshot(defect: str) -> None:
         occurrences = (warning("a", "assertion_timeout", 600, 600, 600), ledger[1])
     else:
         states = (replace(
-            states[0], on_started_at=at(60), unsupported_started_at=at(60),
-            completed_cycles=tuple(at(i * 10) for i in range(6)),
+            states[0], on_started_at=at(100), unsupported_started_at=at(100),
+            completed_cycles=tuple(at(i * 10) for i in range(10)),
         ), states[1])
-        occurrences = (warning("a", "sustained_flapping", 51, 600), ledger[1])
+        occurrences = (warning("a", "sustained_flapping", 91, 600), ledger[1])
     with pytest.raises(ValueError):
         scene.health.restore(states, occurrences, at(600))
     assert scene.health.states == original
@@ -550,14 +550,14 @@ def test_empty_nodes_and_duplicate_node_or_alias_rejection() -> None:
 
 def test_equal_time_real_cycles_count_but_duplicate_levels_do_not() -> None:
     scene = Scene()
-    for _ in range(6):
+    for _ in range(10):
         scene.cycle(0, 0)
         scene.send(0, ("off", "off"))
-    assert scene.health.states[0].completed_cycles == (NOW,) * 6
+    assert scene.health.states[0].completed_cycles == (NOW,) * 10
     assert scene.advance(0) == (warning("a", "sustained_flapping", 0, 0),)
     scene.restart(0)
-    assert scene.advance(3600) == (
-        warning("a", "sustained_flapping", 0, 3600, 3600),
+    assert scene.advance(1200) == (
+        warning("a", "sustained_flapping", 0, 1200, 1200),
     )
 
 

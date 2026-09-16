@@ -224,15 +224,23 @@ def legacy_warning_components() -> PersistenceComponents:
 
 
 def current_warning_engine() -> ZoneModelEngine:
-    """HEALTH002: actual sixth completed cycle, not legacy impossible cadence."""
+    """HEALTH002: ten real cycles; preserve the original OFF210 mutation frontier."""
     engine = ZoneModelEngine(target_map(), 1, NOW)
-    for cycle in range(6):
+    # Keep the original six ON/OFF pairs and insert four complete cycles between
+    # them. Corruption probes still use future211 and distinct receiverON212.
+    for cycle, start in enumerate((0, 20, 40, 60, 80, 100, 120, 140, 160, 200)):
         for offset, state in ((0, "on"), (10, "off")):
             engine.observe(SensorInput(
                 "binary_sensor.room", state,
-                NOW + timedelta(seconds=cycle * 40 + offset),
+                NOW + timedelta(seconds=start + offset),
             ))
-        assert bool(engine.snapshot.reliability_warning_occurrences) is (cycle == 5)
+        assert bool(engine.snapshot.reliability_warning_occurrences) is (cycle == 9)
+    health = next(row for row in engine.snapshot.path_health if row.node_id == "room")
+    assert len(health.completed_cycles) == 10
+    assert health.completed_cycles == tuple(
+        NOW + timedelta(seconds=seconds)
+        for seconds in (10, 30, 50, 70, 90, 110, 130, 150, 170, 210)
+    )
     assert engine.snapshot.updated_at == NOW + timedelta(seconds=210)
     return engine
 
@@ -755,6 +763,70 @@ def test_handoff_fingerprint_discriminator_and_historical_recipes(
         incompatible["map_fingerprint"] = fingerprint
         with pytest.raises(ValueError, match="map fingerprint"):
             restore_target_state(predictive_map, incompatible, NOW)
+
+
+def test_old_six_cycle_hour_fingerprint_rejects_before_decode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HEALTH002/STATE011: reject the old recipe, not a malformed snapshot.
+
+    This synthetic compatibility test leaves historical component recipes intact.
+    The otherwise valid active-warning payload round-trips under the new recipe.
+    """
+    predictive_map = target_map()
+    engine = current_warning_engine()
+    current = _target_map_fingerprint_payload(predictive_map)
+    assert current["path_health_calibration"] == {
+        "unsupported_on_seconds": 600.0,
+        "quick_cycle_window_seconds": 1200.0,
+        "quick_cycle_max_on_seconds": 60.0,
+        "quick_cycle_count": 10,
+    }
+    calibration = current["path_health_calibration"]
+    assert isinstance(calibration, dict)
+    assert type(calibration["quick_cycle_count"]) is int
+    previous = deepcopy(current)
+    old_calibration = previous["path_health_calibration"]
+    assert isinstance(old_calibration, dict)
+    old_calibration["quick_cycle_window_seconds"] = 3600.0
+    old_calibration["quick_cycle_count"] = 6
+    old_fingerprint = hashlib.sha256(
+        json.dumps(previous, sort_keys=True, separators=(",", ":")).encode(),
+    ).hexdigest()
+    current_fingerprint = hashlib.sha256(
+        json.dumps(current, sort_keys=True, separators=(",", ":")).encode(),
+    ).hexdigest()
+    assert current_fingerprint == target_map_fingerprint(predictive_map)
+    assert old_fingerprint != current_fingerprint
+    payload = checked_current_payload(
+        predictive_map, serialize_target_state(predictive_map, engine),
+    )
+    before = deepcopy(payload)
+    assert payload["schema"] == "zone-belief-v4"
+    assert payload["map_fingerprint"] == current_fingerprint
+    incompatible = deepcopy(payload)
+    incompatible["map_fingerprint"] = old_fingerprint
+    before_incompatible = deepcopy(incompatible)
+    module = import_module(
+        "custom_components.predictive_controls.zone_model.persistence"
+    )
+
+    def unexpected_decode(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("Old six-cycle/hour fingerprint reached the snapshot decoder")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(module, "_decode_snapshot", unexpected_decode)
+        with pytest.raises(ValueError, match="map fingerprint"):
+            restore_target_state(
+                predictive_map, incompatible, engine.snapshot.updated_at,
+            )
+    assert incompatible == before_incompatible
+    assert payload == before
+    restored = restore_target_state(
+        predictive_map, payload, engine.snapshot.updated_at,
+    )
+    assert restored.snapshot == engine.snapshot
+    assert serialize_target_state(predictive_map, restored) == before == payload
 
 
 def handoff_validation_payload() -> tuple[PredictiveMap, dict[str, Any]]:
@@ -1436,7 +1508,8 @@ def test_restore_rejects_inconsistent_reliability_warning_ledger(
     User-approved 2026-09-14 disposition retains all five IDs and legacy
     mutations, but retires only unsupported legacy component cross-link
     rejection. Historical decoding remains separately tested; current stale
-    proof is six-to-five completed cycles, not obsolete episode warning flags.
+    proof is ten-to-nine completed cycles (2026-09-16 recalibration), not
+    obsolete episode warning flags.
     """
     predictive_map = target_map()
     lab = legacy_warning_components()
@@ -1509,7 +1582,7 @@ def test_restore_rejects_inconsistent_reliability_warning_ledger(
         health = next(row for row in specimen_rows(current_snapshot["path_health"])
                       if row["node_id"] == "room")
         cycles = health["completed_cycles"]
-        assert isinstance(cycles, list) and len(cycles) == 6
+        assert isinstance(cycles, list) and len(cycles) == 10
         health["completed_cycles"] = cycles[1:]
     else:
         rows.clear()
@@ -4007,8 +4080,62 @@ def test_current_deterministic_100_event_workload_restarts_without_legacy_suppor
     assert any(path is not None for path in live.snapshot.selected_paths)
 
 
-def test_current_sixth_cycle_and_cleared_history_strict_restart() -> None:
-    """HEALTH002/STATE011: five never warns; sixth OFF qualifies and age clears."""
+def test_current_nine_cycle_restart_preserves_unfinished_tenth_cycle() -> None:
+    """HEALTH002/STATE011: restore nine completions, then an unfinished real ON."""
+    predictive_map = target_map()
+    engine = ZoneModelEngine(predictive_map, 1, NOW)
+    for start in range(0, 180, 20):
+        for offset, state in ((0, "on"), (10, "off")):
+            engine.observe(SensorInput(
+                "binary_sensor.room", state,
+                NOW + timedelta(seconds=start + offset),
+            ))
+        assert engine.snapshot.reliability_warning_occurrences == ()
+    health = next(row for row in engine.snapshot.path_health if row.node_id == "room")
+    assert len(health.completed_cycles) == 9
+    assert health.completed_cycles == tuple(
+        NOW + timedelta(seconds=seconds) for seconds in range(10, 180, 20)
+    )
+    assert health.phase == "off" and health.on_started_at is None
+    payload = serialize_target_state(predictive_map, engine)
+    before = deepcopy(payload)
+    restored = restore_target_state(
+        predictive_map, payload, NOW + timedelta(seconds=170),
+    )
+    assert restored.snapshot == engine.snapshot
+    assert serialize_target_state(predictive_map, restored) == before == payload
+    on = SensorInput("binary_sensor.room", "on", NOW + timedelta(seconds=200))
+    assert restored.observe(on) == engine.observe(on)
+    midway = NOW + timedelta(seconds=205)
+    assert restored.advance(midway) == engine.advance(midway)
+    unfinished = next(row for row in engine.snapshot.path_health
+                      if row.node_id == "room")
+    assert unfinished.completed_cycles == health.completed_cycles
+    assert unfinished.on_started_at == on.event_at
+    assert engine.snapshot.reliability_warning_occurrences == ()
+    unfinished_payload = serialize_target_state(predictive_map, engine)
+    before_unfinished = deepcopy(unfinished_payload)
+    restored = restore_target_state(predictive_map, unfinished_payload, midway)
+    assert restored.snapshot == engine.snapshot
+    assert serialize_target_state(predictive_map, restored) == unfinished_payload
+    off = SensorInput("binary_sensor.room", "off", NOW + timedelta(seconds=210))
+    result = engine.observe(off)
+    assert restored.observe(off) == result
+    completed = next(row for row in result.snapshot.path_health
+                     if row.node_id == "room")
+    assert completed.completed_cycles == (*health.completed_cycles, off.event_at)
+    assert len(completed.completed_cycles) == 10
+    warning, = result.snapshot.reliability_warning_occurrences
+    assert warning.reason == "sustained_flapping" and warning.cleared_at is None
+    assert warning.first_observed_at == warning.last_observed_at == off.event_at
+    assert payload == before and unfinished_payload == before_unfinished
+    assert serialize_target_state(predictive_map, restored) == serialize_target_state(
+        predictive_map, engine,
+    )
+
+
+def test_current_tenth_cycle_and_cleared_history_strict_restart() -> None:
+    """HEALTH002/STATE011: nine never warns; tenth OFF qualifies and age clears."""
     engine = current_warning_engine()
     predictive_map = target_map()
     occurrence, = engine.snapshot.reliability_warning_occurrences
@@ -4021,11 +4148,23 @@ def test_current_sixth_cycle_and_cleared_history_strict_restart() -> None:
     assert occurrence.cleared_at is None
     payload = serialize_target_state(predictive_map, engine)
     restored = restore_target_state(predictive_map, payload, engine.snapshot.updated_at)
-    clear_at = NOW + timedelta(seconds=3610)
+    clear_at = NOW + timedelta(seconds=1210)
+    assert restored.advance(clear_at - timedelta(microseconds=1)) == engine.advance(
+        clear_at - timedelta(microseconds=1),
+    )
+    active, = restored.snapshot.reliability_warning_occurrences
+    assert active.cleared_at is None
+    health = next(row for row in restored.snapshot.path_health
+                  if row.node_id == "room")
+    assert len(health.completed_cycles) == 10
+    assert clear_at - health.completed_cycles[0] == timedelta(seconds=1200)
     assert restored.advance(clear_at) == engine.advance(clear_at)
     row, = restored.snapshot.reliability_warning_occurrences
     assert row.first_observed_at == occurrence.first_observed_at
     assert row.last_observed_at == row.cleared_at == clear_at
+    health = next(row for row in restored.snapshot.path_health
+                  if row.node_id == "room")
+    assert len(health.completed_cycles) == 9
     checked_current_payload(
         predictive_map, serialize_target_state(predictive_map, restored),
     )

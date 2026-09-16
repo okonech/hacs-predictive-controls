@@ -11,6 +11,10 @@ entries below describe earlier releases and may contain superseded behavior.
 
 ### Changed
 
+- Require10 completed short physical ON/OFF cycles in20minutes for a flapping
+	warning, rather than6 in an hour. Keep ON<=60seconds, aggregate-edge counting
+	and diagnostic-only behavior. The health calibration fingerprint changes: old
+	full inference rejects on deployment; configuration and rollback copies remain.
 - Replace handwritten panel JavaScript with strict TypeScript modules and typed
 	native components, retaining all six workspaces and shipping prebuilt HACS assets.
 - List selected anonymous paths above the graph, distinguish current presence,
@@ -38,7 +42,7 @@ entries below describe earlier releases and may contain superseded behavior.
 - Avoid reconstructing unchanged immutable health records and deep-copying flat
 	audit decisions during byte sizing. Preserve exact warning frontiers, canonical
 	audit bytes, retention and model results; retain the computational regression.
-	Latest worst positive/rejected p99 is4.072/4.102ms; the5ms limit is unchanged.
+	Latest worst positive/rejected p99 is2.095/2.188ms; the5ms limit is unchanged.
 - Describe assertion-timeout-only diagnostics as “Continuous presence detected;
 	path unverified” rather than a stuck-sensor fault. Machine fields,600s timing,
 	recovery, inference and persistence are unchanged; retain the reported regression.
@@ -59,6 +63,10 @@ entries below describe earlier releases and may contain superseded behavior.
 
 ### Development
 
+- Retain the exact18-transition foyer warning regression; update approved synthetic
+	threshold/expiry checks and add pre-warning restart/old-fingerprint rejection
+	proofs. All3245Python tests pass with100% statement/branch coverage;82incident
+	cases,110scenarios and231frontend tests pass. Original incident primaries remain.
 - Add locked TypeScript/esbuild/YAML/DOM-test dependencies, strict typechecking,
 	deterministic build and nonwriting asset-freshness CI gates. All231frontend
   tests pass, including the original31 and shipped-bundle interaction/race tests.

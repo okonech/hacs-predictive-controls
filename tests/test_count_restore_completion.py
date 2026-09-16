@@ -242,36 +242,38 @@ def test_count_identity_uses_observed_state_frontier_not_receipt(
         assert at(1).isoformat() in captured[0].event_id
 
 
-def test_zero_preserves_unfinished_sixth_real_cycle_and_warning_history() -> None:
-    """HEALTH002/003: reset is not an OFF; only the actual sixth OFF warns."""
+def test_zero_preserves_unfinished_tenth_real_cycle_and_warning_history() -> None:
+    """HEALTH002/003: reset is not an OFF; only the actual tenth OFF warns."""
     graph = model(alias=True)
     engine = ZoneModelEngine(graph, 2, NOW)
     observe(engine, "a_alias", "off", 0)
-    for start in range(0, 100, 20):
+    for start in range(0, 180, 20):
         observe(engine, "a", "on", start)
         observe(engine, "a", "off", start + 10)
-    observe(engine, "a", "on", 100)
-    engine.advance(at(105))
+    observe(engine, "a", "on", 180)
+    engine.advance(at(185))
     health = engine.snapshot.path_health
-    assert health[0].completed_cycles == tuple(at(s) for s in range(10, 100, 20))
-    assert health[0].on_started_at == at(100)
+    assert health[0].completed_cycles == tuple(at(s) for s in range(10, 180, 20))
+    assert len(health[0].completed_cycles) == 9
+    assert health[0].on_started_at == at(180)
     assert not engine.snapshot.reliability_warning_occurrences
-    engine.observe_count(CountInput("zero", 0, True, at(105)))
+    engine.observe_count(CountInput("zero", 0, True, at(185)))
     assert engine.snapshot.path_health == health
     assert not engine.snapshot.reliability_warning_occurrences
-    observe(engine, "a", "off", 110)
+    observe(engine, "a", "off", 190)
+    assert len(engine.snapshot.path_health[0].completed_cycles) == 10
     warnings = engine.snapshot.reliability_warning_occurrences
     assert len(warnings) == 1
     assert warnings[0].reason == "sustained_flapping"
-    assert warnings[0].first_observed_at == at(110)
+    assert warnings[0].first_observed_at == at(190)
     assert warnings[0].cleared_at is None
-    engine.observe_count(CountInput("two", 2, True, at(111)))
-    engine.observe_count(CountInput("zero-again", 0, True, at(112)))
+    engine.observe_count(CountInput("two", 2, True, at(191)))
+    engine.observe_count(CountInput("zero-again", 0, True, at(192)))
     retained = engine.snapshot.reliability_warning_occurrences[0]
-    assert retained.first_observed_at == at(110)
+    assert retained.first_observed_at == at(190)
     assert engine.snapshot.reliability_warning_occurrences[0].cleared_at is None
     payload = serialize_target_state(graph, engine)
-    restored = restore_target_state(graph, payload, at(112))
+    restored = restore_target_state(graph, payload, at(192))
     assert serialize_target_state(graph, restored) == payload
 
 

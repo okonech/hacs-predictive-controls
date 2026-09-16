@@ -1436,15 +1436,19 @@ def test_current_count_zero_and_positive_count_never_resurrect(
 
 
 @pytest.mark.parametrize("count", [1, 2])
-def test_current_six_completed_cycles_not_five_are_diagnostic_only(count: int) -> None:
+def test_current_ten_completed_cycles_not_nine_are_diagnostic_only(count: int) -> None:
     """G/I/Y: actual aggregate cycles, never the legacy single-flap warning."""
     predictive_map, engine = primed_selected(count)
     assert engine.snapshot.reliability_warning_occurrences == ()
     original = source_state(engine.snapshot)
     sources = engine.snapshot.selected_sources
     prediction_before = deepcopy(engine.prediction_manager.serialize())
-    # The first completed OFF8 is in primed_selected; these make exactly five.
-    for clear_at, positive_at in ((10, 11), (12, 13), (16, 17), (20, 21)):
+    # Preserve the five-cycle prefix; four more real cycles make exactly nine.
+    # The first completed OFF8 is already in primed_selected.
+    for clear_at, positive_at in (
+        (10, 11), (12, 13), (16, 17), (20, 21),
+        (22, 23), (24, 25), (26, 27), (28, 29),
+    ):
         observe(engine, "source", "off", clear_at)
         result = observe(engine, "source", "on", positive_at)
         assert result.disposition == "correlated_reassertion"
@@ -1452,15 +1456,21 @@ def test_current_six_completed_cycles_not_five_are_diagnostic_only(count: int) -
         assert result.policy_events == ()
         assert engine.snapshot.reliability_warning_occurrences == ()
     health = next(s for s in engine.snapshot.path_health if s.node_id == "source")
-    assert health.completed_cycles == (at(8), at(10), at(12), at(16), at(20))
-    sixth = observe(engine, "source", "off", 22)
-    health = next(s for s in sixth.snapshot.path_health if s.node_id == "source")
-    assert health.completed_cycles == (at(8), at(10), at(12), at(16), at(20), at(22))
-    warning, = sixth.snapshot.reliability_warning_occurrences
+    assert health.completed_cycles == tuple(
+        at(seconds) for seconds in (8, 10, 12, 16, 20, 22, 24, 26, 28)
+    )
+    assert len(health.completed_cycles) == 9
+    tenth = observe(engine, "source", "off", 30)
+    health = next(s for s in tenth.snapshot.path_health if s.node_id == "source")
+    assert health.completed_cycles == tuple(
+        at(seconds) for seconds in (8, 10, 12, 16, 20, 22, 24, 26, 28, 30)
+    )
+    assert len(health.completed_cycles) == 10
+    warning, = tenth.snapshot.reliability_warning_occurrences
     assert warning.reason == "sustained_flapping" and warning.cleared_at is None
-    assert warning.first_observed_at == at(22)
-    assert warning.last_observed_at == at(22)
-    result = observe(engine, "source", "on", 23)
+    assert warning.first_observed_at == at(30)
+    assert warning.last_observed_at == at(30)
+    result = observe(engine, "source", "on", 31)
     assert result.disposition == "correlated_reassertion"
     assert result.authorizations == () and result.policy_events == ()
     assert source_state(result.snapshot).episode_id == original.episode_id
@@ -1470,11 +1480,11 @@ def test_current_six_completed_cycles_not_five_are_diagnostic_only(count: int) -
     engine.commit_prediction_learning()
     assert engine.prediction_manager.serialize() == prediction_before
     restored = restore_target_state(
-        predictive_map, wire(predictive_map, engine), at(23),
+        predictive_map, wire(predictive_map, engine), at(31),
     )
     assert restored.snapshot == engine.snapshot
-    arrival = selected_arrive(engine, at(24))
-    assert selected_arrive(restored, at(24)) == arrival
+    arrival = selected_arrive(engine, at(32))
+    assert selected_arrive(restored, at(32)) == arrival
     assert arrival.snapshot.reliability_warning_occurrences[0].cleared_at is None
 
 

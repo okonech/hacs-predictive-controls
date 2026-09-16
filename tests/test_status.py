@@ -172,7 +172,7 @@ def test_status_exposes_current_warning_and_bounded_occurrence() -> None:
     """Historical ID; original single synthetic cycle is now the no-warning case.
 
     HEALTH002/003 warning projection remains covered by the separately named
-    six-completed-cycle equivalent below, not removed with this obsolete threshold.
+    ten-completed-cycle equivalent below, not removed with this obsolete threshold.
     """
     runtime = runtime_with_target_state()
     runtime.confidence.observe(
@@ -195,10 +195,10 @@ def test_status_exposes_current_warning_and_bounded_occurrence() -> None:
     assert diagnostics["policy"]["room"]["active"] is True
 
 
-def test_status_six_completed_quick_cycles_warn_without_occupancy_degradation() -> None:
+def test_status_ten_completed_quick_cycles_warn_without_occupancy_degradation() -> None:
     """HEALTH002/003: extend the original synthetic one-cycle input, not an incident.
 
-    Five completed physical cycles cannot warn. The sixth OFF qualifies one
+    Nine completed physical cycles cannot warn. The tenth OFF qualifies one
     bounded diagnostic occurrence, without degrading or releasing the room.
     """
     runtime = runtime_with_target_state()
@@ -208,7 +208,7 @@ def test_status_six_completed_quick_cycles_warn_without_occupancy_degradation() 
     runtime.confidence.observe(
         event("room", "room", "on", NOW + timedelta(seconds=12))
     )
-    for seconds in (20, 30, 40, 50):
+    for seconds in (20, 30, 40, 50, 60, 70, 80, 90):
         runtime.confidence.observe(
             event("room", "room", "off", NOW + timedelta(seconds=seconds))
         )
@@ -221,14 +221,14 @@ def test_status_six_completed_quick_cycles_warn_without_occupancy_degradation() 
         )
 
     runtime.confidence.observe(
-        event("room", "room", "off", NOW + timedelta(seconds=60))
+        event("room", "room", "off", NOW + timedelta(seconds=100))
     )
     diagnostics = runtime_status_payload(runtime)["occupancy_diagnostics"]
     row, = diagnostics["reliability_warnings"]
     assert (row["node_id"], row["kind"], row["active_reasons"]) == (
         "room", "flapping", ["sustained_flapping"],
     )
-    assert row["first_observed_at"] == (NOW + timedelta(seconds=60)).isoformat()
+    assert row["first_observed_at"] == (NOW + timedelta(seconds=100)).isoformat()
     assert row["active"] is True
     occurrence, = diagnostics["reliability_warning_occurrences"]
     assert occurrence["reason"] == "sustained_flapping"
@@ -239,15 +239,15 @@ def test_status_six_completed_quick_cycles_warn_without_occupancy_degradation() 
     assert diagnostics["policy"]["room"]["active"] is True
     assert diagnostics["policy"]["room"]["pending_release_since"] is None
 
-    runtime.confidence.refresh_active(NOW + timedelta(seconds=3609))
+    runtime.confidence.refresh_active(NOW + timedelta(seconds=1209.999999))
     assert runtime_status_payload(runtime)["occupancy_diagnostics"][
         "reliability_warning_occurrences"
     ][0]["active"] is True
-    runtime.confidence.refresh_active(NOW + timedelta(seconds=3610))
+    runtime.confidence.refresh_active(NOW + timedelta(seconds=1210))
     recovered = runtime_status_payload(runtime)["occupancy_diagnostics"]
     occurrence, = recovered["reliability_warning_occurrences"]
     assert occurrence["active"] is False
-    assert occurrence["cleared_at"] == (NOW + timedelta(seconds=3610)).isoformat()
+    assert occurrence["cleared_at"] == (NOW + timedelta(seconds=1210)).isoformat()
     assert recovered["policy"]["room"]["active"] is True
 
 

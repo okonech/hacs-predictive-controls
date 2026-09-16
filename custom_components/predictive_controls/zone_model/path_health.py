@@ -16,9 +16,9 @@ from typing import cast
 from .types import EpisodeState, PhysicalNode, ReliabilityWarningOccurrence
 
 UNSUPPORTED_ON_WINDOW = timedelta(seconds=600)
-QUICK_CYCLE_WINDOW = timedelta(seconds=3600)
+QUICK_CYCLE_WINDOW = timedelta(seconds=1200)
 QUICK_CYCLE_MAX_ON = timedelta(seconds=60)
-QUICK_CYCLE_COUNT = 6
+QUICK_CYCLE_COUNT = 10
 _REASONS = {
     "assertion_timeout": "suspected_stuck", "sustained_flapping": "flapping",
     "unsupported_jump": "unsupported_jump",
@@ -46,7 +46,7 @@ class PathHealthState:
 
     ``on_started_at=None`` with phase ON means its physical start is unknown
     (bootstrap); known observed duration can still begin an unsupported run.
-    ``completed_cycles`` contains only the latest six quick OFF frontiers.
+    ``completed_cycles`` contains only the latest ten quick OFF frontiers.
     """
 
     node_id: str
@@ -79,7 +79,7 @@ class PathHealthState:
             type(self.completed_cycles) is not tuple
             or len(self.completed_cycles) > QUICK_CYCLE_COUNT
         ):
-            raise ValueError("Path health must retain at most six cycle timestamps")
+            raise ValueError("Path health must retain at most ten cycle timestamps")
         for completion in self.completed_cycles:
             _utc(completion)
         if any(a > b for a, b in zip(

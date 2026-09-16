@@ -11,6 +11,8 @@ Test scope: synthetic work-count regression for the verified redundant work,
 with public diagnostic rows and canonical audit bytes protected. Not a claim
 of reproducing host-dependent wall time. The unchanged standalone 100-event
 benchmark remains the public latency oracle; no existing scenario is amended.
+2026-09-16: user approved migrating the supplemental synthetic cycle-pruning
+boundary to10 cycles/20minutes. The original computational primary is unchanged.
 """
 
 from __future__ import annotations
@@ -124,22 +126,22 @@ def test_unchanged_health_still_refreshes_and_clears_exact_deadlines() -> None:
 
 def test_cycle_pruning_keeps_exact_expiry_and_frozen_prior_state() -> None:
     health = PathHealth((NODE,))
-    for start in range(0, 120, 20):
+    for start in range(0, 200, 20):
         health.observe(episode("on"), at(start), EMPTY)
         health.observe(episode("off"), at(start + 10), EMPTY)
     before = health.states
-    health.advance(at(3609.999999), EMPTY)
+    health.advance(at(1209.999999), EMPTY)
     assert health.states == before
-    assert health.advance(at(3610), EMPTY) == (ReliabilityWarningOccurrence(
-        "a", "room", "flapping", "sustained_flapping", at(110), at(3610), at(3610),
+    assert health.advance(at(1210), EMPTY) == (ReliabilityWarningOccurrence(
+        "a", "room", "flapping", "sustained_flapping", at(190), at(1210), at(1210),
     ),)
     assert health.states[0].completed_cycles == tuple(
-        at(i) for i in (30, 50, 70, 90, 110)
+        at(i) for i in range(30, 200, 20)
     )
-    assert before[0].completed_cycles == tuple(at(i) for i in (10, 30, 50, 70, 90, 110))
-    ledger = health.advance(at(3610), EMPTY)
+    assert before[0].completed_cycles == tuple(at(i) for i in range(10, 200, 20))
+    ledger = health.advance(at(1210), EMPTY)
     restored = PathHealth((NODE,))
-    restored.restore(health.states, ledger, at(3610))
+    restored.restore(health.states, ledger, at(1210))
     assert restored.advance(at(4000), EMPTY) == health.advance(at(4000), EMPTY)
     assert restored.states == health.states
 

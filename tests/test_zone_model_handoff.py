@@ -1957,31 +1957,32 @@ def test_selected_prediction_execution_does_not_become_learning(count: int) -> N
         _round_trip(predictive_map, engine)
 
 
-def test_selected_sixth_physical_cycle_is_committed_before_result_callback() -> None:
-    """HEALTH002/003: five actual cycles are quiet; sixthOFF warns without eviction."""
+def test_selected_tenth_physical_cycle_is_committed_before_result_callback() -> None:
+    """HEALTH002/003: nine actual cycles are quiet; tenthOFF warns without eviction."""
     predictive_map = _map(target="transition")
     engine = _selected_seed(predictive_map)
-    for start in (302, 312, 322, 332, 342):
+    for start in (302, 312, 322, 332, 342, 352, 362, 372, 382):
         engine.observe(_input("b", "on", start))
         engine.observe(_input("b", "off", start + 1))
     assert not any(
         row.reason == "sustained_flapping"
         for row in engine.snapshot.reliability_warning_occurrences
     )
-    engine.observe(_input("b", "on", 352))
+    engine.observe(_input("b", "on", 392))
     checked: list[ZoneModelResult] = []
 
     def callback(result: ZoneModelResult) -> None:
         assert result.snapshot == engine.snapshot
         health = next(h for h in result.snapshot.path_health if h.node_id == "b")
         assert health.completed_cycles == tuple(
-            _at(at) for at in (303, 313, 323, 333, 343, 353)
+            _at(at) for at in (303, 313, 323, 333, 343, 353, 363, 373, 383, 393)
         )
+        assert len(health.completed_cycles) == 10
         warning, = (
             row for row in result.snapshot.reliability_warning_occurrences
             if row.reason == "sustained_flapping"
         )
-        assert warning.first_observed_at == _at(353) and warning.cleared_at is None
+        assert warning.first_observed_at == _at(393) and warning.cleared_at is None
         assert _policy(engine, "b").active
         assert any(
             path is not None and path.endpoint.node_id == "b"
@@ -1990,7 +1991,7 @@ def test_selected_sixth_physical_cycle_is_committed_before_result_callback() -> 
         _round_trip(predictive_map, engine)
         checked.append(result)
 
-    result = engine.observe(_input("b", "off", 353), result_callback=callback)
+    result = engine.observe(_input("b", "off", 393), result_callback=callback)
     assert checked == [result]
 
 
