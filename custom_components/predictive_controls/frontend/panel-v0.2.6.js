@@ -153,36 +153,174 @@
       return e;
     }).sort((a, b) => a.entity_id.localeCompare(b.entity_id));
   }
+  function instant(value) {
+    const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?(?:Z|\+00:00)$/.exec(value);
+    const seconds = match?.[1];
+    const milliseconds = seconds === void 0 ? NaN : Date.parse(`${seconds}Z`);
+    if (!seconds || !Number.isFinite(milliseconds) || new Date(milliseconds).toISOString().slice(0, 19) !== seconds) throw new Error("Invalid visit timestamp");
+    return BigInt(milliseconds) * 1000n + BigInt((match?.[2] || "").padEnd(6, "0"));
+  }
+  function timestamp(value) {
+    const s = text(value);
+    instant(s);
+    return s;
+  }
+  function bounded(value, minimum, maximum, name) {
+    if (!Array.isArray(value) || value.length < minimum || value.length > maximum) throw new Error(`Invalid bounded selected ${name}`);
+    return value;
+  }
   function visit(value) {
     const r = record(value);
-    const result = { node_id: identity(r.node_id), zone: identity(r.zone), episode_id: identity(r.episode_id), branch_active: bool(r.branch_active) };
-    optional(r, "at", text, (v) => {
-      if (!Number.isFinite(Date.parse(v))) throw new Error("Invalid visit timestamp");
-      result.at = v;
-    });
-    optional(r, "kind", text, (v) => {
-      if (!["positive", "correlated_positive", "interaction"].includes(v)) throw new Error("Invalid visit kind");
-      result.kind = v;
-    });
-    return result;
+    const kind = text(r.kind);
+    if (kind !== "positive" && kind !== "correlated_positive" && kind !== "interaction") throw new Error("Invalid visit kind");
+    return { node_id: identity(r.node_id), zone: identity(r.zone), episode_id: identity(r.episode_id), branch_active: bool(r.branch_active), at: timestamp(r.at), kind };
+  }
+  function sameVisit(a, b) {
+    return a.node_id === b.node_id && a.zone === b.zone && a.episode_id === b.episode_id && a.at === b.at && a.kind === b.kind && a.branch_active === b.branch_active;
+  }
+  function compareVisits(a, b) {
+    const timeA = instant(a.at);
+    const timeB = instant(b.at);
+    if (timeA !== timeB) return timeA < timeB ? -1 : 1;
+    for (const [left, right] of [[a.node_id, b.node_id], [a.zone, b.zone], [a.episode_id, b.episode_id], [a.kind, b.kind]]) {
+      if (left !== void 0 && right !== void 0 && left !== right) {
+        const l = Array.from(left, (c) => c.codePointAt(0) || 0);
+        const r = Array.from(right, (c) => c.codePointAt(0) || 0);
+        for (let i = 0; i < Math.min(l.length, r.length); i++) {
+          const x = l[i];
+          const y = r[i];
+          if (x !== void 0 && y !== void 0 && x !== y) return x < y ? -1 : 1;
+        }
+        return l.length < r.length ? -1 : 1;
+      }
+    }
+    return Number(a.branch_active) - Number(b.branch_active);
+  }
+  function validateSelectedPath(path) {
+    const routes = [path.route, ...path.branch_routes];
+    const inventory = /* @__PURE__ */ new Map();
+    const parents = /* @__PURE__ */ new Map();
+    for (const records of [path.visits, ...routes]) {
+      const seen = /* @__PURE__ */ new Set();
+      for (const [index, item] of records.entries()) {
+        if (seen.has(item.episode_id)) throw new Error("Invalid bounded selected route: repeated observation");
+        seen.add(item.episode_id);
+        const copy = inventory.get(item.episode_id);
+        if (copy && !sameVisit(copy, item)) throw new Error("Selected occurrence copies disagree");
+        inventory.set(item.episode_id, item);
+        const previous = records[index - 1];
+        if (previous) {
+          if (instant(previous.at) > instant(item.at)) throw new Error("Selected observations are out of order");
+          if (records !== path.visits) {
+            const parent = parents.get(item.episode_id);
+            if (parent && parent !== previous.episode_id) throw new Error("Selected occurrence has conflicting parents");
+            parents.set(item.episode_id, previous.episode_id);
+          }
+        }
+      }
+    }
+    const endpoint = path.route.at(-1);
+    const latest = path.visits.at(-1);
+    if (!endpoint || !latest || !sameVisit(endpoint, latest)) throw new Error("Selected history endpoint disagrees with route");
+    if (!path.endpoint_eligible && endpoint.branch_active) throw new Error("Revoked endpoint cannot retain branch authority");
+    if (instant(path.spatial_at) > instant(latest.at)) throw new Error("Selected spatial frontier is in the future");
+    if (path.endpoint && !sameVisit(path.endpoint, endpoint)) throw new Error("Selected endpoint disagrees with route");
+    if (path.updated_at !== void 0 && instant(path.updated_at) !== instant(latest.at)) throw new Error("Selected updated frontier disagrees with history");
+    const first = path.visits[0];
+    if (first && (path.visits.length < 4 || instant(path.spatial_at) >= instant(first.at)) && !path.visits.some((v) => instant(v.at) === instant(path.spatial_at))) throw new Error("Selected spatial frontier was not observed");
+    const main = new Set(path.route.map((v) => v.episode_id));
+    const tips = /* @__PURE__ */ new Set();
+    let previousTip;
+    for (const branch of path.branch_routes) {
+      const tip = branch.at(-1);
+      if (!tip || !tip.branch_active || tip.kind === "interaction" || main.has(tip.episode_id) || !path.visits.some((v) => sameVisit(v, tip))) throw new Error("Invalid selected overlap tip");
+      if (tips.has(tip.episode_id) || previousTip && compareVisits(previousTip, tip) >= 0) throw new Error("Selected overlap tips are not canonical and unique");
+      tips.add(tip.episode_id);
+      previousTip = tip;
+    }
+    for (const item of inventory.values()) {
+      if (item.branch_active && !main.has(item.episode_id) && !tips.has(item.episode_id)) throw new Error("Prefix-only history cannot retain branch authority");
+    }
+  }
+  function validateSelectedChronology(paths) {
+    const inventory = /* @__PURE__ */ new Map();
+    const order = /* @__PURE__ */ new Map();
+    for (const path of paths) {
+      if (!path) continue;
+      for (const records of [path.visits, path.route, ...path.branch_routes]) {
+        for (const [index, item] of records.entries()) {
+          inventory.set(item.episode_id, item);
+          if (!order.has(item.episode_id)) order.set(item.episode_id, /* @__PURE__ */ new Set());
+          const previous = records[index - 1];
+          if (previous) order.get(previous.episode_id)?.add(item.episode_id);
+        }
+      }
+    }
+    const byNode = /* @__PURE__ */ new Map();
+    for (const item of inventory.values()) {
+      const prefix = `${item.node_id}:`;
+      if (!item.episode_id.startsWith(prefix)) continue;
+      const digits = /^([1-9][0-9]*):/.exec(item.episode_id.slice(prefix.length))?.[1];
+      if (digits === void 0) continue;
+      const generation = BigInt(digits);
+      const generations = byNode.get(item.node_id) || /* @__PURE__ */ new Map();
+      const previous = generations.get(generation);
+      if (previous && (previous.episode_id !== item.episode_id || instant(previous.at) !== instant(item.at))) throw new Error("Selected generation has conflicting occurrences");
+      generations.set(generation, item);
+      byNode.set(item.node_id, generations);
+    }
+    for (const generations of byNode.values()) {
+      const ordered = [...generations.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+      for (let index = 1; index < ordered.length; index++) {
+        const previous = ordered[index - 1]?.[1];
+        const current = ordered[index]?.[1];
+        if (!previous || !current) continue;
+        if (instant(previous.at) > instant(current.at)) throw new Error("Selected generation chronology is inconsistent");
+        order.get(previous.episode_id)?.add(current.episode_id);
+      }
+    }
+    const visiting = /* @__PURE__ */ new Set();
+    const complete = /* @__PURE__ */ new Set();
+    function walk(id) {
+      if (visiting.has(id)) throw new Error("Selected occurrence chronology is cyclic");
+      if (complete.has(id)) return;
+      visiting.add(id);
+      for (const next of order.get(id) || []) walk(next);
+      visiting.delete(id);
+      complete.add(id);
+    }
+    for (const id of inventory.keys()) walk(id);
   }
   function decodeSelectedPaths(value) {
-    const paths = list(value, (v) => {
+    const raw = bounded(value, 0, 2, "slot count");
+    const records = raw.map((v) => {
       if (v === null) return null;
       const r = record(v);
+      bounded(r.visits, 1, 4, "visits");
+      bounded(r.route, 1, 4, "route");
+      for (const branch of bounded(r.branch_routes, 0, 3, "overlap routes")) bounded(branch, 1, 4, "overlap route");
+      return r;
+    });
+    const owned = /* @__PURE__ */ new Set();
+    const paths = records.map((r) => {
+      if (r === null) return null;
       const confidence = text(r.track_confidence);
       if (confidence !== "provisional" && confidence !== "confirmed") throw new Error("Invalid track confidence");
-      const route = list(r.route, visit);
-      if (route.length < 1 || route.length > 4 || new Set(route.map((item) => item.episode_id)).size !== route.length) throw new Error("Invalid bounded selected route");
-      const result = { route, track_confidence: confidence, endpoint_eligible: bool(r.endpoint_eligible) };
-      optional(r, "endpoint", visit, (endpoint) => {
-        const last = route.at(-1);
-        if (!last || endpoint.node_id !== last.node_id || endpoint.zone !== last.zone || endpoint.episode_id !== last.episode_id || endpoint.branch_active !== last.branch_active) throw new Error("Selected endpoint disagrees with route");
-        result.endpoint = endpoint;
-      });
+      const result = { visits: list(r.visits, visit), route: list(r.route, visit), branch_routes: list(r.branch_routes, (v) => list(v, visit)), spatial_at: timestamp(r.spatial_at), track_confidence: confidence, endpoint_eligible: bool(r.endpoint_eligible) };
+      optional(r, "endpoint", visit, (v) => result.endpoint = v);
+      optional(r, "updated_at", timestamp, (v) => result.updated_at = v);
+      optional(r, "covered_node_ids", strings, (v) => result.covered_node_ids = v);
+      optional(r, "covered_zones", strings, (v) => result.covered_zones = v);
+      optional(r, "eligible_node_ids", strings, (v) => result.eligible_node_ids = v);
+      validateSelectedPath(result);
+      const ids = new Set([...result.visits, ...result.route, ...result.branch_routes.flat()].map((v) => v.episode_id));
+      for (const id of ids) {
+        if (owned.has(id)) throw new Error("Selected occurrence belongs to multiple slots");
+        owned.add(id);
+      }
       return result;
     });
-    if (paths.length > 2) throw new Error("Unsupported selected slot count");
+    validateSelectedChronology(paths);
     return paths;
   }
   function episode(value) {
@@ -265,6 +403,8 @@
     optional(r, "authorizations", (v) => list(v, authorization), (v) => d.authorizations = v);
     if (Object.hasOwn(r, "selected_paths")) {
       try {
+        if (r.selected_path_version !== 2) throw new Error("Unsupported selected_path_version: expected 2");
+        d.selected_path_version = 2;
         d.selected_paths = decodeSelectedPaths(r.selected_paths);
       } catch (error) {
         d.selected_paths_error = error instanceof Error ? error.message : "Invalid selected paths";
@@ -3125,7 +3265,7 @@ ${cn.comment}` : item.comment;
     resolve: (str) => parseSexagesimal(str, false),
     stringify: stringifySexagesimal
   };
-  var timestamp = {
+  var timestamp2 = {
     identify: (value) => value instanceof Date,
     default: true,
     tag: "tag:yaml.org,2002:timestamp",
@@ -3134,7 +3274,7 @@ ${cn.comment}` : item.comment;
     // assumed to be 00:00:00Z (start of day, UTC).
     test: RegExp("^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})(?:(?:t|T|[ \\t]+)([0-9]{1,2}):([0-9]{1,2}):([0-9]{1,2}(\\.[0-9]+)?)(?:[ \\t]*(Z|[-+][012]?[0-9](?::[0-9]{2})?))?)?$"),
     resolve(str) {
-      const match = str.match(timestamp.test);
+      const match = str.match(timestamp2.test);
       if (!match)
         throw new Error("!!timestamp expects a date, starting with yyyy-mm-dd");
       const [, year, month, day, hour, minute, second] = match.map(Number);
@@ -3174,7 +3314,7 @@ ${cn.comment}` : item.comment;
     set,
     intTime,
     floatTime,
-    timestamp
+    timestamp2
   ];
 
   // node_modules/yaml/browser/dist/schema/tags.js
@@ -3203,7 +3343,7 @@ ${cn.comment}` : item.comment;
     pairs,
     seq,
     set,
-    timestamp
+    timestamp: timestamp2
   };
   var coreKnownTags = {
     "tag:yaml.org,2002:binary": binary,
@@ -3211,7 +3351,7 @@ ${cn.comment}` : item.comment;
     "tag:yaml.org,2002:omap": omap,
     "tag:yaml.org,2002:pairs": pairs,
     "tag:yaml.org,2002:set": set,
-    "tag:yaml.org,2002:timestamp": timestamp
+    "tag:yaml.org,2002:timestamp": timestamp2
   };
   function getTags(customTags, schemaName, addMergeTag) {
     const schemaTags = schemas.get(schemaName);
@@ -6806,48 +6946,67 @@ ${end.comment}` : end.comment;
     }
     const paths = diagnostics.selected_paths;
     const counts = [snapshotCount, diagnostics.expected_occupants].filter((v) => v !== void 0);
-    if (!paths || paths.length > 2 || diagnostics.unsupported_count || counts.some((count) => !validCount(count) || count !== paths.length)) {
+    if (diagnostics.selected_path_version !== 2 || !paths || paths.length > 2 || diagnostics.unsupported_count || counts.some((count) => !validCount(count) || count !== paths.length)) {
       result.state = "unavailable";
       result.message = "Selected paths unavailable: inconsistent snapshot count";
       return result;
     }
+    const validVisit = (visit4) => Object.hasOwn(map2.nodes, visit4.node_id) && (map2.nodes[visit4.node_id]?.zone || visit4.node_id) === visit4.zone;
+    for (const path of paths) {
+      if (!path) continue;
+      if (![...path.visits, ...path.route, ...path.branch_routes.flat()].every(validVisit) || [path.route, ...path.branch_routes].some((route) => route.some((v, i) => {
+        const previous = route[i - 1];
+        return previous && previous.zone !== v.zone && !map2.nodes[previous.node_id]?.adjacent?.includes(v.node_id);
+      }))) {
+        result.state = "unavailable";
+        result.message = "Selected paths unavailable: map geometry or membership disagrees";
+        return result;
+      }
+    }
     const episodes = indexUnique(diagnostics.episodes || []);
     const health2 = indexUnique(diagnostics.path_health || []);
     for (const [index, path] of paths.entries()) {
-      const slot = index + 1;
-      const row = { slot, path, occurrences: [] };
-      result.slots.push(row);
-      if (!path) continue;
-      for (const visit4 of path.route) {
-        const node = Object.hasOwn(map2.nodes, visit4.node_id) ? map2.nodes[visit4.node_id] : void 0;
-        const valid = !!node && (node.zone || visit4.node_id) === visit4.zone;
+      let occurrence2 = function(visit4, authoritative2) {
+        const valid = validVisit(visit4);
         const episode2 = episodes.get(visit4.node_id);
         const state = health2.get(visit4.node_id);
         const identityMatches = valid && episode2?.zone === visit4.zone && state?.zone === visit4.zone;
         const generationMatches = identityMatches && episode2?.episode_id === visit4.episode_id;
-        const presence = generationMatches && state?.phase === "on" && visit4.branch_active && episode2?.status !== "clearing";
+        const presence = authoritative2 && generationMatches && state?.phase === "on" && visit4.branch_active && episode2?.status !== "clearing";
         const role = presence ? "presence" : "history";
         const phase = valid && state?.zone === visit4.zone ? state.phase === "on" ? "ON" : state.phase === "off" ? "OFF" : "Unknown" : "Unknown";
         const issue = !valid ? "Map membership unavailable" : !identityMatches ? "Physical diagnostics unavailable" : !generationMatches ? "Earlier episode" : void 0;
-        row.occurrences.push({ visit: visit4, role, valid, phase, issue });
         if (valid) {
           add(result.nodes, visit4.node_id, role, slot);
           add(result.zones, visit4.zone, role, slot);
         }
-      }
-      for (let i = 1; i < row.occurrences.length; i++) {
-        const previous = row.occurrences[i - 1];
-        const current = row.occurrences[i];
-        if (!previous?.valid || !current?.valid) continue;
-        if (map2.nodes[previous.visit.node_id]?.adjacent?.includes(current.visit.node_id)) {
+        return { visit: visit4, role, valid, phase, issue };
+      };
+      var occurrence = occurrence2;
+      const slot = index + 1;
+      const row = { slot, path, occurrences: [], overlaps: [] };
+      result.slots.push(row);
+      if (!path) continue;
+      row.occurrences = path.route.map((v) => occurrence2(v, true));
+      const authoritative = new Set([...path.route, ...path.branch_routes.flatMap((branch) => branch.slice(-1))].map((v) => v.episode_id));
+      row.overlaps = path.branch_routes.map((branch) => branch.map((v) => occurrence2(v, authoritative.has(v.episode_id))));
+      const seen = /* @__PURE__ */ new Set();
+      for (const route of [row.occurrences, ...row.overlaps]) {
+        for (let i = 1; i < route.length; i++) {
+          const previous = route[i - 1];
+          const current = route[i];
+          if (!previous?.valid || !current?.valid) continue;
+          const key = JSON.stringify([previous.visit.episode_id, current.visit.episode_id]);
+          if (seen.has(key)) continue;
+          seen.add(key);
           result.segments.push({ slot, from: previous.visit.node_id, to: current.visit.node_id, sourceZone: previous.visit.zone, targetZone: current.visit.zone });
         }
       }
     }
     for (const row of result.slots) {
-      for (const occurrence of row.occurrences) {
-        if (occurrence.role !== "presence") continue;
-        for (const id of map2.nodes[occurrence.visit.node_id]?.adjacent || []) {
+      for (const occurrence2 of [...row.occurrences, ...row.overlaps.flat()]) {
+        if (occurrence2.role !== "presence") continue;
+        for (const id of map2.nodes[occurrence2.visit.node_id]?.adjacent || []) {
           const node = Object.hasOwn(map2.nodes, id) ? map2.nodes[id] : void 0;
           if (!node) continue;
           add(result.nodes, id, "candidate", row.slot);
@@ -7006,6 +7165,9 @@ ${end.comment}` : end.comment;
   predictive-controls-panel .selected-paths { background:var(--card-background-color); border:1px solid var(--divider-color); border-radius:8px; padding:16px; min-width:0; }
   predictive-controls-panel .selected-paths h3 { margin-top:0; }
   predictive-controls-panel .selected-paths .path-slot { font-weight:400; border-top:1px solid var(--divider-color); padding:12px 0; }
+  predictive-controls-panel .path-slot h4 { margin:0 0 8px; font-size:13px; }
+  predictive-controls-panel .path-overlap { margin:12px 0; padding:12px; border:1px solid var(--divider-color); border-radius:6px; min-width:0; }
+  predictive-controls-panel .path-overlap > small { display:block; margin-top:8px; color:var(--secondary-text-color); }
   predictive-controls-panel .path-badge { display:inline-block; border:1px solid var(--divider-color); border-radius:999px; padding:3px 8px; margin-bottom:10px; font-size:12px; }
   predictive-controls-panel .path-chips { counter-reset:route; }
   predictive-controls-panel .path-chip { counter-increment:route; }
@@ -7501,6 +7663,10 @@ ${end.comment}` : end.comment;
 
   // frontend/components/path-list.ts
   function renderPathList(paths, map2) {
+    const chips = (occurrences, label) => `<ol class="path-chips" aria-label="${escapeHtml(label)}">${occurrences.map((o) => `<li class="path-chip path-role-${o.role}" data-node-id="${escapeHtml(o.visit.node_id)}" data-episode-id="${escapeHtml(o.visit.episode_id)}">
+      <strong>${escapeHtml(map2.nodes[o.visit.node_id]?.label || titleFromId(o.visit.node_id))}</strong>
+      <span>${o.role === "presence" ? "Current presence" : "Retained history"} · ${o.phase}</span>
+      ${o.issue ? `<small>${escapeHtml(o.issue)}</small>` : ""}</li>`).join("")}</ol>`;
     return `<section class="selected-paths" aria-label="Selected anonymous paths">
     <h3>${escapeHtml(paths.message)}</h3>
     ${paths.state === "selected" ? paths.slots.map((row) => {
@@ -7508,11 +7674,9 @@ ${end.comment}` : end.comment;
       const last = row.occurrences.at(-1);
       return `<article class="path-slot" data-slot="${row.slot}">
         <strong>Slot ${row.slot}</strong> <span class="path-badge">${titleFromId(row.path.track_confidence)}</span>
-        <ol class="path-chips">${row.occurrences.map((o) => `<li class="path-chip path-role-${o.role}" data-node-id="${escapeHtml(o.visit.node_id)}" data-episode-id="${escapeHtml(o.visit.episode_id)}">
-          <strong>${escapeHtml(map2.nodes[o.visit.node_id]?.label || titleFromId(o.visit.node_id))}</strong>
-          <span>${o.role === "presence" ? "Current presence" : "Retained history"} · ${o.phase}</span>
-          ${o.issue ? `<small>${escapeHtml(o.issue)}</small>` : ""}</li>`).join("")}</ol>
+        <div class="path-main-route"><h4>Main route</h4>${chips(row.occurrences, `Slot ${row.slot} main route`)}</div>
         <p>Retained endpoint · ${last?.phase || "Unknown"} · Continuation eligible: ${row.path.endpoint_eligible ? "yes" : "no"}</p>
+        ${row.overlaps.map((route, index) => `<section class="path-overlap" aria-label="Observed overlap ${index + 1}"><h4>Observed overlap ${index + 1}</h4>${chips(route, `Slot ${row.slot} observed overlap ${index + 1}`)}<small>Observed prefix to a retained tip; not a separate occupant or a continuation after the main endpoint.</small></section>`).join("")}
         <small>Retained history is not a claim of current physical presence.</small>
       </article>`;
     }).join("") : ""}

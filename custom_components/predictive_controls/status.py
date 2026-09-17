@@ -156,6 +156,7 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
         "requested_occupants": diagnostics.requested_occupants,
         "unsupported_count": diagnostics.unsupported_count,
         "beliefs": dict(diagnostics.beliefs),
+        "selected_path_version": 2,
         "selected_paths": [
             None if path is None else selected_path_payload(path)
             for path in diagnostics.selected_paths
@@ -403,10 +404,7 @@ def tracker_diagnostics_payload(diagnostics: Any) -> dict[str, Any]:
 def selected_path_payload(path: SelectedPath) -> dict[str, Any]:
     """Expose bounded causal records, separating coverage from source eligibility."""
 
-    covered = tuple(
-        visit for visit in path.route
-        if visit.branch_active or visit == path.endpoint
-    )
+    covered = path.coverage
     return {
         **_json_value(asdict(path)),
         "endpoint": _json_value(asdict(path.endpoint)),
@@ -414,9 +412,7 @@ def selected_path_payload(path: SelectedPath) -> dict[str, Any]:
         "covered_node_ids": sorted({visit.node_id for visit in covered}),
         "covered_zones": sorted({visit.zone for visit in covered}),
         "eligible_node_ids": sorted({
-            visit.node_id for visit in path.route
-            if visit.branch_active
-            or (visit == path.endpoint and path.endpoint_eligible)
+            visit.node_id for visit in path.eligible_visits
         }),
     }
 

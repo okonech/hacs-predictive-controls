@@ -161,7 +161,7 @@ def _current_outward_checkpoint(
     """D: accepted structural composite, NOT selected-engine outward production.
 
     Both branches observed source0/hall1/room2/hall2at3. The current engine has
-    displacement but no legacy outward. Donate only the actual component record;
+    supported overlap but no legacy outward. Donate only the actual component record;
     keep all current selection, physical health/holds, policy, audit/prediction.
     """
     current = replay.inference_snapshot()
@@ -172,7 +172,10 @@ def _current_outward_checkpoint(
     assert belief.contributions == donor.contributions
     assert belief.outward_context is None and donor.outward_context is not None
     assert donor.outward_context.qualified_until is None
-    assert belief.path_displaced_at == _at(3)
+    assert belief.path_displaced_at is None
+    assert any(witness[-1].node_id == "room" and witness[-1].branch_active
+               for path in current.selected_paths if path is not None
+               for witness in path.branch_routes)
     payload = deepcopy(replay.checkpoint())
     row = next(row for row in _rows(payload, "belief_states") if row["zone"] == "room")
     row["outward_context"] = _json_value(asdict(donor.outward_context))
@@ -301,15 +304,26 @@ def test_runtime_persisted_low_belief_hold_roundtrips_public_continuation() -> N
 def test_runtime_single_path_branch_releases_former_room() -> None:
     """Approved replacement for off_path_linked_outward_cannot_release_settled_endpoint.
 
-    PATH002/004: source0/hall1/room2/hall2at3 is one path plus U, not overlap.
-    The original OFF4..7 inputs remain; branch displacement permits public OFF95.
+    PATH007/008: source0/hall1/room2/hall2at3 is one slot plus U with overlap.
+    Original OFF4..7 remain; stable clear12 retires the room tip. Crossing
+    42.084982 plus full60s dwell yields scheduled OFF105 (formerly OFF95).
     """
     with RuntimeScenario(NOW) as scenario:
         replay = scenario.create(_map(branch=True), 2)
         _observe_branch(replay)
         _clear_all(replay, branch=True)
         inputs = tuple(replay.normalized_inputs)
-        release_at = _at(95)
+        release_at = _at(105)
+        # Read at an executed timer, before restore-time advancement could release.
+        assert replay.advance(_at(100)).active("room")
+        snapshot = replay.inference_snapshot()
+        assert _belief(snapshot).path_displaced_at == _at(12)
+        pending = next(state.pending_release_since for state in snapshot.policy_states
+                   if state.zone == "room")
+        assert pending == _at(42.084982)
+        assert pending + POLICY_CALIBRATIONS["stay_pir"].release_dwell == _at(
+            102.084982,
+        )
         assert replay.advance(release_at - EPSILON).active("room")
         assert not replay.advance(release_at).active("room")
         assert not replay.advance(NOW + timedelta(hours=1)).active("room")
@@ -323,8 +337,9 @@ def test_runtime_single_path_branch_releases_former_room() -> None:
 def test_runtime_hall_reassertion_does_not_delay_branch_release() -> None:
     """Approved replacement of the legacy causal-transfer/full-dwell scenario.
 
-    PATH002/004: preserve the original route, clears and hallON85. That reassertion
-    does not restart a full legacy support-transfer dwell; room still releases95.
+    PATH007/008: preserve the original route, clears and hallON85. That reassertion
+    does not restart dwell; room releases105 after actual tip retirement12,
+    crossing42.084982 and the unchanged60s dwell (formerly OFF95).
     """
     with RuntimeScenario(NOW) as scenario:
         replay = scenario.create(_map(branch=True), 2)
@@ -335,7 +350,16 @@ def test_runtime_hall_reassertion_does_not_delay_branch_release() -> None:
         assert replay.advance(departure_at).active("room")
         assert replay.send("binary_sensor.hall", "on", departure_at).active("room")
         inputs = tuple(replay.normalized_inputs)
-        deadline = _at(95)
+        deadline = _at(105)
+        assert replay.advance(_at(100)).active("room")
+        snapshot = replay.inference_snapshot()
+        assert _belief(snapshot).path_displaced_at == _at(12)
+        pending = next(state.pending_release_since for state in snapshot.policy_states
+                   if state.zone == "room")
+        assert pending == _at(42.084982)
+        assert pending + POLICY_CALIBRATIONS["stay_pir"].release_dwell == _at(
+            102.084982,
+        )
         assert replay.advance(deadline - EPSILON).active("room")
         assert not replay.advance(deadline).active("room")
         assert not replay.advance(_at(115)).active("room")

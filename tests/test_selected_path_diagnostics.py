@@ -134,8 +134,14 @@ def test_selected_path_projection_bounds_branch_and_source_witness(count: int) -
         assert path["endpoint"] == path["route"][-1]
         assert path["endpoint_eligible"] is True
         assert path["updated_at"] == path["spatial_at"] == at(5).isoformat()
-        assert path["covered_node_ids"] == path["eligible_node_ids"] == ["b", "c", "f"]
-        assert path["covered_zones"] == ["b", "c", "f"]
+        assert result["selected_path_version"] == 2
+        assert [[visit["node_id"] for visit in witness]
+                for witness in path["branch_routes"]] == [
+            ["b", "c", "d"], ["b", "c", "d", "e"],
+        ]
+        expected = ["b", "c", "d", "e", "f"]
+        assert path["covered_node_ids"] == path["eligible_node_ids"] == expected
+        assert path["covered_zones"] == expected  # Capacity-trimmed A stays absent.
         authorization = result["authorizations"][-1]
         assert authorization["reason"] == "selected_path"
         assert authorization["source_token_ids"] == []
@@ -160,7 +166,12 @@ def test_selected_path_projection_bounds_branch_and_source_witness(count: int) -
             False, True, False,
         ]
         assert path["endpoint_eligible"] is True
-        assert path["eligible_node_ids"] == path["covered_node_ids"] == ["c", "f"]
+        assert path["eligible_node_ids"] == path["covered_node_ids"] == [
+            "c", "d", "e", "f",
+        ]
+        assert all(not visit["branch_active"]
+                   for witness in path["branch_routes"] for visit in witness
+                   if visit["node_id"] == "b")
         assert next(row for row in result["path_health"] if row["node_id"] == "f")[
             "phase"
         ] == "off"

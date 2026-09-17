@@ -28,15 +28,16 @@ import {
 } from "../../frontend/formatting.ts";
 import { moveNode, renameNode } from "../../frontend/map-helpers.ts";
 
-// Wire specimens follow status.py, with optional historical fields deliberately
-// absent where the panel does not consume them. These are decoder contracts, not
-// stricter backend snapshot validators or changes to the original 31 tests.
+// Synthetic v2 premises: required bounded history/provenance replaces the old
+// optional-selected-history schema. Historical NON-selection fields stay optional.
+// Corruption/type/nonmutation assertions below retain their original purpose.
 function visit(node = "a", overrides = {}) {
-    return { node_id: node, zone: `z${node}`, episode_id: `${node}:1`, branch_active: true, ...overrides };
+    return { node_id: node, zone: `z${node}`, episode_id: `${node}:1`, at: "2026-09-15T17:24:15Z", kind: "positive", branch_active: true, ...overrides };
 }
 
 function selected(overrides = {}) {
-    return { route: [visit("a"), visit("b")], track_confidence: "provisional", endpoint_eligible: true, ...overrides };
+    const route = overrides.route ?? [visit("a"), visit("b", { branch_active: overrides.endpoint_eligible !== false })];
+    return { route, visits: route, spatial_at: route?.at?.(-1)?.at ?? "2026-09-15T17:24:15Z", branch_routes: [], track_confidence: "provisional", endpoint_eligible: true, ...overrides };
 }
 
 function configWire(overrides = {}) {
@@ -256,16 +257,18 @@ test("entity response rejects missing identities and wrong known field types", (
     }
 });
 
-test("selected paths accept zero to two slots, nulls, optional historical fields and four visits", () => {
-    for (const paths of [[], [null], [null, null], [selected()], [selected(), null], [null, selected()], [selected(), selected({ track_confidence: "confirmed" })]]) {
+test("selected paths accept zero to two slots, nulls, required v2 history and four visits", () => {
+    for (const paths of [[], [null], [null, null], [selected()], [selected(), null], [null, selected()], [selected(), selected({ route: [visit("c"), visit("d")], track_confidence: "confirmed" })]]) {
         assert.deepEqual(decodeSelectedPaths(paths), paths);
     }
     const route = [visit("a"), visit("b"), visit("c"), visit("d")];
     assert.deepEqual(decodeSelectedPaths([selected({ route })])[0].route, route);
     const minimal = decodeSelectedPaths([selected()])[0];
     assert.equal(Object.hasOwn(minimal, "endpoint"), false);
-    assert.equal(Object.hasOwn(minimal.route[0], "at"), false);
-    assert.equal(Object.hasOwn(minimal.route[0], "kind"), false);
+    assert.equal(minimal.route[0].at, "2026-09-15T17:24:15Z");
+    assert.equal(minimal.route[0].kind, "positive");
+    assert.deepEqual(minimal.visits, minimal.route);
+    assert.deepEqual(minimal.branch_routes, []);
 });
 
 test("selected paths reject malformed containers and slot values rather than fabricate unlocated slots", () => {
@@ -286,16 +289,16 @@ test("selected path booleans and confidence labels are never coerced or upgraded
     assert.equal(decodeSelectedPaths([selected({ endpoint_eligible: false })])[0].endpoint_eligible, false);
 });
 
-test("visit identities, optional timestamps and optional event kinds validate only their actual wire contract", () => {
+test("visit identities, required timestamps and required event kinds validate the v2 wire contract", () => {
     for (const field of ["node_id", "zone", "episode_id"]) {
         for (const value of [undefined, null, "", false, 1, []]) {
             assert.throws(() => decodeSelectedPaths([selected({ route: [visit("a", { [field]: value })] })]), Error);
         }
     }
-    for (const value of [null, 1, false, "", "not-a-date"]) {
+    for (const value of [undefined, null, 1, false, "", "not-a-date"]) {
         assert.throws(() => decodeSelectedPaths([selected({ route: [visit("a", { at: value })] })]), Error);
     }
-    for (const value of [null, false, 1, "on", "timer", "Positive"]) {
+    for (const value of [undefined, null, false, 1, "on", "timer", "Positive"]) {
         assert.throws(() => decodeSelectedPaths([selected({ route: [visit("a", { kind: value })] })]), Error);
     }
     for (const kind of ["positive", "correlated_positive", "interaction"]) {
@@ -312,7 +315,7 @@ test("revisiting a physical node with a new generation is valid, repeating an ep
     }
 });
 
-test("a supplied endpoint must agree with the last route occurrence without requiring unused metadata", () => {
+test("a supplied endpoint must agree with every field of the last route occurrence", () => {
     const endpoint = visit("b");
     assert.deepEqual(decodeSelectedPaths([selected({ endpoint })])[0].endpoint, endpoint);
     for (const override of [{ node_id: "a" }, { zone: "other" }, { episode_id: "b:2" }, { branch_active: false }]) {
@@ -323,7 +326,7 @@ test("a supplied endpoint must agree with the last route occurrence without requ
 
 test("malformed selected data is an explicit recoverable diagnostic error, not absent/empty authoritative data", () => {
     for (const invalid of [undefined, null, {}, "[]", [selected({ endpoint_eligible: "false" })]]) {
-        const result = decodeDiagnostics({ model: "zone_belief", selected_paths: invalid, beliefs: { za: 0.5 }, policy: { za: { active: false } } });
+        const result = decodeDiagnostics({ model: "zone_belief", selected_path_version: 2, selected_paths: invalid, beliefs: { za: 0.5 }, policy: { za: { active: false } } });
         assert.equal(typeof result.selected_paths_error, "string");
         assert.ok(result.selected_paths_error.length > 0);
         assert.equal(Object.hasOwn(result, "selected_paths"), false);
@@ -331,8 +334,8 @@ test("malformed selected data is an explicit recoverable diagnostic error, not a
         assert.deepEqual(result.policy, { za: { active: false } });
     }
     assert.deepEqual(decodeDiagnostics({}), {});
-    assert.deepEqual(decodeDiagnostics({ selected_paths: [] }), { selected_paths: [] });
-    assert.deepEqual(decodeDiagnostics({ selected_paths: [null] }), { selected_paths: [null] });
+    assert.deepEqual(decodeDiagnostics({ selected_path_version: 2, selected_paths: [] }), { selected_path_version: 2, selected_paths: [] });
+    assert.deepEqual(decodeDiagnostics({ selected_path_version: 2, selected_paths: [null] }), { selected_path_version: 2, selected_paths: [null] });
 });
 
 test("full current status shapes separate episodes, physical health, policy and selected endpoint coverage", () => {
@@ -343,7 +346,7 @@ test("full current status shapes separate episodes, physical health, policy and 
         transition_counts: { a: { b: 2.5 } },
         authoritative_count: { source: "sensor.people", accepted: 1, available: true },
         occupancy_diagnostics: {
-            model: "zone_belief", expected_occupants: 1, requested_occupants: 1, unsupported_count: null,
+            model: "zone_belief", expected_occupants: 1, requested_occupants: 1, unsupported_count: null, selected_path_version: 2,
             selected_paths: [selected({ route, endpoint: route[1], covered_node_ids: ["a", "b"], covered_zones: ["za", "zb"], eligible_node_ids: ["a", "b"] })],
             episodes: [{ node_id: "a", zone: "za", episode_id: "a:1", status: "asserted", reliability: 0.75, profile: "stay_presence" }],
             path_health: [{ node_id: "a", zone: "za", phase: "on", on_since: "2026-09-15T17:24:15Z", coverage_lost_at: null }],
@@ -512,7 +515,7 @@ test("cleanup uses the requested response counter and rejects invalid counts wit
 test("decoding selected and status specimens never mutates or silently normalizes source data", () => {
     const raw = {
         expected_occupants: 1, occupancy_diagnostics: {
-            selected_paths: [selected()], episodes: [{ node_id: "a", zone: "za", episode_id: "a:1" }],
+            selected_path_version: 2, selected_paths: [selected()], episodes: [{ node_id: "a", zone: "za", episode_id: "a:1" }],
             reliability_warnings: [warningWire()], beliefs: { za: 0.75 },
         }
     };

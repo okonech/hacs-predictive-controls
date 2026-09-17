@@ -185,6 +185,8 @@ def _wire(
         "spatial_at": path.spatial_at.isoformat(),
         "track_confidence": path.track_confidence,
         "endpoint_eligible": path.endpoint_eligible,
+        "branch_routes": [[_wire_visit(visit) for visit in witness]
+                  for witness in path.branch_routes],
     } for path in paths]
     raw_sources: list[object] = [{
         "node_id": source.node_id, "episode_id": source.episode_id,
@@ -366,6 +368,8 @@ def test_retired_history_cannot_regain_branch_authority() -> None:
     owners = _pair()
     assert owners.send("c", "on", 2) is not None
     assert owners.send("x", "on", 3) is not None
+    # A supported overlap is not corruption; first truly revoke this C tip.
+    assert owners.send("c", "unavailable", 3) is None
     path = _path(owners.selected)
     assert tuple(visit.node_id for visit in path.route) == ("a", "x")
     retired = next(visit for visit in path.visits if visit.node_id == "c")

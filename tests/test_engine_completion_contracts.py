@@ -716,7 +716,10 @@ def test_selected_correlated_retirement_survives_history_eviction(
     sequence = [event("t", "on", -40), event("t", "off", -20),
                 event("a", "on", 0), event("b", "on", 1), event("c", "on", 2)]
     if membership == "visits":
-        sequence += [event("t", "on", 3), event("x", "on", 4)]
+        # X4 now retains T as overlap. Qualify actual stable clear in BOTH
+        # producers before composition, retaining the unexpired component token.
+        sequence += [event("t", "on", 3), event("x", "on", 4),
+                     event("t", "off", 4), event("x", "on", 14)]
     elif membership == "route":
         sequence += [event("t", "on", 3), event("u", "on", 4),
                      event("v", "on", 5), event("x", "on", 6),
@@ -735,6 +738,10 @@ def test_selected_correlated_retirement_survives_history_eviction(
         assert engine.prediction_state["deferred_counts"] == before_learning
         assert not engine._pending_prediction_learning
         engine.observe(event("x", "on", 4))
+        engine.observe(event("t", "off", 4))
+        engine.advance(at(13.999999))
+        assert "t" in engine._selected_paths.covered_nodes
+        engine.advance(at(14))
     physical = next(s for s in engine.snapshot.episode_states if s.node_id == "t")
     source = next(s for s in engine.snapshot.selected_sources if s.node_id == "t")
     assert physical.cadence_correlated and source.origin == "correlated"
@@ -752,7 +759,15 @@ def test_selected_correlated_retirement_survives_history_eviction(
         assert token.episode_id == physical.episode_id
         assert token.accepted_at == source.at == physical.started_at
         assert token.provenance_kind == "adjacent"
-        engine.advance(at(19 if membership == "route" else 5))
+        cleanup_at = at(19 if membership == "route" else 15)
+        assert token.valid_until > cleanup_at
+        # Ordinary clear sync retains this token. Selected-history exclusion,
+        # not expiry, unavailability or a missing correlated flag, must remove it.
+        control = roundtrip(predictive_map, engine)
+        control._frontier.sync(physical, engine.snapshot.updated_at)
+        assert token in control.snapshot.traversal_tokens
+        assert token.token_id not in control.snapshot.current_token_ids
+        engine.advance(cleanup_at)
         assert token not in engine.snapshot.traversal_tokens
         assert token not in engine.snapshot.retained_traversal_tokens
         assert token.token_id not in engine.snapshot.current_token_ids
@@ -760,16 +775,20 @@ def test_selected_correlated_retirement_survives_history_eviction(
                    for b in engine.snapshot.support_token_bindings)
     roundtrip(predictive_map, engine)
     suffix = (("z", 20), ("w", 21)) if membership == "route" else (
-        ("y", 6), ("z", 7), ("w", 8),
+        ("y", 16), ("z", 17), ("w", 18),
     )
     for node, seconds in suffix:
         engine.observe(event(node, "on", seconds))
     assert all(v.episode_id != physical.episode_id
                for p in engine.snapshot.selected_paths if p is not None
                for v in (*p.visits, *p.route))
+    assert all(v.episode_id != physical.episode_id
+               for p in engine.snapshot.selected_paths if p is not None
+               for v in p.occurrences)
     restored = roundtrip(predictive_map, engine)
-    duplicate = event("t", "off" if membership == "route" else "on",
-                      22 if membership == "route" else 9)
+    # Same clear generation here; the original held-ON stream is separately
+    # retained in test_engine_overlap_qualification's history-eviction boundary.
+    duplicate = event("t", "off", 22 if membership == "route" else 19)
     for item in (engine, restored):
         item.observe(duplicate)
         assert all(t.episode_id != physical.episode_id for t in (

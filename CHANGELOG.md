@@ -2,8 +2,12 @@
 
 ## Unreleased
 
-The local implementation remains version `0.2.6`. Functional, static and unchanged
-5ms p99 benchmark gates pass after equivalent health/audit allocation reductions.
+The local implementation remains version `0.2.6`. September17 final validation
+passes:3351Python tests,100% statement/branch coverage, separate83incident,
+111scenario and308frontend cases. All61 previous failures are repaired without
+dropping original cases. Static/build/freshness, independent review and standalone
+100-event performance gates pass; worst positive/rejected p99 is3.282/2.789ms
+under the unchanged5ms limit.
 This is not a published release,
 deployment or physical-light verification. [SPECIFICATION.md](SPECIFICATION.md) owns current behavior and
 [validation evidence](SPECIFICATION.md#current-local-conformance); versioned
@@ -11,6 +15,13 @@ entries below describe earlier releases and may contain superseded behavior.
 
 ### Changed
 
+- Preserve bounded, still-supported selected overlap tips as up to three witnessed
+	prefixes in the same anonymous slot. Keep one main route/last four visits;
+	prefix-only history never authorizes movement. Clear, generation mismatch,
+	history eviction, replacement and count0 revoke authority in every copy.
+- Require selected-path version2 and strict overlap provenance in the semantic
+	fingerprint; Store7/v4 remains. Show main/overlapping routes separately and use
+	actual configured geometry without hiding usable independent belief/policy.
 - Require10 completed short physical ON/OFF cycles in20minutes for a flapping
 	warning, rather than6 in an hour. Keep ON<=60seconds, aggregate-edge counting
 	and diagnostic-only behavior. The health calibration fingerprint changes: old
@@ -35,6 +46,13 @@ entries below describe earlier releases and may contain superseded behavior.
 
 ### Fixed
 
+- Fix missed office arrival after foyer reactivation prematurely retired the
+	still-supported upstairs branch. The frozen46-input incident now publishes
+	office ON at motion20:56:10.437899UTC, without waiting for manual interaction.
+- Reject revoked-active endpoints and contradictory combined generation chronology
+	in the source decoder and shipped panel, preserving valid forks and recovery.
+	Strict backend restore also rejects contradictory exact-current correlated
+	provenance without rejecting legitimate physical cadence resets.
 - Fix the panel showing every zone unavailable with “Expected a Boolean”:
 	decode `unsupported_count` as the server's null-or-unsupported-integer value,
 	not a Boolean. Retain the live-response regression, add real runtime-to-shipped
@@ -42,7 +60,7 @@ entries below describe earlier releases and may contain superseded behavior.
 - Avoid reconstructing unchanged immutable health records and deep-copying flat
 	audit decisions during byte sizing. Preserve exact warning frontiers, canonical
 	audit bytes, retention and model results; retain the computational regression.
-	Latest worst positive/rejected p99 is2.095/2.188ms; the5ms limit is unchanged.
+	That pre-overlap benchmark measured2.095/2.188ms; the5ms limit is unchanged.
 - Describe assertion-timeout-only diagnostics as “Continuous presence detected;
 	path unverified” rather than a stuck-sensor fault. Machine fields,600s timing,
 	recovery, inference and persistence are unchanged; retain the reported regression.
@@ -63,12 +81,20 @@ entries below describe earlier releases and may contain superseded behavior.
 
 ### Development
 
+- Repair synthetic learning/engine fixtures with actually observed selected-tip
+	eviction/stable clear, not private authority injection or relaxed expectations.
+	Preserve original callback/debt/token contracts and qualify real producer maps.
+	Add inverse/provenance/prefix-only corruption tests; retain all3330 original
+	Python IDs plus21 additive cases. Final3351pass182.02s,100%7980statements and
+	3072branches. Reconcile and remove four completed office/qualification plans;
+	keep the frozen incident and unresolved September5 external-office work.
 - Retain the exact18-transition foyer warning regression; update approved synthetic
 	threshold/expiry checks and add pre-warning restart/old-fingerprint rejection
-	proofs. All3245Python tests pass with100% statement/branch coverage;82incident
-	cases,110scenarios and231frontend tests pass. Original incident primaries remain.
+	proofs. The pre-overlap September16 baseline passed3245Python tests with100%
+	statement/branch coverage,82incident cases,110scenarios and231frontend tests.
+	Original incident primaries remain.
 - Add locked TypeScript/esbuild/YAML/DOM-test dependencies, strict typechecking,
-	deterministic build and nonwriting asset-freshness CI gates. All231frontend
+	deterministic build and nonwriting asset-freshness CI gates. All308frontend
   tests pass, including the original31 and shipped-bundle interaction/race tests.
 - Run pytest in isolated processes with automatic worker selection capped at16,
 	small item-level scheduling chunks, no worker-crash retries and slow-test reports.

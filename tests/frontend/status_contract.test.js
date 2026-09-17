@@ -21,7 +21,7 @@ test('supported null retains selections; unsupported metadata hides paths but no
     for (const count of [0, 1, 2]) {
         const status = {
             expected_occupants: count, occupancy_diagnostics: {
-                expected_occupants: count, unsupported_count: null,
+                expected_occupants: count, unsupported_count: null, selected_path_version: 2,
                 selected_paths: Array(count).fill(null),
                 beliefs: { room: 0.8 }, policy: { room: { active: true } },
             }

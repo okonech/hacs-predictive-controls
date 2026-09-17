@@ -65,11 +65,11 @@ function entitiesWire() {
 }
 
 function visit(id, overrides = {}) {
-    return { node_id: id, zone: id, episode_id: `${id}:1`, branch_active: true, ...overrides };
+    return { node_id: id, zone: id, episode_id: `${id}:1`, at: "2026-09-16T00:00:00Z", kind: "positive", branch_active: true, ...overrides };
 }
 
 function pathWire(route = [visit("a"), visit("b"), visit("c")], overrides = {}) {
-    return { route, endpoint: clone(route.at(-1)), track_confidence: "provisional", endpoint_eligible: true, ...overrides };
+    return { route, visits: route, spatial_at: "2026-09-16T00:00:00Z", branch_routes: [], endpoint: clone(route.at(-1)), track_confidence: "provisional", endpoint_eligible: true, ...overrides };
 }
 
 function statusWire(overrides = {}) {
@@ -84,7 +84,7 @@ function statusWire(overrides = {}) {
         transition_counts: { a: { b: 7 }, b: { c: 3 } },
         ...overrides,
         occupancy_diagnostics: {
-            model: "zone_belief", expected_occupants: count, unsupported_count: null,
+            model: "zone_belief", expected_occupants: count, unsupported_count: null, selected_path_version: 2,
             beliefs: Object.fromEntries(ids.map(id => [id, id === "e" ? 0.99 : 0.8])),
             // Presence styling must not depend on the policy being active.
             policy: Object.fromEntries(ids.map(id => [id, { active: id === "c", profile: "stay_presence" }])),
@@ -776,7 +776,10 @@ test("malformed selected data and inconsistent counts display unavailable instea
 
 test("overlapping slots retain all memberships and OFF endpoint remains history rather than Unlocated", async t => {
     const status = statusWire({ expected_occupants: 2 });
-    status.occupancy_diagnostics.selected_paths = [pathWire(), pathWire([visit("b"), visit("c")], { track_confidence: "confirmed" })];
+    // Distinct generations replace duplicate cross-slot ownership in the old
+    // mock. Keep the same public strongest-role and both-slot endpoint oracles.
+    status.occupancy_diagnostics.selected_paths = [pathWire(), pathWire([visit("b", { episode_id: "b:2" }), visit("c", { episode_id: "c:2" })], { track_confidence: "confirmed" })];
+    for (const row of status.occupancy_diagnostics.episodes) if (["b", "c"].includes(row.node_id)) row.episode_id = `${row.node_id}:2`;
     const h = await ready(t, { status });
     assert.equal(h.panel.querySelectorAll(".path-slot").length, 2);
     assert.match(h.$('[data-zone="c"] .path-role-label').textContent, /Slot 1, Slot 2/);

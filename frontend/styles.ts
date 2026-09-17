@@ -148,6 +148,9 @@ export const panelStyles = `
   predictive-controls-panel .selected-paths { background:var(--card-background-color); border:1px solid var(--divider-color); border-radius:8px; padding:16px; min-width:0; }
   predictive-controls-panel .selected-paths h3 { margin-top:0; }
   predictive-controls-panel .selected-paths .path-slot { font-weight:400; border-top:1px solid var(--divider-color); padding:12px 0; }
+  predictive-controls-panel .path-slot h4 { margin:0 0 8px; font-size:13px; }
+  predictive-controls-panel .path-overlap { margin:12px 0; padding:12px; border:1px solid var(--divider-color); border-radius:6px; min-width:0; }
+  predictive-controls-panel .path-overlap > small { display:block; margin-top:8px; color:var(--secondary-text-color); }
   predictive-controls-panel .path-badge { display:inline-block; border:1px solid var(--divider-color); border-radius:999px; padding:3px 8px; margin-bottom:10px; font-size:12px; }
   predictive-controls-panel .path-chips { counter-reset:route; }
   predictive-controls-panel .path-chip { counter-increment:route; }

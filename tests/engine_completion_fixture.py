@@ -116,7 +116,7 @@ def donate_frontier(
 
 
 def correlated_ready() -> tuple[PredictiveMap, ZoneModelEngine]:
-    """Exact independently reproduced source recipe, with actual mmWave T."""
+    """Independent C36 token after real overlap eviction, with actual mmWave T."""
     predictive_map = graph({
         "a": ("b",), "b": ("a", "c"), "c": ("b", "z", "t"),
         "x": ("y",), "y": ("x", "z"), "z": ("y", "c", "e"),
@@ -133,6 +133,40 @@ def correlated_ready() -> tuple[PredictiveMap, ZoneModelEngine]:
     roundtrip(predictive_map, engine)
     engine.observe(event("e", "on", 37))
     roundtrip(predictive_map, engine)
+    before = engine.snapshot
+    token, = (t for t in before.traversal_tokens
+              if t.node_id == "c" and t.accepted_at == at(36))
+    binding, = (b for b in before.support_token_bindings
+                if b.token_id == token.token_id)
+    support, = (s for s in before.anonymous_supports
+                if s.support_id == binding.support_id)
+    physical = next(s for s in before.episode_states if s.node_id == "c")
+    assert any(witness[-1].episode_id == token.episode_id
+               for path in before.selected_paths if path is not None
+               for witness in path.branch_routes)
+    counts = engine.prediction_manager.chain.counts
+    debt = engine.prediction_state["deferred_counts"]
+    # PATH007/008: E37 alone keeps C36 as a selected overlap tip. Observed Z/E
+    # generations fill the four-visit history; no private selection manipulation.
+    # The old ineligible C2 endpoint in the other slot still covers node C, so
+    # its independently donated C36 token remains a valid fallback qualification.
+    for _ in range(2):
+        for node in ("z", "e"):
+            for state in ("unavailable", "on"):
+                engine.observe(event(node, state, 37))
+                current = engine.snapshot
+                assert token in current.traversal_tokens
+                assert binding in current.support_token_bindings
+                assert support in current.anonymous_supports
+                assert physical == next(s for s in current.episode_states
+                                        if s.node_id == "c")
+                roundtrip(predictive_map, engine)
+    assert all(v.episode_id != token.episode_id
+               for path in engine.snapshot.selected_paths if path is not None
+               for v in path.occurrences)
+    assert engine.prediction_manager.chain.counts == counts
+    assert engine.prediction_state["deferred_counts"] == debt
+    assert not engine._pending_prediction_learning
     return predictive_map, engine
 
 

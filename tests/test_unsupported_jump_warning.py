@@ -34,6 +34,7 @@ from custom_components.predictive_controls.zone_model.supported_gap_acquisition 
 from custom_components.predictive_controls.zone_model.traversal import TraversalFrontier
 from custom_components.predictive_controls.zone_model.types import SensorInput
 from tests.gap_component_fixture import gap_source_components
+from tests.overlap_retirement_fixture import retirement_inputs
 from tests.runtime_replay import ActiveEdge, RuntimeReplay, RuntimeScenario
 from tests.test_zone_model_supported_gap_acquisition import gap_map
 
@@ -247,6 +248,11 @@ def test_actual_prediction_confirmation_and_expiry_inverse(
         learned = deepcopy(replay.runtime.chain.counts)
         for second, node in enumerate(("a", "b", "c", "e")):
             replay.send(f"binary_sensor.{node}", "on", at(second))
+        for event in retirement_inputs(at(3), pair=("b", "e")):
+            replay.send(event.entity_id, event.state, event.event_at)
+        assert all(visit.node_id != "c"
+                   for path in replay.inference_snapshot().selected_paths if path
+                   for visit in path.occurrences)
         assert replay.attributes["t"]["phase"] == "predicted"
         replay.send("binary_sensor.t", "on", at(target_at))
         assert replay.view().active("t") is (target_at < 12)
@@ -266,6 +272,11 @@ def test_unselected_mature_lease_does_not_suppress_warning() -> None:
             (100, "a", "on"), (101, "b", "on"), (102, "c", "on"), (103, "e", "on"),
         ):
             replay.send(f"binary_sensor.{node}", state, at(second))
+        for event in retirement_inputs(at(103), pair=("b", "e")):
+            replay.send(event.entity_id, event.state, event.event_at)
+        assert all(visit.node_id != "c"
+                   for path in replay.inference_snapshot().selected_paths if path
+                   for visit in path.occurrences)
         # Actual evidence-active policy naturally prevents the mature lease from
         # acquiring. No policy/lease state is injected to manufacture this inverse.
         assert replay.attributes["t"]["phase"] == "active"

@@ -1001,6 +1001,7 @@ class ZoneModelEngine:
         beliefs: dict[str, ZoneBeliefState] = {}
         for frontier, grouped in groupby(effects, key=lambda effect: effect.at):
             group = tuple(grouped)
+            covered_before = self._selected_paths.covered_zones
             self._advance_components(frontier, reconcile=False)
             projected = self._episode_states_at(before, frontier)
             states = {state.node_id: state for state in projected}
@@ -1009,7 +1010,8 @@ class ZoneModelEngine:
                     states[effect.node_id], effect,
                     episode_states_before_advance=before,
                 )
-            self._reconcile_selected(frontier, projected)
+            self._selected_paths.reconcile(projected, frontier)
+            self._coverage_changed(covered_before, frontier, projected)
             for effect in group:
                 self._capture_qualified_release_belief(effect, beliefs)
             # Capture after every same-time clear/reselection, never between them.
@@ -1402,13 +1404,16 @@ class ZoneModelEngine:
             )
         }
 
-    def _coverage_changed(self, before: frozenset[str], at: datetime) -> None:
+    def _coverage_changed(
+        self, before: frozenset[str], at: datetime,
+        states: tuple[EpisodeState, ...] | None = None,
+    ) -> None:
         sources = {source.node_id: source for source in self._selected_paths.sources}
         selected_episodes = {
             visit.episode_id for path in self._selected_paths.paths if path is not None
-            for visit in (*path.visits, *path.route)
+            for visit in path.occurrences
         }
-        for state in self._episodes.states:
+        for state in self._episodes.states if states is None else states:
             source = sources[state.node_id]
             if (
                 source.consumed
@@ -1459,7 +1464,7 @@ class ZoneModelEngine:
         self._selected_paths.reconcile(
             self._episodes.states if states is None else states, at,
         )
-        self._coverage_changed(before, at)
+        self._coverage_changed(before, at, states)
 
     def _advance_supports(self, at: datetime) -> None:
         self._supports.advance(
@@ -2090,16 +2095,25 @@ class ZoneModelEngine:
             raise ValueError("Selected-path engine cannot restore count degradation")
         for selected_source in snapshot.selected_sources:
             if selected_source.episode_id is not None:
-                self._episode_reference(
+                physical, _ = self._episode_reference(
                     selected_source.episode_id,
                     episodes,
                     at,
                     exact=False,
                     selected=True,
                 )
+                # Only the exact current episode can prove its original effect.
+                # Resets may clear correlation without changing the episode;
+                # the converse implication (or historical equality) is unsafe.
+                if (
+                    physical.episode_id == selected_source.episode_id
+                    and physical.cadence_correlated
+                    and selected_source.origin != "correlated"
+                ):
+                    raise ValueError("Selected source contradicts physical correlation")
         for selected_path in snapshot.selected_paths:
             if selected_path is not None:
-                for visit in (*selected_path.visits, *selected_path.route):
+                for visit in selected_path.occurrences:
                     self._episode_reference(
                         visit.episode_id, episodes, at, exact=False, selected=True,
                     )
@@ -2163,7 +2177,7 @@ class ZoneModelEngine:
                     visit.episode_id == belief.generation_episode_id
                     and visit.zone == belief.zone and not visit.branch_active
                     for path in snapshot.selected_paths if path is not None
-                    for visit in path.visits
+                    for visit in path.occurrences
                 )
             ):
                 raise ValueError("Retired selected generation has no displacement")

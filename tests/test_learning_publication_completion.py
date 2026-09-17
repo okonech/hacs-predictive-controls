@@ -30,6 +30,10 @@ from custom_components.predictive_controls.zone_model.types import (
     TraversalAuthorization,
     ZoneModelResult,
 )
+from tests.learning_qualification_fixture import (
+    learning_qualification_inputs,
+    learning_qualification_map,
+)
 from tests.test_zone_model_persistence import structural_payload
 
 START = datetime(2026, 9, 8, tzinfo=UTC)
@@ -56,7 +60,7 @@ def _map(*, same_row: bool = False) -> PredictiveMap:
             "q": ["w", "r"], "r": ["q", "e"], "e": ["r", "c"],
             "c": ["b", "z", "t", "e", "v"], "v": ["c"],
         })
-    return PredictiveMap.from_mapping({"nodes": {
+    predictive_map = PredictiveMap.from_mapping({"nodes": {
         node: {
             "role": "room_occupancy", "occupancy_behavior": "sustained",
             "entities": {"motion": f"binary_sensor.{node}"},
@@ -64,6 +68,7 @@ def _map(*, same_row: bool = False) -> PredictiveMap:
         }
         for node, neighbors in adjacent.items()
     }})
+    return predictive_map if same_row else learning_qualification_map(predictive_map)
 
 
 def _round_trip(predictive_map: PredictiveMap, engine: ZoneModelEngine) -> None:
@@ -74,12 +79,17 @@ def _round_trip(predictive_map: PredictiveMap, engine: ZoneModelEngine) -> None:
     assert serialize_target_state(predictive_map, restored) == payload == before
 
 
-def _restored(predictive_map: PredictiveMap) -> ZoneModelEngine:
+def _restored(
+    predictive_map: PredictiveMap, *, qualify_overlap: bool = True,
+) -> ZoneModelEngine:
     prefix = tuple(_input(node, state, at) for node, state, at in (
         ("a", "on", 0), ("b", "on", 1), ("c", "on", 2),
         ("c", "unavailable", 3), ("x", "on", 4), ("y", "on", 5),
         ("z", "on", 6), ("c", "on", 36),
     ))
+    if qualify_overlap:
+        # e37 must actually evict c36, not use its valid nonlearning overlap.
+        prefix += learning_qualification_inputs(_at(36))
     payload = structural_payload(predictive_map, prefix, count=2)
     original = deepcopy(payload)
     engine = restore_target_state(predictive_map, payload, _at(36))
@@ -93,7 +103,7 @@ def _pending(
 ) -> tuple[PredictiveMap, ZoneModelEngine, TraversalAuthorization, SensorInput]:
     """Actual observations create learning; no private queue/state injection."""
     predictive_map = _map(same_row=same_row)
-    engine = _restored(predictive_map)
+    engine = _restored(predictive_map, qualify_overlap=not same_row)
     if same_row:
         engine.observe(_input("c", "off", 64 if equal_time else 67))
         assert not engine.prediction_manager.leases

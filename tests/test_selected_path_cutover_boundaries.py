@@ -31,6 +31,7 @@ from custom_components.predictive_controls.zone_model.persistence import (
     restore_target_state,
 )
 from custom_components.predictive_controls.zone_model.types import ZoneModelSnapshot
+from tests.overlap_retirement_fixture import retired_prefix_inputs, retired_prefix_map
 from tests.runtime_replay import ActiveEdge, RuntimeReplay, RuntimeScenario
 
 
@@ -133,18 +134,24 @@ def test_runtime_prior_branch_return_acquires_before_stable_clear(
 def test_strict_restore_rejects_null_displacement_for_retired_c(
     predictive_map: PredictiveMap, count: int,
 ) -> None:
+    predictive_map = retired_prefix_map(predictive_map)
     with RuntimeScenario(at(0)) as scenario:
         replay = scenario.create(predictive_map, count)
-        walk_to_c(replay)
-        replay.send("binary_sensor.x", "on", at(3))
+        for event in retired_prefix_inputs(at(0)):
+            replay.send(event.entity_id, event.state, event.event_at)
+        assert replay.edges_for("c") == (ActiveEdge(at(2), "c", True),)
         assert replay.edges_for("x") == (ActiveEdge(at(3), "x", True),)
         payload = json.loads(json.dumps(replay.checkpoint()))
         valid = restore_target_state(predictive_map, payload, at(3))
         path = valid.snapshot.selected_paths[0]
         assert path is not None
-        assert tuple(visit.node_id for visit in path.route) == ("a", "x")
-        retired = next(visit for visit in path.visits if visit.node_id == "c")
+        assert tuple(visit.node_id for visit in path.route) == ("b", "a", "x")
+        assert all(visit.node_id != "c" for visit in path.visits)
+        retired = next(visit for visit in path.occurrences if visit.node_id == "c")
         assert not retired.branch_active
+        assert tuple(visit.node_id for visit in path.branch_routes[0]) == (
+            "b", "c", "retirement_inner", "retirement_tip",
+        )
         c_belief = next(state for state in valid.snapshot.belief_states
                 if state.zone == "c")
         assert c_belief.generation_episode_id == retired.episode_id

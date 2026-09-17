@@ -166,7 +166,7 @@ def _target_map_fingerprint_payload(
         payload["impossible_cadence_preservation_version"] = 1
         payload["supported_gap_acquisition_version"] = 1
         payload["settled_endpoint_release_version"] = 1
-        payload["selected_path_version"] = 1
+        payload["selected_path_version"] = 2
         payload["presence_gated_departure_version"] = 1
         payload["selected_prediction_execution_version"] = 1
         payload["unsupported_jump_diagnostics_version"] = 1

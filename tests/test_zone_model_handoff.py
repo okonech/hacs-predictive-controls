@@ -43,6 +43,10 @@ from custom_components.predictive_controls.zone_model.types import (
     ZonePolicyState,
 )
 from tests.handoff_lifecycle_fixture import component_arrival
+from tests.learning_qualification_fixture import (
+    learning_qualification_inputs,
+    learning_qualification_map,
+)
 from tests.persistence_component_fixture import (
     PersistenceComponents,
     component_wire,
@@ -2023,6 +2027,9 @@ Production owner must repair/reconcile this red; this test-only worker cannot.
         ("c", "unavailable", 3), ("x", "on", 4), ("y", "on", 5),
         ("z", "on", 6), ("c", "on", 36),
     ))
+    # Synthetic observed branch qualification; original c/e/t/u and oracle stay.
+    predictive_map = learning_qualification_map(predictive_map)
+    prefix += learning_qualification_inputs(_at(36))
     payload = structural_payload(predictive_map, prefix, count=2)
     original = deepcopy(payload)
     engine = restore_target_state(predictive_map, payload, _at(36))

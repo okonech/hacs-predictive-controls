@@ -210,7 +210,10 @@ def test_middle_clear_does_not_invent_an_a_to_c_edge() -> None:
     scene.restart(4)
     assert scene.send("x", 5) is not None
     assert tuple(v.node_id for v in scene.located[0].route) == ("a", "x")
-    assert scene.reducer.covered_nodes == frozenset({"a", "x"})
+    assert scene.reducer.covered_nodes == frozenset({"a", "c", "x"})
+    witness, = scene.located[0].branch_routes
+    assert tuple(v.node_id for v in witness) == ("a", "b", "c")
+    assert not witness[1].branch_active
 
 
 def test_branch_truncation_retires_suffix_and_keeps_self_contained_route() -> None:
@@ -220,17 +223,49 @@ def test_branch_truncation_retires_suffix_and_keeps_self_contained_route() -> No
     path = scene.located[0]
     assert tuple(v.node_id for v in path.visits) == ("c", "x", "y", "z")
     assert tuple(v.node_id for v in path.route) == ("a", "x", "y", "z")
-    assert not path.visits[0].branch_active
+    assert path.visits[0].branch_active
     scene.restart(6)
-    # D neighbors retired C only. C is still physically ON, but cannot reseed.
-    assert scene.send("d", 7) is None
+    # C is still retained pre-input; D may use it even as appending D evicts C.
+    auth = scene.send("d", 7)
+    assert auth is not None and auth.path_node_ids == ("b", "c", "d")
+    assert auth.selected_source_episode_ids == (scene.states["c"].episode_id,)
+    assert tuple(v.node_id for v in scene.located[0].route) == ("a", "b", "c", "d")
     assert len(scene.located) == 1
+    scene.restart(7)
+    # Independent control: the newly valid D changes the main route above.
+    scene = Scene(2)
+    for seconds, node in enumerate(("a", "b", "c", "x", "y", "z")):
+        scene.send(node, seconds)
+    scene.clear("c", 6)  # Otherwise the newer supported C correctly wins B.
+    scene.restart(6)
     # A's original occurrence remains an eligible self-contained route source.
     auth = scene.send("b", 8)
     assert auth is not None and auth.path_node_ids == ("a", "b")
     assert tuple(v.node_id for v in scene.located[0].route) == ("a", "b")
     assert scene.located[0].route[0].at == at(0)
     scene.restart(9)
+
+
+@pytest.mark.parametrize("retirement", ("history", "clear", "superseded"))
+def test_retired_saved_tip_cannot_reseed_from_raw_on(retirement: str) -> None:
+    scene = Scene(2)
+    for seconds, node in enumerate(("a", "b", "c", "x", "y", "z")):
+        scene.send(node, seconds)
+    original = scene.states["c"]
+    assert scene.located[0].branch_routes[-1][-1].episode_id == original.episode_id
+    if retirement == "history":
+        assert scene.send("y", 6) is not None
+    elif retirement == "clear":
+        scene.clear("c", 6)
+    else:
+        scene.fact("c", 6)  # New physical generation, not a selected observation.
+        scene.reducer.reconcile(scene.current, at(6))
+    assert all(witness[-1].node_id != "c" for witness
+               in scene.located[0].branch_routes)
+    assert scene.states["c"].known_on is (retirement != "clear")
+    scene.restart(7)
+    assert scene.send("d", 8) is None
+    assert len(scene.located) == 1
 
 
 def test_bounded_prefix_cannot_reseed_from_still_on_generation() -> None:
@@ -731,7 +766,11 @@ def test_pure_branch_relocation_updates_spatial_frontier_without_fake_visit() ->
     assert next_path.spatial_at == at(3)
     assert tuple(v.node_id for v in next_path.route) == ("a", "a")
     assert tuple(v.at for v in next_path.route) == (at(0), at(3))
-    assert all(not v.branch_active for v in next_path.visits[1:3])
+    assert all(v.branch_active for v in next_path.visits[1:3])
+    assert tuple(tuple(v.node_id for v in witness)
+                 for witness in next_path.branch_routes) == (
+        ("a", "b"), ("a", "b", "c"),
+    )
 
 
 def test_pure_transition_keeps_both_bounds_over_long_observed_route() -> None:

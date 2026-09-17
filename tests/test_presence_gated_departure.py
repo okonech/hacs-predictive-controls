@@ -39,6 +39,7 @@ from custom_components.predictive_controls.zone_model.types import (
     ZoneBeliefState,
     ZonePolicyState,
 )
+from tests.overlap_retirement_fixture import retire_overlap
 from tests.runtime_replay import ActiveEdge, RuntimeScenario
 
 
@@ -91,6 +92,13 @@ def retired(
     engine = ZoneModelEngine(predictive_map, count, at(0))
     for seconds, node in enumerate(("a", "b", "c", "x")):
         observe(engine, node, "on", seconds)
+    # Separate synthetic retirement qualification, not the public overlap replay.
+    retire_overlap(engine.observe, at(3))
+    assert all(visit.node_id not in {"b", "c"}
+               for path in engine.snapshot.selected_paths if path is not None
+               for visit in path.occurrences)
+    assert next(state for state in engine.snapshot.episode_states
+                if state.node_id == "c").known_on
     assert policy(engine).active
     assert belief(engine).path_displaced_at == at(3)
     return engine
@@ -116,7 +124,8 @@ def test_runtime_presence_until_clear_then_release_without_branch_revival(
         replay.advance(at(700))
         assert replay.edges_for("c") == (ActiveEdge(at(2), "c", True),)
         replay.send("binary_sensor.y", "on", at(701))
-        assert replay.edges_for("y") == ()  # Retired C is not a route origin.
+        # C is a retained overlap tip, not a retired raw-ON origin.
+        assert replay.edges_for("y") == (ActiveEdge(at(701), "y", True),)
         replay.send("binary_sensor.c", "off", at(710))
         replay.advance(at(719))
         assert replay.view().active("c")
@@ -129,7 +138,9 @@ def test_runtime_presence_until_clear_then_release_without_branch_revival(
         assert len(edges) == 2 and not edges[-1].active
         assert at(1020) < edges[-1].at <= at(1300)
         assert not replay.view().active("c")
-        assert replay.edges_for("y") == ()
+        assert edges == (ActiveEdge(at(2), "c", True),
+                 ActiveEdge(at(1050), "c", False))
+        assert replay.edges_for("y") == (ActiveEdge(at(701), "y", True),)
 
 
 @pytest.mark.parametrize("count", (1, 2))

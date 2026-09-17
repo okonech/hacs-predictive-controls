@@ -1,6 +1,6 @@
 """Bounded selected anonymous paths, independent of belief, policy and storage.
 
-REQ-PATH-001..004 and REQ-PATH-STATE-001. Only live episode effects enter
+REQ-PATH-001..008 and REQ-PATH-STATE-001..002. Only live episode effects enter
 ``observe``; startup levels enter ``reconcile`` and cannot establish origins.
 Records are immutable and serializable with dataclasses.asdict. Observation
 identity is (node, episode, UTC occurrence), not a slot or an unbounded counter.
@@ -66,13 +66,49 @@ class SelectedVisit:
     def __post_init__(self) -> None:
         _text(self.zone)
         _generation(self.node_id, self.episode_id, self.at)
-        if self.kind not in _KINDS or type(self.branch_active) is not bool:
+        if (type(self.kind) is not str or self.kind not in _KINDS
+            or type(self.branch_active) is not bool):
             raise ValueError("Selected visit kind or branch flag is invalid")
 
 
 def _visit_key(visit: SelectedVisit) -> tuple[datetime, str, str, str, str, bool]:
     return (visit.at, visit.node_id, visit.zone, visit.episode_id,
             visit.kind, visit.branch_active)
+
+
+def _validate_causal_order(
+    sequences: tuple[tuple[SelectedVisit, ...], ...],
+) -> None:
+    """Combine input, witnessed geometry and generation order, including ties."""
+    copies = {visit.episode_id: visit for records in sequences for visit in records}
+    order: dict[str, set[str]] = {key: set() for key in copies}
+    for records in sequences:
+        for a, b in zip(records, records[1:], strict=False):
+            order[a.episode_id].add(b.episode_id)
+    by_node: dict[str, list[SelectedVisit]] = {}
+    for visit in copies.values():
+        by_node.setdefault(visit.node_id, []).append(visit)
+    for visits in by_node.values():
+        ordered = sorted(
+            visits, key=lambda v: _generation(v.node_id, v.episode_id, v.at),
+        )
+        for a, b in zip(ordered, ordered[1:], strict=False):
+            order[a.episode_id].add(b.episode_id)
+    incoming = dict.fromkeys(order, 0)
+    for successors in order.values():
+        for key in successors:
+            incoming[key] += 1
+    ready = [key for key, count in incoming.items() if not count]
+    seen = 0
+    while ready:
+        key = ready.pop()
+        seen += 1
+        for successor in order[key]:
+            incoming[successor] -= 1
+            if not incoming[successor]:
+                ready.append(successor)
+    if seen != len(order):
+        raise ValueError("Selected combined causal order contains a cycle")
 
 
 @dataclass(frozen=True)
@@ -89,18 +125,25 @@ class SelectedPath:
     spatial_at: datetime
     track_confidence: str = "provisional"
     endpoint_eligible: bool = True
+    branch_routes: tuple[tuple[SelectedVisit, ...], ...] = ()
 
     def __post_init__(self) -> None:
         _utc(self.spatial_at)
-        if self.track_confidence not in {"provisional", "confirmed"}:
+        if (type(self.track_confidence) is not str
+                or self.track_confidence not in {"provisional", "confirmed"}):
             raise ValueError("Selected track confidence is invalid")
         if type(self.endpoint_eligible) is not bool:
             raise ValueError("Selected endpoint eligibility must be boolean")
-        for records in (self.visits, self.route):
+        if type(self.branch_routes) is not tuple or len(self.branch_routes) > 3:
+            raise ValueError("Selected overlap requires at most three witnesses")
+        for records in (self.visits, self.route, *self.branch_routes):
             if type(records) is not tuple or not 1 <= len(records) <= _LIMIT:
                 raise ValueError("Selected history and route require 1..4 visits")
             if any(not isinstance(item, SelectedVisit) for item in records):
                 raise ValueError("Selected path contains an invalid visit")
+        for records in (self.visits, self.route, *self.branch_routes):
+            for item in records:
+                item.__post_init__()
             if len({item.episode_id for item in records}) != len(records):
                 raise ValueError("Selected path repeats an observation")
             if any(a.at > b.at for a, b in zip(records, records[1:], strict=False)):
@@ -127,7 +170,7 @@ class SelectedPath:
         if self.track_confidence == "confirmed" and len(self.visits) < 3:
             raise ValueError("Confirmed selection requires three observed visits")
         by_node: dict[str, dict[int, datetime]] = {}
-        for visit in (*self.visits, *self.route):
+        for visit in self.occurrences:
             generation = _generation(visit.node_id, visit.episode_id, visit.at)
             times = by_node.setdefault(visit.node_id, {})
             if times.setdefault(generation, visit.at) != visit.at:
@@ -144,8 +187,62 @@ class SelectedPath:
             v.episode_id for v in self.route if v.episode_id in history
         ):
             raise ValueError("Selected history and route disagree on causal order")
-        if any(v.branch_active and v.episode_id not in route for v in self.visits):
+        tips = tuple(witness[-1] for witness in self.branch_routes)
+        tip_ids = {tip.episode_id for tip in tips}
+        if len(tip_ids) != len(tips) or tips != tuple(sorted(tips, key=_visit_key)):
+            raise ValueError("Selected overlap tips must be unique and canonical")
+        if any(
+            tip.kind not in {"positive", "correlated_positive"}
+            or not tip.branch_active or tip.episode_id not in history
+            or tip.episode_id in route for tip in tips
+        ):
+            raise ValueError("Selected overlap tip lacks retained active history")
+        if any(v.branch_active and v.episode_id not in route.keys() | tip_ids
+               for v in self.visits):
             raise ValueError("Retired history cannot retain branch authority")
+        copies: dict[str, SelectedVisit] = {}
+        for records in (self.visits, self.route, *self.branch_routes):
+            for visit in records:
+                if copies.setdefault(visit.episode_id, visit) != visit:
+                    raise ValueError("Selected occurrence copies disagree")
+                if (visit.branch_active
+                        and visit.episode_id not in route.keys() | tip_ids):
+                    raise ValueError("Retired history cannot retain branch authority")
+        # A fork records multiple successors, never multiple parents of one input.
+        parents: dict[str, str] = {}
+        for records in (self.route, *self.branch_routes):
+            for a, b in zip(records, records[1:], strict=False):
+                if parents.setdefault(b.episode_id, a.episode_id) != a.episode_id:
+                    raise ValueError("Selected occurrence has conflicting predecessors")
+        _validate_causal_order((self.visits, self.route, *self.branch_routes))
+
+    @property
+    def occurrences(self) -> tuple[SelectedVisit, ...]:
+        """All stored positions, including copies and prefix-only history."""
+        return (*self.visits, *self.route,
+                *(visit for witness in self.branch_routes for visit in witness))
+
+    @property
+    def authoritative_visits(self) -> tuple[SelectedVisit, ...]:
+        """Potential authority positions, not historical prefix ancestors."""
+        return (*self.route, *(witness[-1] for witness in self.branch_routes))
+
+    @property
+    def coverage(self) -> tuple[SelectedVisit, ...]:
+        return tuple(v for v in self.authoritative_visits
+                     if v.branch_active or v == self.endpoint)
+
+    @property
+    def eligible_visits(self) -> tuple[SelectedVisit, ...]:
+        return tuple(v for v in self.authoritative_visits if v.branch_active
+                     or (v == self.endpoint and self.endpoint_eligible))
+
+    def causal_rank(self, visit: SelectedVisit) -> int:
+        """Retained input order wins equal times, not canonical tip names."""
+        for index, item in enumerate(self.visits):
+            if item.episode_id == visit.episode_id:
+                return _LIMIT + index
+        return self.route.index(visit)
 
     @property
     def endpoint(self) -> SelectedVisit:
@@ -159,10 +256,53 @@ class SelectedPath:
 def _path_key(path: SelectedPath) -> tuple[
     tuple[tuple[datetime, str, str, str, str, bool], ...],
     tuple[tuple[datetime, str, str, str, str, bool], ...], datetime, str, bool,
+    tuple[tuple[tuple[datetime, str, str, str, str, bool], ...], ...],
 ]:
     # Full causal records, including duplicate nodes, define canonical order.
     return (tuple(map(_visit_key, path.route)), tuple(map(_visit_key, path.visits)),
-            path.spatial_at, path.track_confidence, path.endpoint_eligible)
+            path.spatial_at, path.track_confidence, path.endpoint_eligible,
+            tuple(tuple(map(_visit_key, witness)) for witness in path.branch_routes))
+
+
+def _normalized_path(
+    visits: tuple[SelectedVisit, ...], route: tuple[SelectedVisit, ...],
+    witnesses: tuple[tuple[SelectedVisit, ...], ...], spatial_at: datetime,
+    confidence: str, endpoint_eligible: bool = True,
+) -> SelectedPath:
+    """Revoke all copies BEFORE constructing a valid immutable live transition.
+
+    Never used by decoding/restore: malformed input must reject, not be repaired.
+    Promotion cannot restore an ancestor's withdrawn branch flag.
+    """
+    active: dict[str, bool] = {}
+    for records in (visits, route, *witnesses):
+        for visit in records:
+            active[visit.episode_id] = (
+                active.get(visit.episode_id, True) and visit.branch_active
+            )
+    if not endpoint_eligible:
+        active[route[-1].episode_id] = False
+    main = {v.episode_id for v in route}
+    history = {v.episode_id for v in visits}
+    retained = {
+        witness[-1].episode_id: witness for witness in witnesses
+        if witness[-1].episode_id in history - main
+        and active[witness[-1].episode_id]
+        and witness[-1].kind in {"positive", "correlated_positive"}
+    }
+    authority = main | retained.keys()
+
+    def normalize(visit: SelectedVisit) -> SelectedVisit:
+        return visit if not visit.branch_active or (
+            active[visit.episode_id] and visit.episode_id in authority
+        ) else replace(visit, branch_active=False)
+
+    branches = tuple(
+        tuple(map(normalize, witness))
+        for witness in sorted(retained.values(), key=lambda w: _visit_key(w[-1]))
+    )
+    return SelectedPath(tuple(map(normalize, visits)), tuple(map(normalize, route)),
+                        spatial_at, confidence, endpoint_eligible, branches)
 
 
 def _canonical(
@@ -189,7 +329,8 @@ class SelectedSource:
 
     def __post_init__(self) -> None:
         _text(self.node_id)
-        if self.origin not in _ORIGINS or type(self.consumed) is not bool:
+        if (type(self.origin) is not str or self.origin not in _ORIGINS
+            or type(self.consumed) is not bool):
             raise ValueError("Selected source class or consumption is invalid")
         if self.origin == "none":
             if self.episode_id is not None or self.at is not None or self.consumed:
@@ -241,7 +382,7 @@ class SelectedPaths:
     def covered_nodes(self) -> frozenset[str]:
         return frozenset(
             visit.node_id for path in self._paths if path is not None
-            for visit in path.route if visit.branch_active or visit == path.endpoint
+            for visit in path.coverage
         )
 
     @property
@@ -312,10 +453,10 @@ class SelectedPaths:
             )
 
         self._paths = _canonical(tuple(
-            None if path is None else replace(
-                path, visits=tuple(map(prune, path.visits)),
-                route=tuple(map(prune, path.route)),
-                endpoint_eligible=endpoint_eligible(path),
+            None if path is None else _normalized_path(
+                tuple(map(prune, path.visits)), tuple(map(prune, path.route)),
+                tuple(tuple(map(prune, witness)) for witness in path.branch_routes),
+                path.spatial_at, path.track_confidence, endpoint_eligible(path),
             ) for path in self._paths
         ))
         self._sources = {
@@ -360,9 +501,9 @@ class SelectedPaths:
 
     def _eligible_sources(
         self, target: SelectedVisit, states: dict[str, EpisodeState],
-    ) -> tuple[tuple[SelectedPath, int], ...]:
-        """The identical reconciled generation/flag basis for movement and diagnosis."""
-        sources: list[tuple[SelectedPath, int]] = []
+    ) -> tuple[tuple[SelectedPath, tuple[SelectedVisit, ...]], ...]:
+        """Movement and diagnosis share actual witnessed source prefixes."""
+        sources: list[tuple[SelectedPath, tuple[SelectedVisit, ...]]] = []
         for path in self._paths:
             if path is None:
                 continue
@@ -376,10 +517,11 @@ class SelectedPaths:
                 and state.status not in {"baseline", "unavailable"}
             )
             if usable:
-                sources.append((path, len(path.route) - 1))
+                sources.append((path, path.route))
             for index, visit in enumerate(path.route[:-1]):
                 if visit.branch_active:
-                    sources.append((path, index))
+                    sources.append((path, path.route[:index + 1]))
+            sources.extend((path, witness) for witness in path.branch_routes)
         return tuple(sources)
 
     def unsupported_jump(
@@ -396,8 +538,8 @@ class SelectedPaths:
             return False
         target = self._visit(effect)
         states = {item.node_id: item for item in before}
-        for path, index in self._eligible_sources(target, states):
-            source = path.route[index]
+        for _path, prefix in self._eligible_sources(target, states):
+            source = prefix[-1]
             if self._adjacent(source, target):
                 continue
             if any(target.node_id in self._neighbors[middle]
@@ -407,16 +549,16 @@ class SelectedPaths:
 
     def _continuation(
         self, target: SelectedVisit, states: dict[str, EpisodeState],
-    ) -> tuple[SelectedPath, int] | None:
+    ) -> tuple[SelectedPath, tuple[SelectedVisit, ...]] | None:
         endpoints: list[SelectedPath] = []
-        branches: list[tuple[SelectedPath, int]] = []
-        for path, index in self._eligible_sources(target, states):
-            if not self._adjacent(path.route[index], target):
+        branches: list[tuple[SelectedPath, tuple[SelectedVisit, ...]]] = []
+        for path, prefix in self._eligible_sources(target, states):
+            if not self._adjacent(prefix[-1], target):
                 continue
-            if index == len(path.route) - 1:
+            if prefix == path.route:
                 endpoints.append(path)
             else:
-                branches.append((path, index))
+                branches.append((path, prefix))
         if endpoints:
             residents = [p for p in endpoints if p.endpoint.zone == target.zone]
             if residents:
@@ -425,10 +567,10 @@ class SelectedPaths:
                             and p.spatial_at > latest_resident]
                 endpoints = incoming or residents
             selected = max(endpoints, key=lambda p: (p.updated_at, _path_key(p)))
-            return selected, len(selected.route) - 1
+            return selected, selected.route
         return max(branches, key=lambda item: (
-            item[0].route[item[1]].at, item[0].updated_at,
-            _path_key(item[0]), item[1],
+            item[1][-1].at, item[0].updated_at,
+            _path_key(item[0]), item[0].causal_rank(item[1][-1]),
         ), default=None)
 
     def _origin(
@@ -450,15 +592,20 @@ class SelectedPaths:
         return max(candidates, key=_visit_key, default=None)
 
     def _advance_path(
-        self, old: SelectedPath, index: int, target: SelectedVisit,
+        self, old: SelectedPath, index: int | tuple[SelectedVisit, ...],
+        target: SelectedVisit,
     ) -> SelectedPath:
-        # Truncate at the actual selected occurrence BEFORE append/bounding.
-        route = (*old.route[:index + 1], target)[-_LIMIT:]
-        retained = {v.episode_id for v in route}
-        visits = tuple(
-            v if v.episode_id in retained else replace(v, branch_active=False)
-            for v in (*old.visits, target)[-_LIMIT:]
-        )
+        # Select before history eviction. Only branch exclusion, NOT capacity
+        # trimming, banks a main prefix. Saved geometry is never reconstructed.
+        prefix = old.route[:index + 1] if isinstance(index, int) else index
+        chosen = {v.episode_id for v in prefix}
+        route = (*prefix, target)[-_LIMIT:]
+        visits = (*old.visits, target)[-_LIMIT:]
+        witnesses = (*old.branch_routes, *(
+            old.route[:position + 1] for position, visit in enumerate(old.route)
+            if visit.episode_id not in chosen and visit.branch_active
+            and visit.kind in {"positive", "correlated_positive"}
+        ))
         confidence = old.track_confidence
         if target.kind == "positive" and len(route) >= 3:
             a, b, c = route[-3:]
@@ -467,7 +614,7 @@ class SelectedPaths:
                 confidence = "confirmed"
         spatial_at = (target.at if target.zone != old.endpoint.zone
                       else old.spatial_at)
-        return SelectedPath(visits, route, spatial_at, confidence)
+        return _normalized_path(visits, route, witnesses, spatial_at, confidence)
 
     def _install(self, path: SelectedPath, old: SelectedPath | None = None) -> None:
         slots = list(self._paths)
@@ -526,9 +673,9 @@ class SelectedPaths:
         old: SelectedPath | None = None
         source: SelectedVisit | None = None
         if continuation is not None:
-            old, index = continuation
-            source = old.route[index]
-            path = self._advance_path(old, index, target)
+            old, prefix = continuation
+            source = prefix[-1]
+            path = self._advance_path(old, prefix, target)
         else:
             source = self._origin(target, current)
             if source is not None:
@@ -648,7 +795,7 @@ class SelectedPaths:
             if path.updated_at > at:
                 raise ValueError("Selected path occurs after restore")
             local: set[str] = set()
-            for visit in (*path.visits, *path.route):
+            for visit in path.occurrences:
                 visit.__post_init__()
                 node = self._nodes.get(visit.node_id)
                 if node is None or node.zone != visit.zone:
@@ -683,14 +830,18 @@ class SelectedPaths:
                 ):
                     raise ValueError("Selected visit is not accounted by its ledger")
             accounted.update(local)
-            if any(not self._adjacent(a, b) for a, b in zip(
-                path.route, path.route[1:], strict=False,
-            )):
+            if any(not self._adjacent(a, b)
+                   for witness in (path.route, *path.branch_routes)
+                   for a, b in zip(witness, witness[1:], strict=False)):
                 raise ValueError("Selected route contains an unobserved graph edge")
         for times in chronology.values():
             ordered = [times[generation] for generation in sorted(times)]
             if ordered != sorted(ordered):
                 raise ValueError("Selected generation chronology differs across paths")
+        _validate_causal_order(tuple(
+            sequence for path in paths if path is not None
+            for sequence in (path.visits, path.route, *path.branch_routes)
+        ))
         self._paths = paths
         self._sources = records
         self._at = at
@@ -734,19 +885,39 @@ def _decode_visit(value: object) -> SelectedVisit:
 
 def decode_paths(value: object) -> tuple[SelectedPath | None, ...]:
     """Strict JSON leaves; map/count/ledger validation belongs to restore."""
+    raw = _array(value)
+    if len(raw) > 2:
+        raise ValueError("Selected JSON paths are not bounded and canonical")
+    # Preflight EVERY raw cardinality before decoding even the first leaf.
+    for item in raw:
+        if item is None:
+            continue
+        data = _object(item, {
+            "visits", "route", "spatial_at", "track_confidence", "endpoint_eligible",
+            "branch_routes",
+        })
+        branches = _array(data["branch_routes"])
+        if len(branches) > 3:
+            raise ValueError("Selected overlap requires at most three witnesses")
+        for records in (data["visits"], data["route"], *branches):
+            if not 1 <= len(_array(records)) <= _LIMIT:
+                raise ValueError("Selected history and route require 1..4 visits")
     result: list[SelectedPath | None] = []
-    for item in _array(value):
+    for item in raw:
         if item is None:
             result.append(None)
             continue
         data = _object(item, {
             "visits", "route", "spatial_at", "track_confidence", "endpoint_eligible",
+            "branch_routes",
         })
         result.append(SelectedPath(
             tuple(_decode_visit(v) for v in _array(data["visits"])),
             tuple(_decode_visit(v) for v in _array(data["route"])),
             _timestamp(data["spatial_at"]), _text(data["track_confidence"]),
             _boolean(data["endpoint_eligible"]),
+            tuple(tuple(_decode_visit(v) for v in _array(witness))
+                for witness in _array(data["branch_routes"])),
         ))
     paths = tuple(result)
     if len(paths) > 2 or paths != _canonical(paths):

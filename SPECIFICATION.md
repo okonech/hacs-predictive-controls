@@ -5,9 +5,11 @@
 **Supported occupants:** 0 through 2, with 2 as the primary operating profile.
 **Implementation status:** Repository version `0.2.6` implements the approved
 selected-path, presence-gated departure, diagnostic-health, durable-learning and
-strict modular panel contracts. The presentation-only occupied-room warning fix
-and approved ten-cycle/twenty-minute flapping calibration pass their regressions.
-Full Python/incident/scenario/frontend, static and standalone p99 gates pass.
+strict modular panel contracts, including bounded overlapping selected branches.
+**Current local validation passes (2026-09-17):**3351 Python tests,100% statement
+and branch coverage; distinct83 incident,111 scenario and308 frontend cases pass.
+Ruff, mypy, strict types, shipped build/freshness, independent review and standalone
+100-event performance gates pass with unchanged100% coverage and5ms p99 limits.
 [Section 19.0](#current-local-conformance) distinguishes current results from
 historical green. No deployment, live restart or physical actuation is claimed.
 
@@ -40,8 +42,9 @@ their local validation. Frozen incident assertions remain retained.
   subject to the presence gate below. Raw held assertions cannot resurrect retired
   branches. Predictions remain
   downstream, create no selected path, and do not learn selected-only transitions.
-- **REQ-PATH-005, user-approved presence gate (2026-09-12):** Selected movement
-  retires branch authority immediately but cannot start departure-induced local
+- **REQ-PATH-005, user-approved presence gate (2026-09-12):** Loss of selected
+  branch authority (subject to PATH007/008's supported-overlap exception) cannot
+  start departure-induced local
   confidence decay while genuine noninteraction presence remains asserted in that
   zone. Physical `stay_presence` witnesses (not PIR/interaction/bootstrap-only
   levels) protect through their existing stable-clear confirmation. Departure decay
@@ -129,9 +132,79 @@ duplicates, active OFF/unknown or selected-covered warnings reject atomically.
 Historical fingerprint recipes exclude this later key without changing archived
 expected hashes. No proof is inferred from startup or old inference.
 
-### Current engine and retained component scope
+### Approved overlapping selected branches — 2026-09-16
 
-PATH001–006, HEALTH001–004, POLICY014, PRED008–009 and STATE013 govern the
+**Implemented and locally validated:** the office-arrival scenario reproduced
+the miss before the change and now passes; Section19.0 records complete green
+validation and retained qualification boundaries. This amendment overrides immediate
+suffix retirement only while bounded selected overlap remains supported.
+
+- **REQ-PATH-007:** When movement continues from an earlier selected occurrence,
+  preserve still-supported displaced positive/correlated occurrences as bounded
+  overlap tips in the SAME anonymous slot. Keep last4 chronological visits and
+  one connected main route of at most4 occurrences; at most3 `branch_routes`
+  preserve actual observed prefixes (each at most4) to distinct active tips in
+  those visits outside the main route. Prefix-only history confers no authority.
+  No raw-ON union, extra slot, artificial edge, person identity or retroactive
+  activation. An actual adjacent target detection remains required.
+- **REQ-PATH-008:** Select against pre-input eligible sources before append/bound
+  eviction. Preserve endpoint/resident/incoming priority and causal equal-time
+  ordering; a saved tip continues via its witnessed prefix, never chronological
+  visit adjacency. Stable clear, unavailable/current-generation mismatch, history
+  eviction, slot replacement and count0 revoke saved authority irreversibly.
+  Existing physical clear confirmation remains; only main endpoints retain OFF
+  continuation. Capacity-trimmed main prefixes do not become tips. Revocation
+  updates all copies; restoring/promoting a prefix never rearms retired ancestors.
+  Correlated selected tips may continue but correlated unselected origins cannot
+  seed. Saved interaction tips are excluded; existing main interaction rules stay.
+- **REQ-PATH-STATE-002:** Require current `branch_routes`, exact consumed ledger,
+  tip membership, canonical bounds, identical occurrence copies, legal directed
+  geometry, unique recorded predecessor (multiple successors permitted), acyclic
+  chronology including numeric same-node generations at equal times, and
+  cross-slot ownership. A revoked endpoint cannot retain branch authority;
+  prefix-only ancestors must be inactive in every copy. The exact current
+  physical episode with `cadence_correlated=True` requires ledger origin
+  `correlated` regardless of consumption. Do not require the converse: real
+  count/startup/availability resets can clear that physical flag; historical
+  generations do not inherit current physical provenance. Reject
+  malformed state atomically before pruning; validate bounds before leaf decoding.
+  Increment `selected_path_version` to2, retaining Store7/v4; old full inference
+  rejects before decode, configuration and historical readers remain preserved.
+- **REQ-DIAG-011:** Diagnostics expose `selected_path_version:2`. Coverage is
+  main endpoint plus active main branches and saved tips. Movement separately
+  applies endpoint eligibility; UI presence requires matching aggregate ON, not
+  clearing. Display observed overlap prefixes separately within the same slot;
+  prefix history never adds candidates. Current selection requires v2/valid
+  branch and history fields; malformed/old selection is unavailable without
+  hiding usable belief/policy data. Only absent selected_paths permits legacy
+  fallback. Validate combined input/witness/generation chronology across all slots,
+  including conflicting same-generation occurrences and decreasing times. Parse
+  exposed canonical numeric generations with exact node prefixes and arbitrary
+  integer precision; preserve the existing opaque-ID/suffix-independent client
+  contract, without inventing a backend consumed ledger in the browser. Equal-time
+  cross-node order follows observations, not lexical names. Projection must use
+  the producer's actual map and reject impossible geometry. Semantic selection
+  rejection must publish fresh independent belief/policy data; transport staleness
+  remains distinct and recovery restores exact selected routes/edges.
+  Deploy matching backend/bundle and reload browser; old cached JS may
+  ignore new fields. Prediction uses only the actual continued main-route suffix,
+  with existing independent grant, maturity, lease and no-selected-learning rules.
+
+**Approved synthetic scenario disposition:** preserve all captured incident inputs
+and public oracles. The user explicitly approved replacing conflicting synthetic
+immediate-retirement assumptions, including neighbor rejection in
+`test_runtime_presence_until_clear_then_release_without_branch_revival` and the
+OFF95 expectations of `test_runtime_single_path_branch_releases_former_room` and
+`test_runtime_hall_reassertion_does_not_delay_branch_release`, with measured overlap
+behavior/full unchanged dwell. Preserve their original sensor timelines; give
+truly revoked/evicted fixtures to corruption and lease/warning negatives. Preserve
+the original guarantees with named replacements, never skip or weaken validation.
+Final measured releases, preserved guarantees and retained qualification tests
+are recorded in Section19.0; the completed working specifications are removed.
+
+### Current engine and retained component scope (qualification boundaries)
+
+PATH001–008, PATH-STATE001–002, HEALTH001–004, POLICY014, PRED008–009 and STATE013 govern the
 selected-path engine wherever older component clauses differ. Selected slots are
 not anonymous count supports; selected coverage is not a token lease; diagnostic
 warnings are not physical episode faults. The detailed token, support, count-conflict,
@@ -636,11 +709,14 @@ room-specific inactivity timers.
 
 ### 7.1 Current selected authority
 
-The engine maintains exactly N anonymous slots, including U, under PATH001–006.
+The engine maintains exactly N anonymous slots, including U, under PATH001–008.
 One real positive selects at most one compatible continuation or ordinary-live
 adjacent origin; source eligibility is evaluated on the deadline-reconciled
 pre-input generation. Four observed visits and four connected route occurrences
-bound each located slot. Held earlier branches may continue a route; clearing an
+bound each located slot, plus at most three witnessed prefixes of at most four
+occurrences to active retained overlap tips outside the main route. These are
+the same slot, not extra occupants; prefix-only ancestors have no authority.
+Held earlier branches may continue a route; clearing an
 intermediate withdraws its branch, not the observed connection or final endpoint.
 Unknown/mismatched endpoints retain location but cannot authorize neighboring
 movement until fresh eligible evidence. Raw levels and timers never rearm origins.
@@ -1971,9 +2047,9 @@ live episode-fault inference.
 
 ## 16. Acceptance Requirements
 
-**Scope reconciliation, 2026-09-14:** the existing requirements and named
-amendments below are preserved, not newly rewritten acceptance. PATH001–006,
-HEALTH001–004, POLICY014, PRED008–009 and STATE013 govern current selected/runtime
+**Scope reconciliation, 2026-09-17:** the existing requirements and named
+amendments below are preserved, not newly rewritten acceptance. PATH001–008,
+PATH-STATE001–002, HEALTH001–004, POLICY014, PRED008–009 and STATE013 govern current selected/runtime
 behavior; superseded token/count-fault/gap expectations remain genuine separately
 qualified component contracts. All originally frozen scenarios, material inputs,
 numeric thresholds and public oracles remain unchanged in this completion pass.
@@ -2316,7 +2392,124 @@ references remain in [Section 19.5](#deferred-operational-obligations) and
 
 <a id="current-local-conformance"></a>
 
-### 19.0 Current local conformance — validation recorded 2026-09-16
+### 19.0 Current local conformance — validation recorded 2026-09-17
+
+**PASS, local qualification only.** The office-overlap fix and the complete test
+repair pass every required gate. All3330 original Python case IDs, including the
+61 prior failures, remain and now pass;21 additive qualifications bring the total
+to3351. No frozen incident inputs/public oracles, coverage exclusions or performance
+limits were weakened. Separate corpus/scenario runs are not substituted by the
+full suite. Results below follow the final source/test changes and shipped build.
+
+| Executed gate                                                           | Completed result                                                                                                                                                                                                  |
+| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Exact retained office regression, separate run                          | **1 passed**,0.83s                                                                                                                                                                                                |
+| `.venv/bin/pytest --no-cov -q tests -k 'test_inc_'`                     | **83 passed**,32.75s, no failures/errors/skips                                                                                                                                                                    |
+| `.venv/bin/pytest --no-cov -q -m scenario`                              | **111 passed**,32.15s, no failures/errors/skips                                                                                                                                                                   |
+| `.venv/bin/pytest -q` with XML/coverage-JSON reports                    | **3351 passed**,182.02s pytest/183.848s outer; exit0, no failures/errors/skips                                                                                                                                    |
+| Statement / branch coverage, fresh full run                             | **100% /100%**,7980/7980 statements,3072/3072 branches; zero missing/partial,12 existing exclusions unchanged                                                                                                     |
+| `npm run test:frontend`                                                 | **308 passed**,3618.141102ms, no failures/cancellations/skips                                                                                                                                                     |
+| Repository Ruff / mypy                                                  | Pass;172 files checked by default mypy                                                                                                                                                                            |
+| `npm run build:frontend` then final `npm run check:frontend`            | Standard build, strict typecheck and nonwriting freshness pass; matching panels346980bytes, helpers7280bytes                                                                                                      |
+| `.venv/bin/python benchmarks/occupancy_performance.py --events 100`     | **Pass**,17.935s;11 positive workloads100/100 each, worst p99 **3.281639ms**, max **3.315469ms**; rejected100/100 p99 **2.789493ms**, max **2.984092ms**, zero ON; all timer/correctness/sample/fanout gates pass |
+| Frozen-source / index / editor / diff checks / independent final review | Pass; all250 pre-gate files unchanged through validation, index retained; no outstanding code blocker                                                                                                             |
+
+**Office incident and falsifiable cause:** approved read-only history, status,
+manual-press trace and logbook captures are retained in sibling Homelab's ignored
+tmp/missed-office-path-20260917/ (capture naming, not the incident date).
+Both stair sensors remained ON at office motion20:56:10.437899UTC on September16;
+foyer reactivation20:56:00.241805 had prematurely retired the upstairs branch.
+Live office active/light appeared only after manual press20:57:08.336000
+(recorder callback20:57:08.336333). Full31-node and induced9-node cold replays
+reproduced the miss; omitting only that foyer ON allowed motion-time activation.
+This isolates selected retirement, not an automation or sensitivity defect.
+Exact pre-walk inference/complete policy audit is unavailable; replay probabilities
+are not asserted as live beliefs, and the railing/physical direction is unproven.
+Primary history SHA256:
+`9adcc7c50bae18182f6d4c7a19f7ed6e03ae03de256b99467f1d57d7d403431b`.
+
+The permanent [office regression](tests/incidents/test_inc_2026_09_16_2054z_office_overlap_arrival.py)
+keeps all46 recorded deliveries/12 entities, exact9-node map, explicit11 binary
+OFF startup levels, neutral old button timestamp and configured count2. It failed
+before the production change (1failed0.25s: ON only at the press), passed immediately
+afterward, and now independently passes0.83s. It requires exactly one office ON
+at motion20:56:10.437899, no premature activation/release/reacquisition through
+the press, and no arrival-time unsupported_jump. September17 approval changed
+summary comments only; executable AST stayed unchanged. Frozen current file SHA256:
+`14b72ba80a0f70152429f1d7a089c00171b7d683a597472891aa23ed0b7a8bf0`.
+
+**Preserved qualification and named replacements:**
+
+- [Overlap reducer/engine tests](tests/test_selected_overlap.py) and
+  [real-map wire tests](tests/test_overlap_wire_contract.py) cover bounded count0/1/2,
+  pre-append source choice, all-copy revocation, strict restart/geometry and72 real
+  producer frames. Historical prefixes never become raw-ON authority. The approved
+  two synthetic room releases move OFF95 to105: actual support loss12, threshold
+  crossing42.084982 plus unchanged60s dwell gives due102.084982 and timer publication
+  105. Existing sensor streams remain; the separate presence case retains YON701
+  and Coff1050. [Retirement fixtures](tests/overlap_retirement_fixture.py) and
+  [selected-path boundaries](tests/test_selected_path_cutover_boundaries.py) give
+  rejection/corruption cases actual clear/generation/history eviction, rather than
+  falsely assuming a still-supported overlap is already retired.
+- Learning/publication repair resolves43 failures without enabling selected-only
+  learning or weakening callbacks/debt. [The qualification fixture](tests/learning_qualification_fixture.py)
+  extends the synthetic graph from Z by three actually observed nodes at36;
+  original E37 then evicts current C36, so T38 legitimately uses independently
+  qualified adjacent traversal. Original U39 callbacks still see uncommitted
+  statistics and exactly-once debt. [Eight controls](tests/test_learning_qualification.py)
+  require true eviction, old endpoint versus current generation separation,
+  strict roundtrips and no-token/unavailable rejection; same-row fixtures and
+  every original assertion remain unchanged.
+- Engine repair resolves16 failures with observed Z/E unavailable→ON generations
+  at37, preserving current C36 physical/token/support provenance and the original
+  T38/U39 acceptance. Retirement-only cases use actual OFF4/stable-clear14, not
+  immediate X4 retirement; route-only inputs are unchanged. [Three replacement
+  qualifications](tests/test_engine_overlap_qualification.py) retain the original
+  held-ON history-eviction/nonrearm sequence at count1/2 and assert the actual token
+  at real support preparation. No injected authorization or private path erasure.
+- The two [status producer failures](tests/test_status_wire_contract.py) were
+  synthetic missing-map-edge errors. Transport the actual reciprocal producer
+  map with lossless mapping/YAML roundtrip, keeping original status frames and
+  recovery assertions. [Frontend strict boundaries](tests/frontend/overlap_wire_boundaries.test.js)
+  supply source/shipped RED26/positive7 before the decoder fix, then34 passing
+  controls. Reject revoked-active endpoints and contradictory combined numeric
+  generation chronology; preserve valid forks, opaque identities, exact recovery
+  and fresh independent policy. The sole existing false-eligibility fixture
+  correction makes its default endpoint inactive; its original assertion stays.
+- [Physical provenance](tests/test_overlap_restore_provenance.py) retains18
+  one-way correlation/legitimate-reset controls. [Prefix-only authority](tests/test_overlap_prefix_authority.py)
+  covers the last previously missed constructor/codec guard at count1/2 using a
+  consistent two-copy ancestor corruption, unchanged receiver and real continuation.
+
+All repairs were mapped before editing, with exactly three parent/child hardening
+passes and independent scoped/final reviews. Selected-only movement remains
+nonlearning; real independent traversal is qualified at its actual boundary.
+The latest test-repair stage changed no backend, captured incident, shared runtime
+harness, benchmark or configuration. Original3330 IDs and all61 failed IDs are
+verified green; explicit83/111 corpus cases are subsets of full3351, not inferred
+passes. Coverage is a new non-append full measurement, not merged focused data.
+
+Final evidence: sibling Homelab tmp/missed-office-path-20260917/repair-final-*
+contains exact command vectors/exits, complete logs/XML, coverage JSON, benchmark
+JSON and preservation intake. Scoped repair-learning/engine/wire/prefix artifacts
+retain RED/GREEN and assertion/input preservation. The earlier verification audit
+remains historical:3269pass/61fail,99.891422% coverage; its first interrupted
+terminal attempt lacks final coverage and is never counted as complete.
+All commands finished; staged-entry digest remains
+`de69f1ed2d735c94fc2a110d61bad1dd4ff047c5fb844687f9b923f45114ce55`.
+
+Canonical contracts/results are reconciled; the completed office working spec and
+three scoped qualification plans are removed. Frozen source comments referring
+to those working records are provenance, not surviving design authority. The
+separate unresolved September5 external-office spec remains. No deployment,
+live restart, state reset, staging, commit or physical actuation is claimed.
+Rollout needs matching backend/346980byte panels and browser reload; selected v2
+changes the semantic fingerprint while Store7/v4 stays. Preserve configuration
+and backups; old full inference rejects and cold-reconstructs from subsequent
+evidence. Rollback requires a matching snapshot or cold bootstrap, never an edited
+fingerprint. Deferred operational checks below remain open.
+
+#### Historical green baseline — 2026-09-16, before overlapping-branch changes
 
 **Foyer flapping recalibration:** approved read-only status/logbook captures in
 sibling Homelab's ignored tmp/foyer-flapping-20260916/ confirm the former6/hour
@@ -2391,7 +2584,7 @@ locked dependencies and checks strict types and nonwriting freshness. No loader,
 inference, persistence or fingerprint changes. The larger asset includes the
 local YAML serializer instead of external runtime imports.
 
-| Current gate                                                 | Result after final code changes                                                                                                                                                        |
+| Historical gate                                              | September16 result before overlapping-branch changes                                                                                                                                   |
 | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Full Python `.venv/bin/pytest -q`                            | **3245 passed**,168.32s pytest /169.425s outer (2m49s); **100% statement/branch**,7874 statements/3002 branches, zero missing/partial                                                  |
 | Explicit `.venv/bin/pytest --no-cov -q tests -k 'test_inc_'` | **82 passed**,48.59s /48.739s outer                                                                                                                                                    |
@@ -2673,7 +2866,7 @@ actuation verification or external-incident closure.
 
 The removed intermediate ledgers supplied no additional current model requirement
 beyond the preamble and Sections 1–18. Earlier failed gates remain failed evidence,
-not retrospectively passing runs; only the distinct final2 results above establish
+not retrospectively passing runs; only distinct completed final runs establish
 the recorded local conformance. Exactly-three-pass design reviews and narrowly
 approved acceptance changes retain their original scope under
 [GOV005](#17-change-governance); deleting ledgers grants no new test amendment.
@@ -2702,7 +2895,7 @@ approved acceptance changes retain their original scope under
   startup mismatch, null-displacement rejection and immediate mixed-alias strict
   roundtrips. Aggregate startup levels cannot mint movement or protection; hold
   loss uses its actual frontier and never charges protected time to release.
-  PATH001–006 govern selection/retention; no device-timeout polling is implied.
+  PATH001–008 govern selection/retention; no device-timeout polling is implied.
 - **Scoped red-to-green proof:** the unchanged
   [Aug22 retained-presence incident](tests/incidents/test_inc_2026_08_22_1745z_prearrival_token_cannot_release_asserted_target.py)
   was **1 red → 1 green**, eliminating the reproduced 17:50:43Z public OFF.
@@ -2765,7 +2958,7 @@ These are carried-forward, deferred research and operational obligations, not ne
 model or policy requirements. Repository-green validation neither performs nor
 closes them. Documentation cleanup authorizes no deployment, device-setting change,
 new polling implementation, calibration amendment or external-incident closure.
-[Section 19.0](#current-local-conformance) records previously verified final2
+[Section 19.0](#current-local-conformance) records the latest verified local
 results; those local results do not close the obligations below.
 
 <a id="deferred-device-timing"></a>

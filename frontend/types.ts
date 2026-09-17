@@ -49,14 +49,21 @@ export interface Visit {
     zone: string;
     episode_id: string;
     branch_active: boolean;
-    at?: string;
-    kind?: string;
+    at: string;
+    kind: 'positive' | 'correlated_positive' | 'interaction';
 }
 export interface SelectedPath {
+    visits: Visit[];
     route: Visit[];
+    branch_routes: Visit[][];
+    spatial_at: string;
     track_confidence: 'provisional' | 'confirmed';
     endpoint_eligible: boolean;
     endpoint?: Visit;
+    updated_at?: string;
+    covered_node_ids?: string[];
+    covered_zones?: string[];
+    eligible_node_ids?: string[];
 }
 export interface Episode {
     node_id: string;
@@ -113,6 +120,7 @@ export interface Diagnostics {
     policy_audit?: AuditEntry[];
     episodes?: Episode[];
     path_health?: PathHealth[];
+    selected_path_version?: 2;
     selected_paths?: (SelectedPath | null)[];
     selected_paths_error?: string;
     reliability_warnings?: Warning[];

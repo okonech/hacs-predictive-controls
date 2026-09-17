@@ -13,7 +13,10 @@ remain consistent with it.
 The local implementation combines per-zone probability filters with one selected
 set of exactly N anonymous slots, including unlocated slots. Each located path
 retains at most four observed visits and four connected route occurrences;
-same-zone overlap is allowed. One real positive advances at most one slot.
+up to three witnessed prefixes preserve still-supported overlap tips in the same
+slot. Prefix-only history gives no movement authority. Same-zone overlap is
+allowed. One real positive advances at most one slot, and an actual adjacent
+target detection is required; raw ON sensors are not a global union of locations.
 Selected coverage retains only already evidence-active zones: endpoint OFF or
 elapsed time alone does not evict them, and rejected alternatives cannot hold
 every possible room on. Movement can displace old coverage, but genuine
@@ -34,30 +37,27 @@ Flapping warnings require **10 completed short ON→OFF cycles within a rolling
 the warning clears when fewer than ten remain. Aliases, duplicates and timers do
 not add cycles. This diagnostic-only rule replaces the former six-cycles/hour rule.
 
-**Validation recorded 2026-09-16:** **3245 Python tests pass**, with **100%
-statement/branch coverage** in **169.43 seconds (2m49s)** including worker startup
-and coverage reporting. Separate **82 incident cases**, **110 scenarios**, and
-**231 frontend tests** pass, as do Ruff, mypy, strict TypeScript, build and asset
-freshness checks. The [occupied-room warning regression](tests/incidents/test_inc_2026_09_15_1724z_occupied_rooms_stuck_warning.py)
-now passes; unsupported continuous presence is no longer labeled a stuck sensor.
-**The standalone performance gate passes:** worst positive p99 **2.095ms**,
-rejected-jump p99 **2.188ms**, with the unchanged **5ms** limit and complete
-100-sample qualification. The earlier equivalent health/audit allocation reductions
-preserved exact results and persisted state across1500 comparison events without
-changing model rules or thresholds. The later approved flapping calibration changes
-only diagnostics and their fingerprint; original incident primary inputs and lighting
-expectations remain intact. The [foyer regression](tests/incidents/test_inc_2026_09_16_0418z_foyer_flapping_warning.py)
-reproduced the old warning and now passes. Completed warning/UX/performance working specs
-have been reconciled and removed; permanent regressions remain.
-The [all-unavailable panel regression](tests/incidents/test_inc_2026_09_15_2056z_panel_status_unavailable.py)
-also passes: the frontend now accepts the server's null-or-integer diagnostic
-count instead of incorrectly requiring a Boolean. Real producer-to-panel tests
-protect this boundary; the full captured17-zone response renders offline. The
-rebuilt frontend still needs deployment and browser refresh for live recovery.
-See [current local conformance](SPECIFICATION.md#current-local-conformance) for
-exact evidence, preservation/diff caveats and deferred operational obligations,
-not historical green or failed baselines. No deployment, live Home Assistant
-restart or physical-light verification is claimed.
+**Current local validation, 2026-09-17: PASS.** **3,351 Python tests** pass with
+**100% statement and branch coverage** (7,980 statements/3,072 branches), in
+**183.85 seconds** including worker startup and coverage reporting. Separate runs
+pass all **83 incident tests**, **111 scenario-marked tests**, and **308 frontend
+tests**. All61 previously failing Python cases remain and pass. Ruff, mypy, strict
+TypeScript, build/freshness and independent review also pass.
+
+The standalone100-event benchmark passes all qualification/timer gates: worst
+positive p99 **3.282ms**, rejected-jump p99 **2.789ms**, below the unchanged
+**5ms** limit. The permanent [office-arrival regression](tests/incidents/test_inc_2026_09_16_2054z_office_overlap_arrival.py)
+preserves all46 recorded inputs and now activates at office motion rather than
+the later manual press. Synthetic qualification repairs preserve independent
+learning, true retirement and strict producer-to-panel contracts; no selected-only
+learning or weaker coverage gate was introduced.
+
+Completed office/qualification plans are reconciled and removed; permanent
+regressions and unresolved external operational work remain. See
+[current conformance and evidence](SPECIFICATION.md#current-local-conformance)
+for exact results and historical failures. Matching backend/assets still need
+deployment and browser reload. No live Home Assistant restart or physical-light
+verification is claimed.
 
 ### Persistence compatibility
 
@@ -66,8 +66,9 @@ restart or physical-light verification is claimed.
   selected, physical, policy and prediction/deferred-learning records. Old v4
   fingerprints, all v3 inference and v1 inference are rejected; a schema label
   or edited fingerprint cannot supply missing authority.
-- The ten-cycle/20-minute warning calibration changes that fingerprint. Deploying
-  it rejects old full inference and cold-reconstructs from subsequent evidence;
+- Both the ten-cycle/20-minute warning calibration and selected overlap version2
+  change that fingerprint. Deploying them rejects old full inference and
+  cold-reconstructs from subsequent evidence;
   configuration is retained. No live deployment or restart was performed here.
 - The separate schema-6 and v2 import paths retain only validated count/Boolean
   active seeds; v2 requires a retained allowed non-source-free acquisition edge.
@@ -110,6 +111,10 @@ dashed highlights mark one-hop possible destinations. History takes precedence
 over adjacency. Clearing A/B in A→B→C keeps A/B as history and C as current
 presence; it does not erase the retained route or endpoint. These are evidence
 views, not identified people. Warnings remain red without changing path roles.
+Supported overlapping prefixes are labeled separately within their original slot;
+prefix-only ancestors remain history, never new candidates. Invalid selection is
+unavailable without hiding fresh belief/policy data. Strict projection uses the
+actual configured map, and valid recovery restores the selected routes and edges.
 
 An unsupported continuously-ON observation is labeled **Continuous presence
 detected; path unverified**. Diagnostic timing, machine reason and occupancy

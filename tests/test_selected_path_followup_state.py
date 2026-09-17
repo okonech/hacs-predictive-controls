@@ -17,6 +17,7 @@ from custom_components.predictive_controls.model import PredictiveMap
 from custom_components.predictive_controls.zone_model.persistence import (
     restore_target_state,
 )
+from tests.overlap_retirement_fixture import retired_prefix_inputs, retired_prefix_map
 from tests.runtime_replay import ActiveEdge, RuntimeReplay, RuntimeScenario
 from tests.test_presence_gated_departure import (
     at,
@@ -173,8 +174,16 @@ def test_public_competing_endpoint_precedes_return_branch(
             send(replay, "c", "unavailable", 103)
         send(replay, "a", "on", 104)
         assert replay.input_edges_for("a") == (ActiveEdge(at(104), "a", True),)
-        # A's own ON cannot distinguish C->A from old-A branch replacement.
-        # Only retained C may authorize Y; incorrectly truncating to A loses it.
+        path, = (p for p in replay.inference_snapshot().selected_paths if p)
+        assert tuple(visit.node_id for visit in path.route) == (
+            ("a", "b", "c", "a") if endpoint_available else ("a", "a")
+        )
+        authorization = replay.runtime.confidence.diagnostics.authorizations[-1]
+        source = f"c:1:{at(2).isoformat()}" if endpoint_available else (
+            f"a:1:{at(0).isoformat()}"
+        )
+        assert authorization.selected_source_episode_ids == (source,)
+        # Y alone cannot distinguish endpoint priority from saved-tip recovery.
         send(replay, "y", "on", 105)
         expected = (ActiveEdge(at(105), "y", True),) if endpoint_available else ()
         assert replay.input_edges_for("y") == replay.edges_for("y") == expected
@@ -186,13 +195,14 @@ def test_corrupt_null_restore_preserves_nonempty_runtime_and_continuation(
     count: int,
 ) -> None:
     with RuntimeScenario(at(0)) as scenario:
-        donor = scenario.create(gate_map(), 3 - count)
-        live, control = (scenario.create(gate_map(), count) for _ in range(2))
+        mapping = retired_prefix_map(gate_map())
+        donor = scenario.create(mapping, 3 - count)
+        live, control = (scenario.create(mapping, count) for _ in range(2))
         for replay in (live, control):
             # Explicit nonzero learned-store fixture, below prediction maturity.
             assert replay.runtime.confidence.prediction_chain.observe("c", "y", 2.0)
-        for index, node in enumerate(("a", "b", "c", "x")):
-            send(donor, node, "on", index)
+        for index, event in enumerate(retired_prefix_inputs(at(0))):
+            donor.send(event.entity_id, event.state, event.event_at)
             if index < 2:
                 for replay in (live, control):
                     send(replay, ("c", "y")[index], "on", index)

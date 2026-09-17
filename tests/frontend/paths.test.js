@@ -30,11 +30,12 @@ function mapWire() {
 }
 
 function visit(node, overrides = {}) {
-    return { node_id: node, zone: `z${node}`, episode_id: `${node}:1`, branch_active: true, ...overrides };
+    return { node_id: node, zone: `z${node}`, episode_id: `${node}:1`, at: "2026-09-16T00:00:00Z", kind: "positive", branch_active: true, ...overrides };
 }
 
 function path(nodes = ["a", "b", "c"], overrides = {}) {
-    return { route: nodes.map(node => visit(node)), track_confidence: "confirmed", endpoint_eligible: true, ...overrides };
+    const route = overrides.route ?? nodes.map(node => visit(node));
+    return { route, visits: route, spatial_at: "2026-09-16T00:00:00Z", branch_routes: [], track_confidence: "confirmed", endpoint_eligible: true, ...overrides };
 }
 
 function diagnosticsWire(paths = [path()]) {
@@ -45,6 +46,7 @@ function diagnosticsWire(paths = [path()]) {
     return {
         model: "zone_belief",
         expected_occupants: paths.length,
+        selected_path_version: 2,
         selected_paths: paths,
         episodes: [...current.values()].map(v => ({ node_id: v.node_id, zone: v.zone, episode_id: v.episode_id, status: "asserted" })),
         // status.py publishes no episode_id in path_health. Generation comes only
@@ -145,7 +147,16 @@ test("A/B OFF and C ON retain history and derive candidates only from C", () => 
 });
 
 test("one-hop candidate union preserves overlapping anonymous slot memberships without recursion", () => {
-    const { result } = project(diagnosticsWire([path(), path(["x", "y", "c"], { track_confidence: "provisional" })]), mapWire(), 2);
+    // Distinct selected observations may overlap at one physical node; the old
+    // mock illegally assigned the SAME observation to two slots. First C is now
+    // history, second C current; strongest-role and both-slot guarantees remain.
+    const second = path(["x", "y", "c"], { track_confidence: "provisional" });
+    second.route[2].episode_id = "c:2";
+    const map = mapWire();
+    // Slot 1's current B, not its superseded C, supplies the original shared
+    // candidate oracle. Do not loosen current-generation matching to share C.
+    map.nodes.b.adjacent.push("c_next");
+    const { result } = project(diagnosticsWire([path(), second]), map, 2);
     membership(result, "a", "presence", [1]);
     membership(result, "x", "presence", [2]);
     membership(result, "c", "presence", [1, 2]);
@@ -202,7 +213,9 @@ test("unrelated raw ON, full belief and active policy remain neutral and cannot 
 
 test("route alone determines membership, not visits union, covered/eligible sets or old authorizations", () => {
     const selected = path();
-    selected.visits = [...selected.route, visit("raw")];
+    // Retired chronological history precedes the real endpoint and has no
+    // authority; intentionally irrelevant derived sets still cannot light raw.
+    selected.visits = [visit("raw", { branch_active: false }), ...selected.route];
     selected.covered_node_ids = ["a", "b", "c", "raw"];
     selected.covered_zones = ["za", "zb", "zc", "zraw"];
     selected.eligible_node_ids = ["a", "b", "c", "raw"];
@@ -228,7 +241,7 @@ test("zero occupants and present empty selection never fall back to historical p
 });
 
 test("explicit empty selection without an available count still means no selected paths, not legacy", () => {
-    const wire = { ...legacyWire(), selected_paths: [] };
+    const wire = { ...legacyWire(), selected_path_version: 2, selected_paths: [] };
     const { result } = project(wire);
     assert.equal(result.state, "selected");
     assert.equal(result.message, "No selected paths");
@@ -298,7 +311,7 @@ test("unsupported or inconsistent finite counts make selection unavailable witho
 
 test("malformed present selection is decoded as an explicit error and cannot activate legacy fallback", () => {
     for (const selected of [null, undefined, false, 1, "[]", {}, [false], [path([], {})], [null, null, null]]) {
-        const decoded = decodeDiagnostics({ ...legacyWire(), selected_paths: selected });
+        const decoded = decodeDiagnostics({ ...legacyWire(), selected_path_version: 2, selected_paths: selected });
         assert.equal(typeof decoded.selected_paths_error, "string");
         assertUnavailable(projectPaths(decodeMap(mapWire()), decoded));
     }
@@ -392,21 +405,19 @@ test("wrong episode or health zone cannot create presence or candidate sources",
     }
 });
 
-test("wrong map membership or zone keeps invalid occurrences visible but gives them no physical role membership", () => {
+test("wrong map membership or zone makes selection unavailable without physical role membership", () => {
     for (const mode of ["missing-node", "wrong-zone"]) {
         const rawMap = mapWire();
         if (mode === "missing-node") delete rawMap.nodes.a;
         else rawMap.nodes.a.zone = "other-zone";
         const { result } = project(diagnosticsWire(), rawMap);
-        assert.equal(result.slots[0].occurrences[0].valid, false);
-        assert.equal(result.slots[0].occurrences[0].role, "history");
-        assert.equal(result.slots[0].occurrences[0].issue, "Map membership unavailable");
+        assertUnavailable(result);
         membership(result, "a_next", "neutral");
         if (mode === "wrong-zone") {
             membership(result, "a", "neutral");
             membership(result, "other-zone", "neutral", [], "zones");
         } else assert.equal(result.nodes.has("a"), false);
-        assert.deepEqual(segments(result), [[1, "b", "c", "zb", "zc"]]);
+        assert.deepEqual(segments(result), []);
     }
 });
 
@@ -417,7 +428,7 @@ test("a missing or invalid middle never shortcuts A to C, even when a direct edg
         if (mode === "missing") delete rawMap.nodes.b;
         else rawMap.nodes.b.zone = "other-zone";
         const projected = project(diagnosticsWire(), rawMap);
-        assert.deepEqual(projected.result.slots[0].occurrences.map(o => o.visit.node_id), ["a", "b", "c"]);
+        assertUnavailable(projected.result);
         assert.deepEqual(projected.result.segments, []);
         const html = edgeMarkup(projected);
         assert.doesNotMatch(html, /selected-path-edge|path-arrow/);
@@ -427,11 +438,11 @@ test("a missing or invalid middle never shortcuts A to C, even when a direct edg
 
 test("an unobserved omitted middle cannot turn two-hop topology into a selected shortcut", () => {
     const projected = project(diagnosticsWire([path(["a", "c"])]));
-    assert.deepEqual(projected.result.slots[0].occurrences.map(o => o.visit.node_id), ["a", "c"]);
+    assertUnavailable(projected.result);
     assert.deepEqual(projected.result.segments, []);
-    membership(projected.result, "a", "presence", [1]);
-    membership(projected.result, "c", "presence", [1]);
-    membership(projected.result, "b", "candidate", [1]);
+    membership(projected.result, "a", "neutral");
+    membership(projected.result, "c", "neutral");
+    membership(projected.result, "b", "neutral");
     assert.doesNotMatch(edgeMarkup(projected), /selected-path-edge|path-arrow/);
 });
 
@@ -456,6 +467,7 @@ test("selected route segments and candidates respect configured direction withou
     const wire = diagnosticsWire([path(["c", "b", "a"])]);
     for (const occurrence of wire.selected_paths[0].route.slice(1)) occurrence.branch_active = false;
     const projected = project(wire, rawMap);
+    assertUnavailable(projected.result);
     assert.deepEqual(projected.result.segments, []);
     assert.deepEqual(idsWithRole(projected.result, "candidate"), []);
     assert.doesNotMatch(edgeMarkup(projected), /selected-path-edge|path-arrow/);
@@ -557,7 +569,9 @@ test("diagnostic warning kinds and active flags cannot alter path roles or candi
 });
 
 test("projection does not mutate frozen decoded map, routes, episodes, health or legacy diagnostics", () => {
-    for (const wire of [diagnosticsWire([path(), path(["x", "y", "c"])]), legacyWire()]) {
+    const second = path(["x", "y", "c"]);
+    second.route[2].episode_id = "c:2";
+    for (const wire of [diagnosticsWire([path(), second]), legacyWire()]) {
         const map = deepFreeze(decodeMap(mapWire()));
         const diagnostics = deepFreeze(decodeDiagnostics(wire));
         const beforeMap = structuredClone(map);
