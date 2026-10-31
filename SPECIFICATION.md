@@ -5,9 +5,11 @@
 **Supported occupants:** 0 through 2, with 2 as the primary operating profile.
 **Implementation status:** Repository version `0.2.6` implements the approved
 selected-path, presence-gated departure, diagnostic-health, durable-learning and
-strict modular panel contracts, including bounded overlapping selected branches.
-**Current local validation passes (2026-09-17):**3351 Python tests,100% statement
-and branch coverage; distinct83 incident,111 scenario and308 frontend cases pass.
+strict modular panel contracts, including bounded overlapping selected branches
+and the default-off Visitors lighting override in the unpublished release.
+**Current local validation passes (2026-10-30; 2026-10-31 UTC):**3391 Python tests,
+100% statement and branch coverage; distinct84 incident,112 scenario and308
+frontend cases pass.
 Ruff, mypy, strict types, shipped build/freshness, independent review and standalone
 100-event performance gates pass with unchanged100% coverage and5ms p99 limits.
 [Section 19.0](#current-local-conformance) distinguishes current results from
@@ -201,6 +203,44 @@ truly revoked/evicted fixtures to corruption and lease/warning negatives. Preser
 the original guarantees with named replacements, never skip or weaken validation.
 Final measured releases, preserved guarantees and retained qualification tests
 are recorded in Section19.0; the completed working specifications are removed.
+
+### Approved Visitors Lighting Override — 2026-10-30
+
+- **REQ-VISIT-001:** Provide one default-off native Home Assistant Visitors switch
+  per entry. While on, local mapped motion, PIR, mmWave, presence or occupancy ON
+  holds that zone's existing public active output independently of path/count
+  authorization. Already asserted sensors and normal-active zones join the hold
+  on enable/startup; subsequent normal-active zones remain held. Interactions,
+  event-domain sources, unknowns, malformed, stale and future callbacks cannot
+  create a motion hold. Per-entity frontiers reject callbacks before enable/start
+  or older than the latest input; sample current startup/enable inputs at now.
+  Unvisited inactive zones remain off. Use unique ID `<entry>_visitors_mode`,
+  forward/unload the switch platform and protect its ID during registry cleanup.
+- **REQ-VISIT-002:** Public active is normal active OR Visitors hold; Home Active
+  uses the same union. This explicit manual override excepts GOAL012 and COUNT001
+  public clearing only: count0 still clears inference, not manually held lighting.
+  No hold changes belief, selected paths, count, evidence, prediction or learning,
+  or emits an inference arrival. Existing brightness/sleep/safety consumers remain
+  authoritative for actual devices; manual device controls are not intercepted.
+- **REQ-VISIT-003:** OFF/unknown/unavailable never release enabled Visitors holds.
+  Disabling retains held zones for exactly30 seconds, then explicitly publishes
+  normal control without requiring another input edge. Repeated toggle calls do
+  not renew grace; reenable cancels grace. Mode never expires automatically.
+- **REQ-VISIT-004:** Persist independently versioned enabled/held-zone/absolute UTC
+  exit-deadline state, separate from inference and its fingerprint. Missing legacy
+  state defaults off; malformed manual data resets off with warning without
+  rejecting inference. Valid manual state survives rejected inference. Validate
+  atomically, prune removed zones and expire elapsed grace without renewal. Toggle
+  changes await save; sensor additions use existing coalesced/final-stop saves,
+  with the documented abrupt-crash window. Cancel callbacks at stop. Expose manual
+  hold/grace reasons separately from normal policy and native switch attributes.
+  Require exact version1, Boolean enabled, distinct nonempty string zones and an
+  aware deadline normalized to UTC without overflow. Enabled state cannot carry
+  a deadline; disabled held zones require one. Omit the manual sibling when off
+  without holds, preserving the exact existing normal-mode inference wire shape.
+  Publish committed mode even if save fails, propagate the failure to the caller
+  and permit idempotent save retry without renewing grace. Panel diagnostics
+  remain inference-only; holds never represent additional inferred occupants.
 
 ### Current engine and retained component scope (qualification boundaries)
 
@@ -2392,7 +2432,60 @@ references remain in [Section 19.5](#deferred-operational-obligations) and
 
 <a id="current-local-conformance"></a>
 
-### 19.0 Current local conformance — validation recorded 2026-09-17
+### 19.0 Current local conformance - validated 2026-10-30 (2026-10-31 UTC)
+
+**PASS, local qualification only.** The unpublished Visitors toggle implements
+REQ-VISIT-001 through004 without changing inference, counts or public entity IDs.
+All3351 previous Python cases remain;40 additive cases bring the total to3391.
+No frozen incident oracle, coverage exclusion or performance limit was weakened.
+These are separate completed runs after the final production change:
+
+| Executed gate                                                                  | Completed result                                                                                                                                                                                          |
+| ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Exact Visitors regression, separate run                                        | **1 passed**,0.13s                                                                                                                                                                                        |
+| `.venv/bin/pytest --no-cov -q tests -k 'test_inc_'`                            | **84 passed**,34.83s, no failures/errors/skips                                                                                                                                                            |
+| `.venv/bin/pytest --no-cov -q -m scenario`                                     | **112 passed**,33.87s, no failures/errors/skips                                                                                                                                                           |
+| `.venv/bin/pytest -q` with fresh XML/coverage JSON                             | **3391 passed**,186.60s, no failures/errors/skips                                                                                                                                                         |
+| Statement / branch coverage                                                    | **100% /100%**,8147/8147 statements,3120/3120 branches; zero missing/partial,12 existing exclusions unchanged                                                                                             |
+| `npm run test:frontend`                                                        | **308 passed**,3425.624721ms, no failures/cancellations/skips                                                                                                                                             |
+| Repository Ruff / mypy                                                         | Pass;176 source files checked by default mypy                                                                                                                                                             |
+| `npm run build:frontend` then `npm run check:frontend`                         | Standard build, strict TypeScript and freshness pass; panels346980bytes, helpers7280bytes                                                                                                                 |
+| Standalone `.venv/bin/python benchmarks/occupancy_performance.py --events 100` | **Pass**,11 positive workloads100/100 each; worst p99 **3.940442ms**, max **4.537225ms**; rejected100/100 p99 **3.025100ms**, max **3.178939ms**, zero ON; all correctness/sample/fanout/timer gates pass |
+| Independent implementation review                                              | Approved, including default-off wire compatibility and strict UTC conversion                                                                                                                              |
+
+**Visitors report and proof:** user reported lights cycling with guests or
+cleaners and explicitly approved option2a as a release toggle. No historical event
+minute, count or trace was supplied; the cycling cause remains unverified.
+The permanent [Visitors regression](tests/incidents/test_inc_2026_10_31_0000z_visitors_motion_hold.py)
+uses the receipt UTC minute, not an invented incident time. Its synthetic paired
+stream requires immediate local activation, no unvisited-room activation,
+unchanged inference, and exactly one ON/OFF pair at motion/grace expiry. It failed
+before implementation (1failed0.13s, absent async_set_visitors_mode), passed
+immediately afterward (1passed0.14s), and passes separately after final code.
+[Boundary tests](tests/test_visitors_mode.py) cover count0/1/2, current-ON sampling,
+normal-policy joins, stale/future/interactions, restart before start with valid or
+rejected inference, malformed/pruned/elapsed manual state, save-error publication
+and retry, switch lifecycle, canceled callbacks and exact grace handback.
+
+Independent review exposed a timezone-normalization overflow; two failing cases
+preceded the guarded conversion repair and20 storage checks then passed. The
+first full run completed3388 cases (3364pass/24fail,227.34s,99.93% coverage):
+writing an empty disabled manual sibling violated existing exact serialization
+contracts. Omitting that sibling repaired production compatibility, not the
+original assertions;112 focused checks passed7.55s before final full validation.
+Three final boundary cases exercise normal-policy adoption and canceled grace.
+
+Evidence is retained in sibling Homelab tmp/visitors-release-*: final-python.xml,
+final-coverage.json, incidents.xml, scenarios.xml, frontend.log and performance.json.
+The earlier python.xml/coverage.json retain the failed full attempt separately.
+The completed working specification received exactly three hardening passes and
+is removed after reconciliation. No live HA access, deployment, restart or
+physical actuation verification occurred. Visitors remains off by default;
+existing device brightness/sleep/safety restrictions still apply. Deploy through
+the normal release process; disable Visitors before rollback to a version that
+cannot honor its holds. The original normal-mode cycling report remains open.
+
+#### Historical office qualification - 2026-09-17
 
 **PASS, local qualification only.** The office-overlap fix and the complete test
 repair pass every required gate. All3330 original Python case IDs, including the

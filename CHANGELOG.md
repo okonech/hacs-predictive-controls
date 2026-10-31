@@ -2,16 +2,25 @@
 
 ## Unreleased
 
-The local implementation remains version `0.2.6`. September17 final validation
-passes:3351Python tests,100% statement/branch coverage, separate83incident,
-111scenario and308frontend cases. All61 previous failures are repaired without
-dropping original cases. Static/build/freshness, independent review and standalone
-100-event performance gates pass; worst positive/rejected p99 is3.282/2.789ms
+The local implementation remains version `0.2.6`. October30 final validation
+(October31 UTC) passes:3391 Python tests,100% statement/branch coverage,
+separate84 incident,112 scenario and308 frontend cases. Existing tests remain.
+Static/build/freshness, independent review and standalone100-event performance
+gates pass; worst positive/rejected p99 is3.940/3.025ms
 under the unchanged5ms limit.
 This is not a published release,
 deployment or physical-light verification. [SPECIFICATION.md](SPECIFICATION.md) owns current behavior and
 [validation evidence](SPECIFICATION.md#current-local-conformance); versioned
 entries below describe earlier releases and may contain superseded behavior.
+
+### Added
+
+- Native **Visitors** toggle: mapped local motion/presence activates the existing
+	per-zone output without predictive path gating and holds it until disabled.
+	Preserve normal-active zones, independent persisted manual state, count-zero
+	override, restart-safe30-second exit grace and explicit manual-hold diagnostics.
+	Normal inference and occupant limits remain unchanged. Live deployment is
+	separate; existing device brightness/sleep/safety restrictions still apply.
 
 ### Changed
 

@@ -57,6 +57,7 @@ def expected_entity_unique_ids(
     unique_ids.update(
         f"{entry_id}_{suffix}" for suffix in AGGREGATE_BINARY_SENSOR_SUFFIXES
     )
+    unique_ids.add(f"{entry_id}_visitors_mode")
     for zone in predictive_map.zones():
         unique_ids.update(
             f"{entry_id}_{zone}_{suffix}" for suffix in ZONE_SENSOR_SUFFIXES

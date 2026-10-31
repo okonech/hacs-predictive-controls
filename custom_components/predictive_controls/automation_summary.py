@@ -69,6 +69,7 @@ def runtime_automation_summary(runtime: Any) -> AutomationSummary:
         for item in confidence.authorizations
         if item.authorized and item.reason == "boundary_authorized"
     }
+    held = getattr(getattr(runtime, "visitors", None), "held_zones", ())
     zones = {
         zone: _zone_state(
             zone,
@@ -77,6 +78,7 @@ def runtime_automation_summary(runtime: Any) -> AutomationSummary:
             predictions.get(zone, 0.0),
             zone in authorized,
             zone in boundary,
+            zone in held,
         )
         for zone in runtime.map.zones()
     }
@@ -115,6 +117,7 @@ def _zone_state(
     prediction_probability: float,
     activation_plausible: bool,
     boundary_plausible: bool,
+    visitors_hold: bool = False,
 ) -> ZoneAutomationState:
     status = _status(confidence)
     return ZoneAutomationState(
@@ -124,7 +127,7 @@ def _zone_state(
         probable_occupancy=status in PROBABLE_STATUSES,
         possible_occupancy=status in POSSIBLE_STATUSES,
         activation_plausible=activation_plausible,
-        keep_on=bool(getattr(policy, "active", False)),
+        keep_on=visitors_hold or bool(getattr(policy, "active", False)),
         diagnostic_entry_path_plausible=boundary_plausible,
         prediction_probability=prediction_probability,
     )

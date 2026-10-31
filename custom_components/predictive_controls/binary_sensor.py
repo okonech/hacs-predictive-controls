@@ -146,6 +146,13 @@ class ZoneActiveSensor(RuntimeBinarySensor):
         state = runtime_automation_summary(self.runtime).zones[self.zone]
         reason = self.runtime.confidence.state_for_zone(self.zone).reason
         policy = self.runtime.confidence.policy_states.get(self.zone)
+        visitors = getattr(self.runtime, "visitors", None)
+        visitor_reason = None
+        if visitors is not None and self.zone in visitors.held_zones:
+            visitor_reason = (
+                "visitors_hold" if visitors.enabled else "visitors_exit_grace"
+            )
+            reason = visitor_reason
         decisions = tuple(
             row
             for row in self.runtime.confidence.policy_decisions
@@ -160,6 +167,8 @@ class ZoneActiveSensor(RuntimeBinarySensor):
         latest_authorization = authorizations[-1] if authorizations else None
         return {
             "reason": reason,
+            "visitors_override": visitor_reason,
+            "normal_policy_active": bool(policy is not None and policy.active),
             "occupancy_probability": state.confidence,
             "phase": None if policy is None else policy.phase,
             "activation_provenance": (

@@ -403,6 +403,10 @@ def test_cleanup_registry_expected_ids_match_platform_exports(
     )
     predictive_map = make_map()
 
+    sys.modules.pop("custom_components.predictive_controls.switch", None)
+    switch_module = importlib.import_module(
+        "custom_components.predictive_controls.switch"
+    )
     exported_ids = (
         platform_unique_ids(
             sensor_module,
@@ -416,6 +420,7 @@ def test_cleanup_registry_expected_ids_match_platform_exports(
             event_module,
             predictive_map,
         )
+        | platform_unique_ids(switch_module, predictive_map)
     )
 
     assert expected_entity_unique_ids("entry123", predictive_map) == exported_ids
@@ -474,6 +479,7 @@ def install_fake_homeassistant(monkeypatch: pytest.MonkeyPatch) -> None:
     sensor = ModuleType("homeassistant.components.sensor")
     binary_sensor = ModuleType("homeassistant.components.binary_sensor")
     event_component = ModuleType("homeassistant.components.event")
+    switch_component = ModuleType("homeassistant.components.switch")
     config_entries = ModuleType("homeassistant.config_entries")
     core = ModuleType("homeassistant.core")
     helpers = ModuleType("homeassistant.helpers")
@@ -486,6 +492,7 @@ def install_fake_homeassistant(monkeypatch: pytest.MonkeyPatch) -> None:
     set_module_attr(sensor, "SensorEntityDescription", FakeSensorEntityDescription)
     set_module_attr(binary_sensor, "BinarySensorEntity", FakeEntity)
     set_module_attr(event_component, "EventEntity", FakeEntity)
+    set_module_attr(switch_component, "SwitchEntity", FakeEntity)
     set_module_attr(config_entries, "ConfigEntry", object)
     set_module_attr(core, "Event", object)
     set_module_attr(core, "HomeAssistant", object)
@@ -513,6 +520,7 @@ def install_fake_homeassistant(monkeypatch: pytest.MonkeyPatch) -> None:
     set_module_attr(components, "sensor", sensor)
     set_module_attr(components, "binary_sensor", binary_sensor)
     set_module_attr(components, "event", event_component)
+    set_module_attr(components, "switch", switch_component)
     set_module_attr(helpers, "dispatcher", dispatcher)
     set_module_attr(helpers, "entity", entity)
     set_module_attr(helpers, "entity_platform", entity_platform)
@@ -524,6 +532,7 @@ def install_fake_homeassistant(monkeypatch: pytest.MonkeyPatch) -> None:
         sensor,
         binary_sensor,
         event_component,
+        switch_component,
         config_entries,
         core,
         helpers,

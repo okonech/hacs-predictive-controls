@@ -25,7 +25,7 @@ from .yaml_config import DEFAULT_MAP_YAML, load_predictive_map
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORM_NAMES = ["sensor", "binary_sensor", "event"]
+PLATFORM_NAMES = ["sensor", "binary_sensor", "event", "switch"]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

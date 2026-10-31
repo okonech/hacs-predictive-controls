@@ -37,22 +37,25 @@ Flapping warnings require **10 completed short ON→OFF cycles within a rolling
 the warning clears when fewer than ten remain. Aliases, duplicates and timers do
 not add cycles. This diagnostic-only rule replaces the former six-cycles/hour rule.
 
-**Current local validation, 2026-09-17: PASS.** **3,351 Python tests** pass with
-**100% statement and branch coverage** (7,980 statements/3,072 branches), in
-**183.85 seconds** including worker startup and coverage reporting. Separate runs
-pass all **83 incident tests**, **111 scenario-marked tests**, and **308 frontend
-tests**. All61 previously failing Python cases remain and pass. Ruff, mypy, strict
-TypeScript, build/freshness and independent review also pass.
+**Current local validation, 2026-10-30 (2026-10-31 UTC): PASS.** **3,391 Python
+tests** pass with **100% statement and branch coverage** (8,147 statements/3,120
+branches), in **186.60 seconds**. Separate runs pass all **84 incident tests**,
+**112 scenario-marked tests**, and **308 frontend tests**. Existing cases remain;
+Ruff, mypy, strict TypeScript, build/freshness and independent review also pass.
 
 The standalone100-event benchmark passes all qualification/timer gates: worst
-positive p99 **3.282ms**, rejected-jump p99 **2.789ms**, below the unchanged
-**5ms** limit. The permanent [office-arrival regression](tests/incidents/test_inc_2026_09_16_2054z_office_overlap_arrival.py)
+positive p99 **3.940ms**, rejected-jump p99 **3.025ms**, below the unchanged
+**5ms** limit. The default-off Visitors toggle adds a persisted manual lighting
+hold without changing inference or occupant limits. Its permanent
+[acceptance regression](tests/incidents/test_inc_2026_10_31_0000z_visitors_motion_hold.py)
+proves synthetic public output behavior, not the cause of the historical cycling
+report or physical actuation. The permanent [office-arrival regression](tests/incidents/test_inc_2026_09_16_2054z_office_overlap_arrival.py)
 preserves all46 recorded inputs and now activates at office motion rather than
 the later manual press. Synthetic qualification repairs preserve independent
 learning, true retirement and strict producer-to-panel contracts; no selected-only
 learning or weaker coverage gate was introduced.
 
-Completed office/qualification plans are reconciled and removed; permanent
+Completed Visitors and office/qualification plans are reconciled and removed; permanent
 regressions and unresolved external operational work remain. See
 [current conformance and evidence](SPECIFICATION.md#current-local-conformance)
 for exact results and historical failures. Matching backend/assets still need
@@ -101,6 +104,28 @@ obligations are maintained in [SPECIFICATION.md](SPECIFICATION.md).
 5. Add the integration from Settings -> Devices & services.
 
 ## Configuration
+
+### Visitors Mode
+
+The integration provides a **Visitors** switch, off by default. Add it to a Home
+Assistant dashboard or use it from the integration's entities. While enabled,
+local mapped motion/presence turns on that zone's existing `active` output without
+requiring a predictive path, then holds it on until the mode is disabled. Already
+asserted sensors and normal-active zones are included. Unvisited inactive zones
+stay off; no extra occupant count needs to be configured.
+
+Turning Visitors off gives held zones a **30-second grace period**, then explicitly
+returns them to normal predictive control. The mode and holds survive restart;
+restarting does not renew the grace period. Visitors has no automatic expiry.
+Count zero does not clear a manual hold, but normal inference continues unchanged.
+Manual switch control, safety automations and existing brightness/sleep restrictions
+are not overridden. The integration controls its public signals, not devices
+directly. Inspect `visitors_override` and `normal_policy_active` on zone entities
+to distinguish manual lighting holds from inferred occupancy.
+
+Toggle changes await storage; motion additions use the existing one-second
+coalesced save, so an abrupt crash can lose pending additions. Turn Visitors off
+before rolling back to a release without this feature.
 
 ### Panel and current paths
 

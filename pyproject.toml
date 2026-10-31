@@ -64,6 +64,7 @@ module = [
   "custom_components.predictive_controls.runtime",
   "custom_components.predictive_controls.sensor",
   "custom_components.predictive_controls.storage",
+  "custom_components.predictive_controls.switch",
   "custom_components.predictive_controls.websocket",
 ]
 disable_error_code = [

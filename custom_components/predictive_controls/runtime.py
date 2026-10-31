@@ -28,6 +28,7 @@ from .occupancy_settings import (
     authoritative_occupants_from_state_value,
     tracked_entity_ids,
 )
+from .visitors import VisitorsMode
 
 _LOGGER = logging.getLogger(__name__)
 RUNTIME_HARD_CEILING_MS = 100.0
@@ -83,6 +84,8 @@ class PredictiveControlsRuntime:
         self._safe_bootstrap_complete = False
         self._automation_summary_cache: dict[object, object] = {}
         self._dispatch_depth = 0
+        self.visitors = VisitorsMode(predictive_map.zones())
+        self._unsubscribe_visitors_deadline: object | None = None
 
     @property
     def chain(self) -> MarkovChain:
@@ -177,6 +180,8 @@ class PredictiveControlsRuntime:
             datetime.now(UTC),
             self.transition_counts,
         )
+        if self.visitors.enabled or self.visitors.held_zones:
+            payload["visitors_mode"] = self.visitors.store_data()
         if self._safe_bootstrap_complete:
             self._restore_rejected = False
         return payload
@@ -191,6 +196,9 @@ class PredictiveControlsRuntime:
         if not isinstance(stored_state, dict):
             return False
         now = _as_utc(now)
+        if not self.visitors.restore(stored_state.get("visitors_mode"), now):
+            _LOGGER.warning("Rejected stored Visitors mode; resetting to disabled")
+        self._schedule_visitors_deadline(now)
         if self.confidence.restore_state(stored_state, now):
             self._sync_expected_occupants(now)
             self._restored_state = True
@@ -221,6 +229,7 @@ class PredictiveControlsRuntime:
         finally:
             self._bootstrap_inference_ms = (perf_counter_ns() - started_ns) / 1_000_000
             self._latency_samples_ms.append(self._bootstrap_inference_ms)
+        self.visitors.sample(snapshot, now)
         # Subscribe only after the target model has bootstrapped successfully.
         # A startup validation error must not leave orphaned state and timer
         # callbacks running after Home Assistant marks the entry setup_error.
@@ -258,12 +267,51 @@ class PredictiveControlsRuntime:
             self._unsubscribe_diagnostic_refresh()
         if callable(self._unsubscribe_prediction_deadline):
             self._unsubscribe_prediction_deadline()
+        if callable(self._unsubscribe_visitors_deadline):
+            self._unsubscribe_visitors_deadline()
         self._unsubscribe = None
         self._unsubscribe_refresh = None
         self._unsubscribe_transient_refresh = None
         self._unsubscribe_diagnostic_refresh = None
         self._unsubscribe_prediction_deadline = None
+        self._unsubscribe_visitors_deadline = None
         await self.async_save_transition_counts()
+
+    async def async_set_visitors_mode(self, enabled: bool) -> None:
+        self.confidence._assert_mutation_allowed()
+        now = datetime.now(UTC)
+        changed = enabled != self.visitors.enabled
+        self.visitors.set_enabled(enabled, now)
+        if changed and enabled:
+            self.visitors.sample(self._current_snapshot(now), now)
+        self.visitors.retain_active(
+            zone for zone, policy in self.confidence.policy_states.items()
+            if policy.active
+        )
+        self._schedule_visitors_deadline(now)
+        try:
+            await self.async_save_transition_counts()
+        finally:
+            self._publish_update()
+
+    def _schedule_visitors_deadline(self, now: datetime) -> None:
+        if callable(self._unsubscribe_visitors_deadline):
+            self._unsubscribe_visitors_deadline()
+        self._unsubscribe_visitors_deadline = None
+        if self.visitors.exit_at is not None:
+            delay = max(0.0, (self.visitors.exit_at - now).total_seconds())
+            self._unsubscribe_visitors_deadline = async_call_later(
+                self.hass, delay, self._async_visitors_deadline,
+            )
+
+    @callback
+    def _async_visitors_deadline(self, now: datetime) -> None:
+        self._unsubscribe_visitors_deadline = None
+        if self.visitors.expire(_as_utc(now)):
+            try:
+                self._publish_update()
+            finally:
+                self.schedule_transition_count_save()
 
     async def async_save_transition_counts(self) -> None:
         if self._transition_store is not None:
@@ -405,6 +453,7 @@ class PredictiveControlsRuntime:
         self.confidence._assert_mutation_allowed()
         self.last_occupancy_event = occupancy_event
         try:
+            self.visitors.observe(occupancy_event, processing_at)
             self._sync_expected_occupants(processing_at)
             self.last_zone_update = self.confidence.observe(
                 occupancy_event,
@@ -473,6 +522,11 @@ class PredictiveControlsRuntime:
     def _dispatch_update(self) -> None:
         """Dispatch an update within the tracker's current projection scope."""
 
+        if self.visitors.enabled and self.visitors.retain_active(
+            zone for zone, policy in self.confidence.policy_states.items()
+            if policy.active
+        ):
+            self.schedule_transition_count_save()
         previous_cache = self._automation_summary_cache
         self._automation_summary_cache = {}
         self._dispatch_depth += 1
