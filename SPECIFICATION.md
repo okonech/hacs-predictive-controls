@@ -2530,18 +2530,18 @@ its four inputs/count/times and the separate0725Z genuine-departure OFF control
 remain. No coverage exclusions or performance limits changed. Distinct completed
 runs after the final code/test changes establish:
 
-| Executed gate | Completed result |
-| --- | --- |
-| Exact living-room regression, separate run | **1 passed**,1.22s |
-| `.venv/bin/pytest --no-cov -q tests -k 'test_inc_'` | **85 passed**,64.17s; zero failures/errors/skips |
-| `.venv/bin/pytest --no-cov -q -m scenario` | **113 passed**,36.92s; zero failures/errors/skips |
-| `.venv/bin/pytest -q` with fresh XML/coverage JSON | **3440 passed**,242.43s; zero failures/errors/skips |
-| Statement / branch coverage | **100% /100%**,8293/8293 statements,3202/3202 branches; zero missing/partial,12 existing exclusions unchanged |
-| `npm run test:frontend` | **308 passed**,3296.301929ms; zero failures/cancellations/skips |
-| Repository Ruff / normal-config mypy | Pass;178 source files |
-| Frontend build / strict TypeScript / freshness | Pass; panels346980bytes, helpers7280bytes |
+| Executed gate                                                                  | Completed result                                                                                                                                                                                          |
+| ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Exact living-room regression, separate run                                     | **1 passed**,1.22s                                                                                                                                                                                        |
+| `.venv/bin/pytest --no-cov -q tests -k 'test_inc_'`                            | **85 passed**,64.17s; zero failures/errors/skips                                                                                                                                                          |
+| `.venv/bin/pytest --no-cov -q -m scenario`                                     | **113 passed**,36.92s; zero failures/errors/skips                                                                                                                                                         |
+| `.venv/bin/pytest -q` with fresh XML/coverage JSON                             | **3440 passed**,242.43s; zero failures/errors/skips                                                                                                                                                       |
+| Statement / branch coverage                                                    | **100% /100%**,8293/8293 statements,3202/3202 branches; zero missing/partial,12 existing exclusions unchanged                                                                                             |
+| `npm run test:frontend`                                                        | **308 passed**,3296.301929ms; zero failures/cancellations/skips                                                                                                                                           |
+| Repository Ruff / normal-config mypy                                           | Pass;178 source files                                                                                                                                                                                     |
+| Frontend build / strict TypeScript / freshness                                 | Pass; panels346980bytes, helpers7280bytes                                                                                                                                                                 |
 | Standalone `.venv/bin/python benchmarks/occupancy_performance.py --events 100` | **Pass**,11 positive workloads100/100 each; worst p99 **3.267170ms**, max **3.846945ms**; rejected100/100 p99 **2.481897ms**, max **2.537306ms**, zero ON; all correctness/sample/fanout/timer gates pass |
-| Independent read-only source and final conformance reviews | No material defect; follow-up rearming/lifetime/trust/malformed-restore controls pass |
+| Independent read-only source and final conformance reviews                     | No material defect; follow-up rearming/lifetime/trust/malformed-restore controls pass                                                                                                                     |
 
 **Incident and disconfirming replay:** approved recorder/audit/automation evidence
 in sibling Homelab tmp/living-room-20261031-* shows living active OFF at
