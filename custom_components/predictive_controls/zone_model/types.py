@@ -236,6 +236,85 @@ class BeliefContribution:
 
 
 @dataclass(frozen=True)
+class OccupancyObservation:
+    """One real physical occurrence, independent of bounded movement history."""
+
+    node_id: str
+    episode_id: str
+    kind: str
+    at: datetime
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.at, datetime):
+            raise ValueError("Occupancy observation time must be a datetime")
+        require_utc(self.at, "Occupancy observation time")
+        if self.kind not in {"positive", "correlated_positive"}:
+            raise ValueError("Occupancy observation kind is invalid")
+        node_id, _, origin = _physical_episode_reference(self.episode_id)
+        if self.node_id != node_id or self.at != origin:
+            raise ValueError("Occupancy observation identity is inconsistent")
+
+
+@dataclass(frozen=True)
+class OccupancyEvidence:
+    """Qualified room admission and its latest unresolved local observation."""
+
+    admission: OccupancyObservation
+    latest: OccupancyObservation
+    authorization_reason: str
+    admission_probability: float
+    resolved_at: datetime | None = None
+    resolution_kind: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.admission, OccupancyObservation) or not isinstance(
+            self.latest, OccupancyObservation,
+        ):
+            raise ValueError("Occupancy evidence requires physical observations")
+        self.admission.__post_init__()
+        self.latest.__post_init__()
+        if self.admission.node_id == self.latest.node_id:
+            _, admitted, _ = _physical_episode_reference(self.admission.episode_id)
+            _, latest, _ = _physical_episode_reference(self.latest.episode_id)
+            if latest < admitted or (
+                latest == admitted and self.latest != self.admission
+            ):
+                raise ValueError("Occupancy physical generation is inconsistent")
+        if self.authorization_reason not in ACTIVE_EVIDENCE_REASONS - {
+            "local_interaction", "prediction_confirmed",
+        }:
+            raise ValueError("Occupancy admission authorization is invalid")
+        if (
+            isinstance(self.admission_probability, bool)
+            or not isinstance(self.admission_probability, (int, float))
+            or not math.isfinite(self.admission_probability)
+            or not 0 < self.admission_probability < 1
+            or self.latest.at < self.admission.at
+        ):
+            raise ValueError("Occupancy admission probability or chronology is invalid")
+        if (self.resolved_at is None) != (self.resolution_kind is None):
+            raise ValueError("Occupancy resolution fields must be paired")
+        if self.resolved_at is not None:
+            if not isinstance(self.resolved_at, datetime):
+                raise ValueError("Occupancy resolution time must be a datetime")
+            require_utc(self.resolved_at, "Occupancy resolution time")
+            if self.resolved_at < self.latest.at or self.resolution_kind not in {
+                "direct_departure", "count_complete",
+            }:
+                raise ValueError("Occupancy resolution is invalid")
+
+    def retains(self, activation_at: datetime | None, episode_id: str | None) -> bool:
+        return bool(
+            self.resolved_at is None and activation_at is not None
+            and (
+                self.latest.at > activation_at
+                or (self.latest.at == activation_at
+                    and self.latest.episode_id == episode_id)
+            )
+        )
+
+
+@dataclass(frozen=True)
 class ZoneBeliefState:
     """Complete immutable state for one graph-local zone belief."""
 
@@ -252,6 +331,7 @@ class ZoneBeliefState:
     qualified_departure_at: datetime | None = None
     path_displaced_at: datetime | None = None
     physical_hold: bool = False
+    occupancy_evidence: OccupancyEvidence | None = None
 
     def __post_init__(self) -> None:
         if type(self.physical_hold) is not bool:
@@ -265,6 +345,19 @@ class ZoneBeliefState:
         require_utc(self.last_updated_at, "Zone belief update time")
         if self.context not in BELIEF_CONTEXTS:
             raise ValueError(f"Unknown belief context: {self.context}")
+        if self.occupancy_evidence is not None:
+            evidence = self.occupancy_evidence
+            if not isinstance(evidence, OccupancyEvidence):
+                raise ValueError("Occupancy evidence has invalid type")
+            evidence.__post_init__()
+            if (
+                self.profile_name not in {"stay_pir", "stay_presence"}
+                or self.generation_episode_id is None
+                or evidence.latest.at > self.last_updated_at
+                or (evidence.resolved_at is not None
+                    and evidence.resolved_at > self.last_updated_at)
+            ):
+                raise ValueError("Occupancy evidence is inconsistent with belief")
         if self.qualified_departure_at is not None:
             require_utc(self.qualified_departure_at, "Qualified departure time")
             if (

@@ -172,7 +172,7 @@ def test_public_peer_protection_and_zero_override(
             assert replay.view().active("room")  # No protected time in dwell.
             assert not _room_release_edges(replay)
         replay.advance(_at(2100))
-        if withdrawal == "held":
+        if withdrawal == "held" or (count == 2 and withdrawal != "zero"):
             assert replay.view().active("room") and not _room_release_edges(replay)
         else:
             assert not replay.view().active("room")

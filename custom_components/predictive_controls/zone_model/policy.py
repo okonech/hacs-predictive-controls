@@ -340,6 +340,17 @@ class ZonePolicy:
         self._audit.append(decision)
         return decision
 
+    def qualifies_occupancy(
+        self, at: datetime, belief: ZoneBeliefState, state: EpisodeState,
+        effect: EpisodeEffect, authorization: TraversalAuthorization | None,
+    ) -> bool:
+        return bool(
+            effect.kind in {"positive", "correlated_positive"}
+            and belief.probability >= self._calibration.on_threshold
+            and self._confirming_evidence(at, state, effect)
+            and self._authorization_valid(at, state, authorization)
+        )
+
     def evaluate(
         self,
         at: datetime,
@@ -389,17 +400,27 @@ class ZonePolicy:
         activation_path_node_ids = self._state.activation_path_node_ids
         activation_provenance_kind = self._state.activation_provenance_kind
         activation_source_episode_ids = self._state.activation_source_episode_ids
+        evidence = belief_after.occupancy_evidence
+        retained_endpoint_hold = retained_endpoint_hold or bool(
+            provenance == "evidence" and evidence is not None
+            and evidence.retains(activation_at, activation_episode_id)
+        )
         if self._state.retained_endpoint_hold and not retained_endpoint_hold:
             below_threshold_since = max(
                 below_threshold_since or at,
                 belief_after.qualified_departure_at or at,
             )
         if belief_after.path_displaced_at is not None:
+            resolution = None if evidence is None else evidence.resolved_at
+            release_frontier = max(
+                belief_after.path_displaced_at,
+                resolution or belief_after.path_displaced_at,
+            )
             below_threshold_since = max(
-                below_threshold_since or at, belief_after.path_displaced_at,
+                below_threshold_since or at, release_frontier,
             )
             if pending is not None:
-                pending = max(pending, belief_after.path_displaced_at)
+                pending = max(pending, release_frontier)
 
         if not active_before:
             pending = None
@@ -543,6 +564,10 @@ class ZonePolicy:
                     )
                 dedup = self._remember_episode(dedup, episode_id, at)
 
+        retained_endpoint_hold = retained_endpoint_hold or bool(
+            evidence is not None
+            and evidence.retains(activation_at, activation_episode_id)
+        )
         held = bool(
             retained_endpoint_hold
             and active_after

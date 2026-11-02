@@ -976,7 +976,7 @@ def test_historical_fingerprint_recipes_remain_unchanged(
         "settled_endpoint_release_version", "selected_path_version",
         "path_health_calibration", "presence_gated_departure_version",
         "selected_prediction_execution_version", "unsupported_jump_diagnostics_version",
-        "deferred_prediction_learning_version",
+        "deferred_prediction_learning_version", "occupancy_evidence_version",
     ):
         pre_handoff.pop(later_key)
     assert digest(pre_handoff) == (

@@ -5,6 +5,10 @@ Source: frozen original in /tmp/black-box-migration-baseline.json; Section 16(25
 Test scope: public source acquisition and one OFF by the original checkpoint, not
 physical actuation. Token/authorization/decay-context prerequisites are removed
 under the 2026-09-12 boundary migration; recorded inputs and deadlines are intact.
+Acceptance amendment approved2026-11-01 after the complete timetable: retain ON
+because destination continues from the earlier bridge, not latest source, and
+count2 has a second unlocated slot. Original eventual-OFF expectation remains
+documented above; all four inputs/count/times/checkpoints are unchanged.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -69,9 +73,7 @@ def test_inc_2026_08_28_0730z_clear_anchors_bounded_missed_edge_departure() -> N
         assert replay.input_edges_for("source")[:1] == (
             ActiveEdge(source_at, "source", True),
         )
-        assert not final.active("source")
+        assert final.active("source")
         edges = replay.edges_for("source")
-        assert len(edges) == 2, edges
+        assert len(edges) == 1, edges
         assert edges[0] == ActiveEdge(source_at, "source", True)
-        # Full captured history, not a forced callback at the old advance time.
-        assert not edges[1].active and edges[1].at <= observed_at

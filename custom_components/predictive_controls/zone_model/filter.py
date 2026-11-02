@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from .types import (
     BeliefContribution,
     BeliefProfile,
+    OccupancyEvidence,
     OutwardContext,
     ZoneBeliefState,
     _physical_episode_reference,
@@ -467,6 +468,13 @@ class ZoneBeliefFilter:
             self._state = replace(self._state, physical_hold=held)
         return self._state
 
+    def set_occupancy_evidence(
+        self, evidence: OccupancyEvidence, at: datetime,
+    ) -> ZoneBeliefState:
+        self._advance_to(at)
+        self._state = replace(self._state, occupancy_evidence=evidence)
+        return self._state
+
     def displace_path(self, at: datetime) -> ZoneBeliefState:
         """Withdraw selected coverage without changing raw truth or likelihood.
 
@@ -548,6 +556,7 @@ class ZoneBeliefFilter:
             qualified_departure_at=None,
             path_displaced_at=None,
             physical_hold=False,
+            occupancy_evidence=None,
             health_warning=False,
             contributions=(),
         )
@@ -590,10 +599,17 @@ class ZoneBeliefFilter:
             self._state = replace(before, last_updated_at=at)
             return
         elapsed = (at - before.last_updated_at).total_seconds()
-        calibration = self._profile.decay_for(
-            "asserted" if before.physical_hold else "cleared_with_outward"
-            if before.path_displaced_at is not None else before.context
-        )
+        evidence = before.occupancy_evidence
+        unresolved = evidence is not None and evidence.resolved_at is None
+        context = before.context
+        if before.physical_hold:
+            context = "asserted"
+        elif unresolved:
+            if context == "cleared_with_outward":
+                context = "cleared_without_outward"
+        elif before.path_displaced_at is not None:
+            context = "cleared_with_outward"
+        calibration = self._profile.decay_for(context)
         survival = math.exp(-elapsed / calibration.time_constant.total_seconds())
         probability = (
             calibration.baseline_probability

@@ -305,8 +305,9 @@ def test_current_selected_hold_initializes_before_ignored_input_can_release(
         policy = ZonePolicy(
             "room", POLICY_CALIBRATIONS["stay_pir"], before.updated_at, state=state,
         )
+        unheld = replace(_belief(before), occupancy_evidence=None)
         state = policy.evaluate(
-            before.updated_at, _belief(before), _belief(before),
+            before.updated_at, unheld, unheld,
             local_state=None, local_effect=None, authorization=None,
         ).state
         assert state.pending_release_since == before.updated_at

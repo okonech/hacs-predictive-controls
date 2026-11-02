@@ -304,9 +304,9 @@ def test_runtime_persisted_low_belief_hold_roundtrips_public_continuation() -> N
 def test_runtime_single_path_branch_releases_former_room() -> None:
     """Approved replacement for off_path_linked_outward_cannot_release_settled_endpoint.
 
-    PATH007/008: source0/hall1/room2/hall2at3 is one slot plus U with overlap.
-    Original OFF4..7 remain; stable clear12 retires the room tip. Crossing
-    42.084982 plus full60s dwell yields scheduled OFF105 (formerly OFF95).
+    PATH009/010: source0/hall1/room2/hall2at3 is one slot plus U.
+    Original OFF4..7 still retire movement at12, not unresolved occupancy.
+    Neither latest-room departure nor count-complete outside proof is present.
     """
     with RuntimeScenario(NOW) as scenario:
         replay = scenario.create(_map(branch=True), 2)
@@ -320,16 +320,13 @@ def test_runtime_single_path_branch_releases_former_room() -> None:
         assert _belief(snapshot).path_displaced_at == _at(12)
         pending = next(state.pending_release_since for state in snapshot.policy_states
                    if state.zone == "room")
-        assert pending == _at(42.084982)
-        assert pending + POLICY_CALIBRATIONS["stay_pir"].release_dwell == _at(
-            102.084982,
-        )
+        assert pending is None
+        evidence = _belief(snapshot).occupancy_evidence
+        assert evidence is not None and evidence.resolved_at is None
         assert replay.advance(release_at - EPSILON).active("room")
-        assert not replay.advance(release_at).active("room")
-        assert not replay.advance(NOW + timedelta(hours=1)).active("room")
-        assert replay.edges_for("room") == (
-            ActiveEdge(_at(2), "room", True), ActiveEdge(release_at, "room", False),
-        )
+        assert replay.advance(release_at).active("room")
+        assert replay.advance(NOW + timedelta(hours=1)).active("room")
+        assert replay.edges_for("room") == (ActiveEdge(_at(2), "room", True),)
         assert tuple(replay.normalized_inputs) == inputs
 
 
@@ -337,9 +334,9 @@ def test_runtime_single_path_branch_releases_former_room() -> None:
 def test_runtime_hall_reassertion_does_not_delay_branch_release() -> None:
     """Approved replacement of the legacy causal-transfer/full-dwell scenario.
 
-    PATH007/008: preserve the original route, clears and hallON85. That reassertion
-    does not restart dwell; room releases105 after actual tip retirement12,
-    crossing42.084982 and the unchanged60s dwell (formerly OFF95).
+    PATH009/010: preserve the original route, clears and hallON85. Reassertion
+    from the other hallway is not latest-room departure or all-N outside proof.
+    Movement retirement12 cannot start occupancy-release dwell.
     """
     with RuntimeScenario(NOW) as scenario:
         replay = scenario.create(_map(branch=True), 2)
@@ -356,16 +353,13 @@ def test_runtime_hall_reassertion_does_not_delay_branch_release() -> None:
         assert _belief(snapshot).path_displaced_at == _at(12)
         pending = next(state.pending_release_since for state in snapshot.policy_states
                    if state.zone == "room")
-        assert pending == _at(42.084982)
-        assert pending + POLICY_CALIBRATIONS["stay_pir"].release_dwell == _at(
-            102.084982,
-        )
+        assert pending is None
+        evidence = _belief(snapshot).occupancy_evidence
+        assert evidence is not None and evidence.resolved_at is None
         assert replay.advance(deadline - EPSILON).active("room")
-        assert not replay.advance(deadline).active("room")
-        assert not replay.advance(_at(115)).active("room")
-        assert replay.edges_for("room") == (
-            ActiveEdge(_at(2), "room", True), ActiveEdge(deadline, "room", False),
-        )
+        assert replay.advance(deadline).active("room")
+        assert replay.advance(_at(115)).active("room")
+        assert replay.edges_for("room") == (ActiveEdge(_at(2), "room", True),)
         assert tuple(replay.normalized_inputs) == inputs
 
 
@@ -408,7 +402,7 @@ def _convergence_map() -> PredictiveMap:
 @pytest.mark.parametrize(("count", "second_approach", "release_seconds"), (
     pytest.param(2, True, None, id="two-converged-paths-retain"),
     pytest.param(1, True, 115, id="one-slot-same-inputs-release"),
-    pytest.param(2, False, 110, id="two-slots-without-second-approach-release"),
+    pytest.param(2, False, None, id="two-slots-without-second-approach-release"),
 ))
 def test_runtime_converged_paths_retain_room_after_one_continues(
     count: int, second_approach: bool, release_seconds: int | None,
@@ -419,7 +413,8 @@ def test_runtime_converged_paths_retain_room_after_one_continues(
     hallway approach continues through f20/g21 to room22, then hall/hall2. HallON23
     is deliberately a duplicate level, not an invented independent crossing.
     All eight physical witnesses are OFF25..32. At N2 both approaches must leave
-    one room endpoint after the other continues; N1 and N2 without x/y must OFF.
+    one room endpoint after the other continues; N1 resolves, while N2 without
+    x/y retains unresolved occupancy because its second slot is U (PATH010).
     These are public timelines, not inferred identities or private-state seeds.
     """
     prefix: tuple[tuple[str, str, int], ...] = (

@@ -4,6 +4,8 @@ Public runtime cases assert actual scheduled control writes, not forced policy
 evaluations. Separate filter/engine cases qualify calibration, exact deadline
 groups, sparse versus stepped continuation, strict JSON and physical provenance.
 No private state is injected into the public runtime acceptance cases.
+November1 PATH009/010: retired occupancy remains unresolved through sensor loss.
+Dwell-only controls add an explicit real C->Y departure before retirement.
 """
 
 from __future__ import annotations
@@ -87,11 +89,13 @@ def policy(engine: ZoneModelEngine, zone: str = "c") -> ZonePolicyState:
 
 
 def retired(
-    predictive_map: PredictiveMap, count: int = 1,
+    predictive_map: PredictiveMap, count: int = 1, *, departure: bool = False,
 ) -> ZoneModelEngine:
     engine = ZoneModelEngine(predictive_map, count, at(0))
     for seconds, node in enumerate(("a", "b", "c", "x")):
         observe(engine, node, "on", seconds)
+    if departure:
+        observe(engine, "y", "on", 3)
     # Separate synthetic retirement qualification, not the public overlap replay.
     retire_overlap(engine.observe, at(3))
     assert all(visit.node_id not in {"b", "c"}
@@ -159,7 +163,7 @@ def test_engine_confidence_gate_and_full_dwell_stepped_sparse_restore(
     count: int,
 ) -> None:
     predictive_map = gate_map()
-    stepped = retired(predictive_map, count)
+    stepped = retired(predictive_map, count, departure=True)
     sparse = roundtrip(stepped, predictive_map)
     original = belief(stepped)
     for seconds in range(5, 706, 5):
@@ -300,10 +304,10 @@ def test_fresh_retired_presence_restores_local_hold_not_acquisition(count: int) 
     assert policy(engine).pending_release_since is None
     observe(engine, "c", "off", 200)
     engine.advance(at(1200))
-    assert not policy(engine).active
+    assert policy(engine).active
     observe(engine, "c", "on", 1201)
     assert belief(engine).physical_hold
-    assert not policy(engine).active
+    assert policy(engine).active
     assert all(path is None or path.endpoint.node_id != "c"
                for path in engine.snapshot.selected_paths)
     roundtrip(engine, predictive_map)
@@ -377,7 +381,8 @@ def test_pir_and_interaction_never_create_physical_presence_gate() -> None:
     engine = retired(predictive_map)
     assert not belief(engine).physical_hold
     engine.advance(at(700))
-    assert not policy(engine).active
+    assert policy(engine).active
+    assert belief(engine).occupancy_evidence is not None
     interaction_map = PredictiveMap.from_mapping({"nodes": {"press": {
         "role": "room_occupancy", "occupancy_behavior": "sticky",
         "entities": {"interaction": "event.press"},
@@ -385,6 +390,7 @@ def test_pir_and_interaction_never_create_physical_presence_gate() -> None:
     interaction = ZoneModelEngine(interaction_map, 1, at(0))
     interaction.observe(SensorInput("event.press", "pressed", at(1)))
     assert not belief(interaction, "press").physical_hold
+    assert belief(interaction, "press").occupancy_evidence is None
     roundtrip(interaction, interaction_map)
 
 
@@ -445,12 +451,14 @@ def test_strict_cross_component_flag_rejects_contradictory_witnesses(
 
 def test_low_belief_hold_starts_full_dwell_at_loss_and_callbacks_keep_frontier(
 ) -> None:
-    """Explicit synthetic scalar qualification, not an incident/runtime fixture."""
+    """Isolated scalar/dwell component without independent occupancy retention."""
     predictive_map = gate_map()
     engine = retired(predictive_map)
     snapshot = engine.snapshot
     snapshot = replace(snapshot, belief_states=tuple(
-        replace(state, log_odds=probability_to_log_odds(0.1))
+        replace(
+            state, log_odds=probability_to_log_odds(0.1), occupancy_evidence=None,
+        )
         if state.zone == "c" else state for state in snapshot.belief_states
     ))
     # STATE001/PRED008: scalar calibration does not erase independent grants.
@@ -513,10 +521,10 @@ def test_runtime_alias_availability_release_and_count_zero(count: int) -> None:
         assert replay.edges_for("c") == (ActiveEdge(at(2), "c", True),)
         replay.send("binary_sensor.c_alias", "unavailable", at(701))
         replay.advance(at(1300))
-        assert tuple(edge.active for edge in replay.edges_for("c")) == (True, False)
-        assert replay.edges_for("c")[-1].at > at(1000)
+        assert replay.edges_for("c") == (ActiveEdge(at(2), "c", True),)
         assert replay.view().active("x")
         replay.send("sensor.replay_people", "0", at(1301))
+        assert replay.input_edges_for("c")[-1] == ActiveEdge(at(1301), "c", False)
         assert replay.input_edges_for("x")[-1] == ActiveEdge(at(1301), "x", False)
         replay.send("sensor.replay_people", str(count), at(1302))
         replay.advance(at(1310))
@@ -541,7 +549,7 @@ def test_callback_snapshot_is_strict_at_presence_acquisition() -> None:
 
 def test_sparse_loss_preserves_threshold_crossing_and_full_dwell() -> None:
     predictive_map = gate_map()
-    stepped = retired(predictive_map)
+    stepped = retired(predictive_map, departure=True)
     stepped.advance(at(700))
     observe(stepped, "c", "off", 710)
     sparse = roundtrip(stepped, predictive_map)

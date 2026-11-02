@@ -7,13 +7,67 @@
 selected-path, presence-gated departure, diagnostic-health, durable-learning and
 strict modular panel contracts, including bounded overlapping selected branches
 and the default-off Visitors lighting override in the unpublished release.
-**Current local validation passes (2026-10-30; 2026-10-31 UTC):**3391 Python tests,
-100% statement and branch coverage; distinct84 incident,112 scenario and308
+Unresolved qualified room evidence now survives movement-history retirement
+until a supported latest-source departure or count-complete outside proof.
+**Current local validation passes (2026-11-02):**3440 Python tests,
+100% statement and branch coverage; distinct85 incident,113 scenario and308
 frontend cases pass.
 Ruff, mypy, strict types, shipped build/freshness, independent review and standalone
 100-event performance gates pass with unchanged100% coverage and5ms p99 limits.
 [Section 19.0](#current-local-conformance) distinguishes current results from
 historical green. No deployment, live restart or physical actuation is claimed.
+
+### Approved unresolved occupancy amendment - 2026-11-01
+
+This approved amendment supersedes conflicting PATH004/008, POLICY002/013/014,
+belief-context and Section16(25) release premises. Implemented and locally
+validated; Section19.0 records the final complete runs, not a coverage union.
+
+- **REQ-PATH-009:** A stay-zone may retain one immutable occupancy-evidence
+  record admitted only by real trustworthy noninteraction acquisition-qualified
+  local evidence. Preserve qualified admission separately from latest trustworthy
+  positive/correlated support. No output/prediction/timer/bootstrap/alias minting.
+  Unresolved evidence retains only its already evidence-active lifetime and
+  suppresses unsupported outward acceleration, without likelihood or acquisition
+  bonuses. Stable clear, unavailable, history eviction, replacement and positive
+  count changes do not resolve or delete it; count0 clears it immediately.
+- **REQ-PATH-010:** Resolve only on trustworthy real noninteraction selected
+  departure whose direct source equals the latest node/episode, or on an ordinary
+  positive input establishing all N>0 slots outside the zone. All-N requires
+  confirmed eligible main heads, matching current known-ON episodes strictly
+  before assertion-trust expiry, and disjoint three-distinct-node adjacent route
+  suffixes with consecutive different zones, all occurrences strictly newer than
+  latest room support, kinds positive/correlated_positive and ordinary terminal.
+  U, shared evidence and timer/count-only callbacks fail. Same outside zone is
+  allowed. Direct-source OFF continuation needs neither second track nor target
+  acquisition. Resolution commits; fresh trustworthy local support rearms.
+- **REQ-POLICY-015:** Advance old context to resolution first, adding no negative
+  evidence; normal outward decay/full profile dwell follow only after all real
+  protections end. Protected time cannot earn dwell. Preserve actual displacement
+  independently. A one-zone latest anchor is not same-room multiplicity proof;
+  other selected/presence holds still protect. With no resolving evidence, normal
+  control can remain ON indefinitely. No fallback timeout is introduced.
+- **REQ-STATE-014:** Require bounded strict admission/latest/resolution records
+  on current beliefs and a new occupancy_evidence_version fingerprint. Preserve
+  selected-path v2, historical recipes/readers and original stored backups.
+  Old full inference rejects before decode; embedded learning is not automatically
+  imported into cold inference. Matching restore validates before advancing once.
+  Require exact record keys admission, latest, authorization_reason,
+  admission_probability, resolved_at and resolution_kind; observations require
+  node_id, episode_id, kind and at. Validate physical zone/noninteraction identity,
+  qualifying admission probability, UTC occurrence/encoded-origin agreement and
+  admission<=latest<=frontier; paired resolution is latest<=resolution<=frontier.
+  Same-node generations cannot decrease; equal generations identify the identical
+  occurrence, while newer generations may share the same timestamp. Preflight
+  exactly the configured belief-zone inventory before decoding records. Count0
+  forbids occupancy records; malformed current state rejects atomically.
+- **Named GOV005 acceptance approval:** After the exact event timetable and
+  indefinite-retention tradeoff were explained, the user approved changing ONLY
+  the August28 0730Z captured missed-edge source-OFF expectation to retained ON.
+  Preserve its four sensor inputs, count2, times and final07:51:05.472961Z
+  checkpoint. Its destination continues from an older bridge, not latest source;
+  the second slot is U. Preserve the separate0725Z genuine-departure OFF control.
+  Other captured incident oracles remain frozen unless separately approved.
 
 ### Approved selected-path cutover contract — 2026-09-12
 
@@ -41,7 +95,8 @@ their local validation. Frozen incident assertions remain retained.
 - **REQ-PATH-004:** Selected coverage retains only already evidence-active zones;
   it never retroactively acquires a source. Displaced generations use outward
   decay/full dwell without fabricated OFF, likelihood or sensor-fault evidence,
-  subject to the presence gate below. Raw held assertions cannot resurrect retired
+  subject to PATH005 and the independent PATH009/010 occupancy-evidence gate.
+  Displacement alone cannot resolve qualified local occupancy. Raw held assertions cannot resurrect retired
   branches. Predictions remain
   downstream, create no selected path, and do not learn selected-only transitions.
 - **REQ-PATH-005, user-approved presence gate (2026-09-12):** Loss of selected
@@ -614,6 +669,15 @@ qualified departure/transfer or an explicitly scoped invalidation. Fallback deca
 alone does not release that endpoint. Remote, voice, automation, or UI changes to a light or switch state
 are not interaction evidence.
 
+Current physical stay-zone occupancy retention additionally follows PATH009/010.
+Admission and latest trustworthy support are independent of bounded movement
+history. An unresolved record suppresses unsupported outward acceleration without
+adding likelihood or a probability floor; genuine physical presence still selects
+asserted context. Advance the old effective context through the actual resolving
+observation before ordinary outward decay. Selected displacement remains recorded
+even while unresolved occupancy prevents it from accelerating decay. Policy
+consumes these facts but never supplies evidence back to the filter.
+
 Graph authorization supplies a distinct arrival-state transition after the
 reliability-tempered local observation. For a trustworthy fresh physical target
 episode authorized by selected movement, same-zone independent evidence,
@@ -646,10 +710,11 @@ where $\pi_z$ is the profile baseline and $\tau_z(c)$ is selected from declared
 context $c$. Context is a deterministic state machine; node role selects the
 shared parameter family and is not itself a competing state. In the selected
 engine, generation-bound `path_displaced_at` selects departure-conditioned decay
-only after genuine `physical_hold` ends (PATH004/005). This effective decay context
+only after genuine `physical_hold` ends and qualified occupancy resolves
+(PATH004/005/009/010). This effective decay context
 does not fabricate OFF, an absence likelihood or a health fault. The following
 ordinary episode/outward transitions remain applicable when not superseded by
-that presence gate; trust-degradation transitions are component qualifications:
+those gates; trust-degradation transitions are component qualifications:
 
 1. an accepted positive selects `asserted` for its episode;
 2. expiry of a transition or boundary assertion's trust horizon selects
@@ -1327,11 +1392,12 @@ than replacing it with a separate proof system.
   are not acquisition evidence.
 - **REQ-POLICY-002:** Release occurs when filtered belief is at or below
   $\theta_{off}$ for the profile's release-confirmation dwell and no current
-  physical-presence hold under PATH005 or selected-coverage hold under
-  `REQ-POLICY-013` applies. POLICY014 preserves eligible elapsed progress.
-  It does not require globally
-  finalized movement, support certificates, or accounting for every occupant
-  elsewhere.
+  physical-presence hold under PATH005, selected-coverage hold under POLICY013,
+  or unresolved occupancy hold under PATH009/010 applies. POLICY014/015 preserve
+  eligible elapsed progress. Direct latest-source departure needs no accounting
+  for other occupants; the alternative count-complete route explicitly requires
+  all accepted occupants independently established outside. Neither route proves
+  person identity or same-room multiplicity.
 - **REQ-POLICY-003:** Current trustworthy stay evidence may floor $q_z$ or extend
   release confirmation according to profile calibration. While a stay sensor
   remains asserted, assertion age alone cannot release the zone. Selected
@@ -1385,13 +1451,16 @@ than replacing it with a separate proof system.
   refresh. Stable clear removes this asserted-state hold; the independent
   REQ-POLICY-013 hold can still prevent release. Authoritative count zero remains immediate.
 - **REQ-POLICY-013, selected coverage and retained component endpoint:** Current
-  retention belongs to selected coverage under PATH002/004, including retained
+  selected retention belongs to coverage under PATH002/004, including retained
   endpoints after OFF and eligible earlier branches, not all historical visits
   or the union of alternative supports. Coverage protects only already
   evidence-acquired activity, never an inactive or merely predicted zone. Its
   loss consumes the actual displacement frontier; PATH005 independently defers
-  departure decay through genuine presence protection, then POLICY014 requires
-  the first eligible threshold crossing and full dwell. Count0 remains immediate.
+  departure decay through genuine presence protection. PATH009/010 separately
+  retain unresolved qualified occupancy even after movement authority is revoked;
+  resolution does not revive that authority. POLICY014/015 require the first
+  eligible threshold crossing and full dwell after all protections end, no earlier
+  than actual resolution, displacement or final hold loss. Count0 remains immediate.
 
   The following narrower settled-support contract remains a genuine component
   qualification; it does not make live retention support-only or authorize a new
@@ -1845,11 +1914,12 @@ Persist only state needed to reproduce the next decision:
   [persistence](custom_components/predictive_controls/zone_model/persistence.py).
   Alongside map, capability/profile, reliability, route-prior, belief, policy,
   arrival and prediction calibration, its current top-level integer version keys
-  (all `1`) are `settled_adjacent_transfer_version`, `support_departure_version`,
+  (all `1` except selected-path version `2`) are `settled_adjacent_transfer_version`, `support_departure_version`,
   `impossible_cadence_preservation_version`, `supported_gap_acquisition_version`,
   `settled_endpoint_release_version`, `selected_path_version`,
   `presence_gated_departure_version`, `selected_prediction_execution_version`,
-  `unsupported_jump_diagnostics_version` and `deferred_prediction_learning_version`.
+  `unsupported_jump_diagnostics_version`, `deferred_prediction_learning_version`
+  and `occupancy_evidence_version`.
   `path_health_calibration` includes unsupported-ON duration, quick-cycle window,
   maximum ON duration and completion count. Retained component keys do not enable
   those components as current acquisition/health policy.
@@ -1859,8 +1929,9 @@ Persist only state needed to reproduce the next decision:
   No Store/schema bump, fingerprint rewriting or configuration reset is required.
 
   Required current state includes selected paths/sources, path health, displacement
-  and physical-hold fields, selected prediction grants, lease `authority_kind` and
-  deferred learning. Missing proof never defaults from startup or old inference.
+  and physical-hold fields, strict PATH009/010 occupancy records (or explicit null),
+  selected prediction grants, lease `authority_kind` and deferred learning.
+  Missing proof never defaults from startup or old inference.
   Earlier v4 compatibility windows are superseded; mismatched fingerprints reject
   before decoding. Historical recipes and archived expected hashes remain unchanged.
   Only isolated historical decoders may default absent selected/grant/hold records
@@ -2172,13 +2243,29 @@ scenarios and adversarial tests demonstrate:
   Office retains the original asserted mmWave belief identity beyond the
   production false-release frontier without a new likelihood, traversal, or
   public edge; and
-25. the exact retained 2026-08-28 bathroom departure commits outward decay past
-  the former authority deadline and publishes one ordinary release, while the
-  kitchen-to-foyer missed edge uses the exact matching kitchen clear frontier
-  without renewing its still-valid token; and
+25. the exact retained 2026-08-28 0725Z genuine bathroom departure commits outward
+  decay and publishes an ordinary release. Under the separately approved
+  November1 amendment, the 0730Z kitchen-to-foyer missed-edge stream retains
+  unresolved source occupancy: older bridge lineage plus U cannot prove latest
+  source departure. Preserve all four inputs/count/times without renewing tokens; and
 26. all retained production incident regressions pass at the public contract.
 
 ### Public-timeline replay boundary
+
+**November1/2 occupancy qualification reconciliation:** preserve every captured
+incident except the named 0730Z acceptance amendment above. Synthetic retired-room
+and one-head-plus-U streams retain ON without movement revival. Preserve the
+count1 genuine resolution/OFF inverse. T01's archived synthetic JSON stays intact;
+its named current-contract mapping retains room A because old hallway lineage and
+a two-node outside suffix do not satisfy PATH010. The86 ordering controls now add
+real peerOFF202/ON213 and an outside transit at802 when a peer is present, keeping
+displacement806. Their measured peer threshold is1026.419049s; require ON one
+microsecond before the full120s dwell expires and OFF by1200, with coarse/fine/
+restore parity. The previous synthetic no-peer checkpoints remain unchanged.
+Benchmark correlated setup adds a real living-right-to-dining departure before
+the original guest-to-stairs branch; the same two-hour asserted guest still
+authorizes a genuinely inactive target. Its bounded correlated route is guest to
+target; real acquisition, confidence, public write and sample gates remain exact.
 
 **Named release/S29 amendment, 2026-09-13:** the86 synthetic endpoint-ordering
 qualifications retain physical inputs/maps/counts. Replace obsolete legacy
@@ -2432,7 +2519,71 @@ references remain in [Section 19.5](#deferred-operational-obligations) and
 
 <a id="current-local-conformance"></a>
 
-### 19.0 Current local conformance - validated 2026-10-30 (2026-10-31 UTC)
+### 19.0 Current local conformance - validated 2026-11-02
+
+**PASS, local qualification only.** PATH009/010, POLICY015 and STATE014 implement
+the approved unresolved-room rule without changing acquisition thresholds,
+selected-path v2, anonymous slot bounds, shared decay/dwell or diagnostic health.
+All3391 prior Python cases remain;49 additive cases bring the total to3440.
+Only the expressly approved August28 0730Z captured OFF oracle changes to ON;
+its four inputs/count/times and the separate0725Z genuine-departure OFF control
+remain. No coverage exclusions or performance limits changed. Distinct completed
+runs after the final code/test changes establish:
+
+| Executed gate | Completed result |
+| --- | --- |
+| Exact living-room regression, separate run | **1 passed**,1.22s |
+| `.venv/bin/pytest --no-cov -q tests -k 'test_inc_'` | **85 passed**,64.17s; zero failures/errors/skips |
+| `.venv/bin/pytest --no-cov -q -m scenario` | **113 passed**,36.92s; zero failures/errors/skips |
+| `.venv/bin/pytest -q` with fresh XML/coverage JSON | **3440 passed**,242.43s; zero failures/errors/skips |
+| Statement / branch coverage | **100% /100%**,8293/8293 statements,3202/3202 branches; zero missing/partial,12 existing exclusions unchanged |
+| `npm run test:frontend` | **308 passed**,3296.301929ms; zero failures/cancellations/skips |
+| Repository Ruff / normal-config mypy | Pass;178 source files |
+| Frontend build / strict TypeScript / freshness | Pass; panels346980bytes, helpers7280bytes |
+| Standalone `.venv/bin/python benchmarks/occupancy_performance.py --events 100` | **Pass**,11 positive workloads100/100 each; worst p99 **3.267170ms**, max **3.846945ms**; rejected100/100 p99 **2.481897ms**, max **2.537306ms**, zero ON; all correctness/sample/fanout/timer gates pass |
+| Independent read-only source and final conformance reviews | No material defect; follow-up rearming/lifetime/trust/malformed-restore controls pass |
+
+**Incident and disconfirming replay:** approved recorder/audit/automation evidence
+in sibling Homelab tmp/living-room-20261031-* shows living active OFF at
+00:30:48.537020Z, followed by physical light OFF00:30:48.992452Z. Ordinary automation
+consumed the false OFF. Latest living support00:23:49.218632Z was not the selected
+source of kitchen00:24:17.097908Z; continued movement left one located slot plus U.
+Clear/history retirement therefore did not prove that the room emptied. Human
+entry/exit times and the historical posterior are unavailable; no person is
+assigned to a track. The permanent
+[living-room regression](tests/incidents/test_inc_2026_11_01_0030z_living_room_missed_reacquisition.py)
+preserves194 inputs/14 entities, the11-node induced map, count2 and explicit
+synthetic cold all-OFF startup. It failed before implementation (1failed1.23s,
+forbidden public OFF00:30:50), passed immediately afterward (1passed1.19s), and
+now independently passes1.22s. Require uninterrupted public living ON from
+00:22:06.422096Z through00:31:06Z and office acquisition00:26:18.488274Z, not
+eventual reacquisition or actuation proof.
+
+The48 synthetic [occupancy-boundary cases](tests/test_occupancy_evidence.py) cover
+count0/1/2, real direct departure, all-N disjoint outside proof including shared
+outside zones, U/unknown/expiry negatives, strict expiry equality, committed and
+unresolved restore, count changes, movement-history eviction, local rearming,
+activation lifetime and malformed constructor/atomic restore. Independent review
+identified same-generation contradictory occurrence times: an actual two-generation
+restore mutation failed to reject before the monotonic-generation repair and now
+rejects atomically. Valid newer generations at equal times remain accepted.
+
+Earlier3401-case inventory failed38 tests with81 setup errors; its shared benchmark
+and synthetic release premises were repaired explicitly. The next full run passed
+3402 tests but correctly failed99.70% coverage. Focused union100% was only a gap
+precheck; the clean3440-case run above is the final coverage evidence. Exactly
+three design hardening passes and independent pre/final reviews were completed.
+The completed working specification is removed after canonical reconciliation;
+the sourced incident remains permanent. Machine-readable final results are retained
+in /tmp/occupancy-final-{python,incidents,scenarios,exact}.xml, coverage JSON,
+frontend/build logs and performance JSON. This is not deployment approval: deploy
+matching backend/assets separately, preserve configuration and original inference/
+learning backups, and expect old-fingerprint inference to cold-start. No automatic
+old-learning import, live restart, storage overwrite or physical-light proof is
+claimed. Without either resolving proof an empty room can stay ON indefinitely;
+the user explicitly approved this tradeoff, not a fallback timer.
+
+#### Historical Visitors qualification - 2026-10-30 (2026-10-31 UTC)
 
 **PASS, local qualification only.** The unpublished Visitors toggle implements
 REQ-VISIT-001 through004 without changing inference, counts or public entity IDs.

@@ -21,7 +21,12 @@ Selected coverage retains only already evidence-active zones: endpoint OFF or
 elapsed time alone does not evict them, and rejected alternatives cannot hold
 every possible room on. Movement can displace old coverage, but genuine
 noninteraction presence separately protects local confidence through stable clear;
-departure decay and full release dwell follow only after that protection ends.
+qualified local occupancy evidence also survives movement-history retirement.
+It resolves only on departure from its latest local observation or fresh,
+independent outside confirmation for all accepted occupants. Then ordinary decay
+and full release dwell follow after all protections end. Count zero clears normal
+retention immediately. With no resolving evidence a room can remain ON indefinitely;
+this conservative rule adds no timeout, acquisition bonus or person identity.
 
 Warnings are diagnostic, not occupancy or hardware-control gates. A missing,
 unobserved intermediate does not authorize a target: it can produce a distinct
@@ -37,14 +42,14 @@ Flapping warnings require **10 completed short ON→OFF cycles within a rolling
 the warning clears when fewer than ten remain. Aliases, duplicates and timers do
 not add cycles. This diagnostic-only rule replaces the former six-cycles/hour rule.
 
-**Current local validation, 2026-10-30 (2026-10-31 UTC): PASS.** **3,391 Python
-tests** pass with **100% statement and branch coverage** (8,147 statements/3,120
-branches), in **186.60 seconds**. Separate runs pass all **84 incident tests**,
-**112 scenario-marked tests**, and **308 frontend tests**. Existing cases remain;
+**Current local validation, 2026-11-02: PASS.** **3,440 Python
+tests** pass with **100% statement and branch coverage** (8,293 statements/3,202
+branches), in **242.43 seconds**. Separate runs pass all **85 incident tests**,
+**113 scenario-marked tests**, and **308 frontend tests**. Existing cases remain;
 Ruff, mypy, strict TypeScript, build/freshness and independent review also pass.
 
 The standalone100-event benchmark passes all qualification/timer gates: worst
-positive p99 **3.940ms**, rejected-jump p99 **3.025ms**, below the unchanged
+positive p99 **3.267ms**, rejected-jump p99 **2.482ms**, below the unchanged
 **5ms** limit. The default-off Visitors toggle adds a persisted manual lighting
 hold without changing inference or occupant limits. Its permanent
 [acceptance regression](tests/incidents/test_inc_2026_10_31_0000z_visitors_motion_hold.py)
@@ -55,7 +60,13 @@ the later manual press. Synthetic qualification repairs preserve independent
 learning, true retirement and strict producer-to-panel contracts; no selected-only
 learning or weaker coverage gate was introduced.
 
-Completed Visitors and office/qualification plans are reconciled and removed; permanent
+The permanent [living-room regression](tests/incidents/test_inc_2026_11_01_0030z_living_room_missed_reacquisition.py)
+retains194 recorded inputs and requires uninterrupted occupied-room activity,
+not recovery after a false OFF. Qualified occupancy and revoked movement
+authority remain separate; strict restore and48 boundary controls cover release,
+rearming, count changes, trust expiry and malformed-state rejection.
+
+Completed living-room, Visitors and office/qualification plans are reconciled and removed; permanent
 regressions and unresolved external operational work remain. See
 [current conformance and evidence](SPECIFICATION.md#current-local-conformance)
 for exact results and historical failures. Matching backend/assets still need
@@ -69,10 +80,12 @@ verification is claimed.
   selected, physical, policy and prediction/deferred-learning records. Old v4
   fingerprints, all v3 inference and v1 inference are rejected; a schema label
   or edited fingerprint cannot supply missing authority.
-- Both the ten-cycle/20-minute warning calibration and selected overlap version2
-  change that fingerprint. Deploying them rejects old full inference and
+- The warning calibration, selected overlap version2 and occupancy-evidence
+  version1 change that fingerprint. Deploying them rejects old full inference and
   cold-reconstructs from subsequent evidence;
-  configuration is retained. No live deployment or restart was performed here.
+  configuration is retained. Preserve original stored inference/learning backups:
+  old-fingerprint learning is not automatically imported into cold inference.
+  No live deployment, storage overwrite or restart was performed here.
 - The separate schema-6 and v2 import paths retain only validated count/Boolean
   active seeds; v2 requires a retained allowed non-source-free acquisition edge.
   Both cold-build from current raw sensors and prefer the valid authoritative

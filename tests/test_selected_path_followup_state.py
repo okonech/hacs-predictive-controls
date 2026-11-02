@@ -144,13 +144,13 @@ def test_public_retired_branch_fresh_presence_does_not_reacquire(count: int) -> 
         for index, node in enumerate(("a", "b", "c", "x"), 4):
             send(replay, node, "off", index)  # Remove every physical hold mask.
         replay.advance(at(900))
-        assert replay.view().active("x") and not replay.view().active("c")
+        assert replay.view().active("x") and replay.view().active("c")
         before = replay.edges_for("c")
-        assert tuple(edge.active for edge in before) == (True, False)
+        assert tuple(edge.active for edge in before) == (True,)
         send(replay, "c", "on", 901)
         replay.advance(at(1200))
         assert replay.edges_for("c") == before
-        assert not replay.view().active("c")
+        assert replay.view().active("c")
 
 
 @pytest.mark.parametrize("count", (1, 2))

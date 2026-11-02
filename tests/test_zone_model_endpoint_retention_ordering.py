@@ -7,6 +7,8 @@ aliases withdraw presence without stable clear. The approved crossing is
 1046.484750s, with full 120s dwell and ordinary five-second timer OFF at 1170s.
 Historical function names remain collection identities, not legacy premises.
 No injected inference state or calibration changes are used.
+The November 1 occupancy contract adds a real peer reassertion after the button
+and an outside transit visit, preserving the original displacement/dwell times.
 """
 
 from __future__ import annotations
@@ -70,12 +72,17 @@ def _map() -> PredictiveMap:
         "pair": {
             "role": "anchor_sensor", "occupancy_behavior": "sticky",
             "entities": {"presence": "binary_sensor.pair"},
-            "adjacent": ["source", "peer", "idle", "button", "middle"],
+            "adjacent": ["source", "peer", "idle", "button", "middle", "step"],
         },
         "middle": {
             "role": "room_occupancy", "occupancy_behavior": "sustained",
             "entities": {"motion": "binary_sensor.middle"},
-            "adjacent": ["pair", "tip"],
+            "adjacent": ["pair", "tip", "step"],
+        },
+        "step": {
+            "role": "transition_gate", "occupancy_behavior": "transient",
+            "entities": {"motion": "binary_sensor.step"},
+            "adjacent": ["pair", "middle"],
         },
         "tip": {
             "role": "transition_gate", "occupancy_behavior": "transient",
@@ -122,7 +129,12 @@ def _departure(
     assert [(e.zone, e.kind) for e in acquired.policy_events] == [
         ("room", "refreshed" if peer else "acquired"),
     ]
+    if peer:
+        _send(engine, "peer", "off", 202)
+        _send(engine, "peer", "on", 213)
     first = _send(engine, "pair", "on", 800)
+    if peer:
+        _send(engine, "step", "on", 802)
     second = _send(engine, "middle", "on", 804)
     third = _send(engine, "tip", "on", 806)
     assert all(
@@ -130,10 +142,14 @@ def _departure(
         for result in (first, second, third)
     )
     assert first.authorizations[0].path_node_ids == (
-        "peer" if peer else "source", "button", "pair",
+        ("button", "peer", "pair") if peer else ("source", "button", "pair")
     )
-    assert second.authorizations[0].path_node_ids == ("button", "pair", "middle")
-    assert third.authorizations[0].path_node_ids == ("pair", "middle", "tip")
+    assert second.authorizations[0].path_node_ids == (
+        ("pair", "step", "middle") if peer else ("button", "pair", "middle")
+    )
+    assert third.authorizations[0].path_node_ids == (
+        "step" if peer else "pair", "middle", "tip",
+    )
     snapshot = third.snapshot
     assert _policy(snapshot).active and not _policy(snapshot).retained_endpoint_hold
     assert _belief(snapshot).physical_hold
@@ -293,9 +309,11 @@ def test_first_clear_cannot_qualify_while_same_zone_peer_is_clearing(
         candidate = _policy(result.snapshot).pending_release_since
         assert candidate is not None
         assert abs(candidate - pending) <= timedelta(microseconds=1)
-    assert abs(pending - _at(1051.460546)) <= timedelta(microseconds=1)
+    assert abs(pending - _at(1026.419049)) <= timedelta(microseconds=1)
     for engine in engines:
-        before_deadline = engine.advance(_at(1170))
+        before_deadline = engine.advance(
+            pending + timedelta(seconds=120, microseconds=-1),
+        )
         assert _policy(before_deadline.snapshot).active
         assert not _released(before_deadline)
         final = engine.advance(_at(1200))

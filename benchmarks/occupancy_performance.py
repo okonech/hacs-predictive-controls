@@ -679,8 +679,9 @@ def _handoff_fixture(
 
     Both synthetic histories use only observations on the unchanged reference
     map. Ordinary continues the retained endpoint. Correlated first acquires and
-    clears living-left, then branches from the still-asserted guest to stairs.
-    Actual decay/dwell releases living before the measured correlated return.
+    clears living-left, traverses living-right to dining as a real departure,
+    then branches from the still-asserted guest to stairs. Actual decay/dwell
+    releases living before the measured correlated return.
     This is branch continuation, NOT a donor composite or a retired token transfer.
     """
 
@@ -717,7 +718,18 @@ def _handoff_fixture(
         primed = source.observe(event(target_id, "on", 6603))
         assert any(e.zone == "living_room" and e.kind == "acquired"
                    for e in primed.policy_events)
+        for alias in predictive_map.nodes["living_right_sensor"].entities.values():
+            source.observe(SensorInput(
+                alias, "off", started_at + timedelta(seconds=6604),
+            ))
+        source.observe(event("living_right_sensor", "on", 6604))
+        source.observe(event("living_right_sensor", "off", 6605))
         source.observe(event(target_id, "off", 6613))
+        departure = source.observe(event("dining_sensor", "on", 6616))
+        right_at = started_at + timedelta(seconds=6604)
+        assert departure.authorizations[0].selected_source_episode_ids == (
+            f"living_right_sensor:1:{right_at.isoformat()}",
+        )
         branch = source.observe(event("stairs_bottom_sensor", "on", 6630))
         assert branch.authorizations[0].selected_source_episode_ids == (
             original_source.episode_id,
@@ -808,7 +820,8 @@ def _handoff_qualified(
     return _selected_acquisition_qualified(
         before, result, target_id, target_zone, event_at,
         source_id="guest_bedroom_sensor",
-        route=("stairs_bottom_sensor", "guest_bedroom_sensor", target_id),
+         route=(("guest_bedroom_sensor", target_id) if correlated else
+             ("stairs_bottom_sensor", "guest_bedroom_sensor", target_id)),
         confidence="confirmed",
         disposition=(
             "accepted_correlated_positive" if correlated else "accepted_positive"

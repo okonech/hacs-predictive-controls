@@ -707,6 +707,7 @@ def test_handoff_fingerprint_discriminator_and_historical_recipes(
     old.pop("selected_prediction_execution_version")
     old.pop("unsupported_jump_diagnostics_version")
     old.pop("deferred_prediction_learning_version")
+    old.pop("occupancy_evidence_version")
     old_fingerprint = hashlib.sha256(
         json.dumps(old, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -2558,7 +2559,7 @@ def test_weak_clear_retained_support_survives_restart() -> None:
         ),
         (
             "generation_episode_id", None,
-            "Qualified departure is inconsistent with belief",
+            "Occupancy evidence is inconsistent with belief",
         ),
         (
             "context", "cleared_without_outward",

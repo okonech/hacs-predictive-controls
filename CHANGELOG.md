@@ -2,11 +2,11 @@
 
 ## Unreleased
 
-The local implementation remains version `0.2.6`. October30 final validation
-(October31 UTC) passes:3391 Python tests,100% statement/branch coverage,
-separate84 incident,112 scenario and308 frontend cases. Existing tests remain.
+The local implementation remains version `0.2.6`. November2 final validation
+passes:3440 Python tests,100% statement/branch coverage,
+separate85 incident,113 scenario and308 frontend cases. Existing tests remain.
 Static/build/freshness, independent review and standalone100-event performance
-gates pass; worst positive/rejected p99 is3.940/3.025ms
+gates pass; worst positive/rejected p99 is3.267/2.482ms
 under the unchanged5ms limit.
 This is not a published release,
 deployment or physical-light verification. [SPECIFICATION.md](SPECIFICATION.md) owns current behavior and
@@ -24,6 +24,15 @@ entries below describe earlier releases and may contain superseded behavior.
 
 ### Changed
 
+- Retain qualified local room occupancy independently of bounded selected-path
+	history. Resolve only on supported departure from latest local evidence or
+	fresh disjoint outside confirmation for all accepted occupants, then apply
+	normal decay/full dwell. Clear/count changes alone cannot prove departure;
+	count0 clears normal retention immediately. No fallback timeout is added.
+- Require strict occupancy admission/latest/resolution records and fingerprint
+	version1, with monotonic physical generations and atomic restore rejection.
+	Keep selected-path v2 and historical readers; preserve configuration and old
+	inference/learning backups, without automatically importing old learning.
 - Preserve bounded, still-supported selected overlap tips as up to three witnessed
 	prefixes in the same anonymous slot. Keep one main route/last four visits;
 	prefix-only history never authorizes movement. Clear, generation mismatch,
@@ -55,6 +64,11 @@ entries below describe earlier releases and may contain superseded behavior.
 
 ### Fixed
 
+- Prevent living-room activity from turning OFF after unrelated movement retires
+	its saved branch while occupancy remains unresolved. Retain the194-input
+	regression and48 boundary cases. Preserve genuine-departure OFF behavior;
+	only the named August28 0730Z missed-edge OFF expectation changes to retained
+	ON with explicit approval and all inputs/count/timings preserved.
 - Fix missed office arrival after foyer reactivation prematurely retired the
 	still-supported upstairs branch. The frozen46-input incident now publishes
 	office ON at motion20:56:10.437899UTC, without waiting for manual interaction.

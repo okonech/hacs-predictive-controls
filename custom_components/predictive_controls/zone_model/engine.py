@@ -39,6 +39,8 @@ from .types import (
     CountInput,
     EpisodeEffect,
     EpisodeState,
+    OccupancyEvidence,
+    OccupancyObservation,
     PolicyDecision,
     PolicyEvent,
     ReliabilityWarningOccurrence,
@@ -1065,7 +1067,6 @@ class ZoneModelEngine:
             selected = self._selected_paths.observe(
                 effect, state, self._episodes.states, before=selected_before,
             )
-            self._coverage_changed(covered_before, effect.at)
             if selected is not None:
                 # The selected target and its consumed origin must not leave
                 # legacy pending/token authority behind to reseed another path.
@@ -1077,7 +1078,10 @@ class ZoneModelEngine:
                 filter_.restore_path(effect.at)
                 if effect.kind != "interaction":
                     filter_.apply_arrival_transition(effect.episode_id, effect.at)
+                self._update_occupancy_evidence(state, effect, selected)
+                self._coverage_changed(covered_before, effect.at)
                 return selected, effect, None
+            self._coverage_changed(covered_before, effect.at)
         if effect.kind == "positive":
             settled_support = self._supports.settled_endpoint_for(state)
             authorization = self._frontier.authorize(
@@ -1119,6 +1123,7 @@ class ZoneModelEngine:
                     state,
                     effect.at,
                 )
+            self._update_occupancy_evidence(state, effect, authorization)
             return authorization, effect, token
         if effect.kind == "correlated_positive":
             settled_support = self._supports.settled_endpoint_for(state)
@@ -1145,6 +1150,7 @@ class ZoneModelEngine:
                 if support_backed or authorization.settled_handoff is not None
                 else None
             )
+            self._update_occupancy_evidence(state, effect, authorization)
             return authorization, effect, token
         if effect.kind == "correlated_flap_ignored":
             if self._frontier.reopen_authorized_continuity(state, effect):
@@ -1181,6 +1187,93 @@ class ZoneModelEngine:
         )
         self._frontier.sync(state, effect.at)
         return None, effect, None
+
+    def _update_occupancy_evidence(
+        self, state: EpisodeState, effect: EpisodeEffect,
+        authorization: TraversalAuthorization | None,
+    ) -> None:
+        if (
+            effect.kind not in {"positive", "correlated_positive"}
+            or not ZonePolicy._confirming_evidence(effect.at, state, effect)
+        ):
+            return
+        local = self._filters[effect.zone]
+        evidence = local.state.occupancy_evidence
+        if SHARED_PROFILES[state.profile_name].role == "stay":
+            observation = OccupancyObservation(
+                effect.node_id, effect.episode_id, effect.kind, effect.at,
+            )
+            if evidence is not None:
+                evidence = replace(
+                    evidence, latest=observation,
+                    resolved_at=None, resolution_kind=None,
+                )
+            elif self._policies[effect.zone].qualifies_occupancy(
+                effect.at, local.state, state, effect, authorization,
+            ):
+                assert authorization is not None
+                evidence = OccupancyEvidence(
+                    observation, observation, authorization.reason,
+                    local.state.probability,
+                )
+            if evidence is not None:
+                local.set_occupancy_evidence(evidence, effect.at)
+        direct_sources = (
+            authorization.selected_source_episode_ids
+            if authorization is not None and authorization.reason == "selected_path"
+            else ()
+        )
+        for zone, filter_ in self._filters.items():
+            record = filter_.state.occupancy_evidence
+            if record is None or record.resolved_at is not None or zone == effect.zone:
+                continue
+            kind = (
+                "direct_departure" if record.latest.episode_id in direct_sources
+                else "count_complete" if effect.kind == "positive"
+                and self._count_complete_outside(zone, record.latest.at, effect.at)
+                else None
+            )
+            if kind is not None:
+                filter_.set_occupancy_evidence(replace(
+                    record, resolved_at=effect.at, resolution_kind=kind,
+                ), effect.at)
+
+    def _count_complete_outside(
+        self, zone: str, latest_at: datetime, at: datetime,
+    ) -> bool:
+        if self._count.state.expected_count == 0:
+            return False
+        episodes = {state.node_id: state for state in self._episodes.states}
+        used: set[str] = set()
+        for path in self._selected_paths.paths:
+            if (
+                path is None or not path.endpoint_eligible
+                or path.track_confidence != "confirmed" or len(path.route) < 3
+            ):
+                return False
+            suffix = path.route[-3:]
+            head = suffix[-1]
+            physical = episodes[head.node_id]
+            identities = {visit.episode_id for visit in suffix}
+            if (
+                head.zone == zone or not physical.known_on
+                or physical.episode_id != head.episode_id
+                or physical.assertion_trust_until is None
+                or at >= physical.assertion_trust_until
+                or len({visit.node_id for visit in suffix}) != 3
+                or head.kind != "positive" or identities & used
+                or any(visit.at <= latest_at or visit.kind not in {
+                    "positive", "correlated_positive",
+                } for visit in suffix)
+                or any(
+                    first.zone == second.zone
+                    or second.node_id not in self._map.nodes[first.node_id].adjacent
+                    for first, second in zip(suffix, suffix[1:], strict=False)
+                )
+            ):
+                return False
+            used.update(identities)
+        return True
 
     def _supported_gap_source(
         self, target: EpisodeState, effect: EpisodeEffect,
@@ -1446,7 +1539,10 @@ class ZoneModelEngine:
         for zone in before - self._selected_paths.covered_zones:
             self._filters[zone].displace_path(at)
             policy = self._policies[zone]
-            if policy.state.retained_endpoint_hold:
+            if (
+                policy.state.retained_endpoint_hold
+                and zone not in self._retained_endpoint_hold_zones()
+            ):
                 # Consume hold loss at its actual movement/clear frontier. Later
                 # sparse policy evaluation must not restart this full release dwell.
                 belief = self._filters[zone].state
@@ -1630,6 +1726,11 @@ class ZoneModelEngine:
                 at,
             )
             release_frontier = belief_after.path_displaced_at
+            record = belief_after.occupancy_evidence
+            if record is not None and record.resolved_at is not None:
+                release_frontier = max(
+                    release_frontier or record.resolved_at, record.resolved_at,
+                )
             if release_frontier is None and zone in settled_endpoint_zones:
                 release_frontier = belief_after.qualified_departure_at
             qualified_progress = (
@@ -1835,9 +1936,17 @@ class ZoneModelEngine:
     def _retained_endpoint_hold_zones(
         self, settled_endpoint_zones: frozenset[str] | None = None,
     ) -> frozenset[str]:
-        """Only the selected route covers occupancy; rejected supports do not."""
+        """Selected coverage and qualified unresolved local evidence retain only."""
 
-        return self._selected_paths.covered_zones
+        return self._selected_paths.covered_zones | frozenset(
+            zone for zone, filter_ in self._filters.items()
+            if filter_.state.occupancy_evidence is not None
+            and self._policies[zone].state.activation_provenance == "evidence"
+            and filter_.state.occupancy_evidence.retains(
+                self._policies[zone].state.activation_at,
+                self._policies[zone].state.activation_episode_id,
+            )
+        )
 
     def _asserted_stay_hold_zones(self) -> frozenset[str]:
         return frozenset(
@@ -1930,7 +2039,7 @@ class ZoneModelEngine:
                         at, belief, belief, local_state=None, local_effect=None,
                         authorization=None, below_threshold_since=at,
                         retained_endpoint_hold=(
-                            zone in self._selected_paths.covered_zones
+                            zone in self._retained_endpoint_hold_zones()
                         ),
                     )
         return losses
@@ -2167,6 +2276,26 @@ class ZoneModelEngine:
             snapshot.count_state.expected_count > 0
         ) else frozenset()
         for belief in snapshot.belief_states:
+            record = belief.occupancy_evidence
+            if record is not None:
+                if (
+                    snapshot.count_state.expected_count == 0
+                    or record.admission_probability
+                    < POLICY_CALIBRATIONS[belief.profile_name].on_threshold
+                ):
+                    raise ValueError("Occupancy admission is not qualified")
+                for observation in (record.admission, record.latest):
+                    physical, origin = self._episode_reference(
+                        observation.episode_id, episodes, at,
+                        exact=False, selected=True,
+                    )
+                    if (
+                        physical.zone != belief.zone or origin != observation.at
+                        or physical_nodes[physical.node_id].interaction_aliases
+                    ):
+                        raise ValueError(
+                            "Occupancy evidence is not physical-zone derived"
+                        )
             if belief.physical_hold != (belief.zone in physical_zones):
                 raise ValueError("Physical hold disagrees with live presence witnesses")
             if (

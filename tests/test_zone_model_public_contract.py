@@ -67,6 +67,24 @@ def _t05_supported_transition_retains_without_age_warning(
     return timeline
 
 
+def _t01_unresolved_room_retains(
+    fixture: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """PATH009/010: old hallway lineage is not latest-room departure.
+
+    Preserve the archived synthetic input/map/count and collection identity.
+    The hallway-to-B route has only two nodes and does not establish all-N
+    fresh outside proof; room A must retain its qualified occupancy evidence.
+    """
+    assert fixture["scenario_id"] == "T01-open-hallway-backtracking"
+    assert fixture["source"]["kind"] == "synthetic_target_contract"
+    timeline: list[dict[str, Any]] = deepcopy(fixture["expected_public_timeline"])
+    assert timeline[-1]["at"] == "2026-07-18T12:02:00Z"
+    assert timeline[-1]["active_changes"] == {"room_a": False}
+    timeline[-1]["active_changes"] = {}
+    return timeline
+
+
 @pytest.mark.target_model
 @pytest.mark.parametrize("fixture_path", FIXTURES, ids=lambda path: path.stem)
 def test_frozen_target_trace_matches_public_timeline(fixture_path: Path) -> None:
@@ -88,6 +106,9 @@ def test_frozen_target_trace_matches_public_timeline(fixture_path: Path) -> None
         _t05_supported_transition_retains_without_age_warning(fixture)
         if supported_transition else fixture["expected_public_timeline"]
     )
+    unresolved_room = fixture["scenario_id"] == "T01-open-hallway-backtracking"
+    if unresolved_room:
+        timeline = _t01_unresolved_room_retains(fixture)
     expected_by_at = {
         _at(item["at"]): item for item in timeline
     }
@@ -149,6 +170,11 @@ def test_frozen_target_trace_matches_public_timeline(fixture_path: Path) -> None
         assert {
             zone: current_health[zone] for zone in expected["health_changes"]
         } == expected["health_changes"]
+        if unresolved_room and event_at >= _at("2026-07-18T12:00:02Z"):
+            assert next(
+                state for state in result.snapshot.policy_states
+                if state.zone == "room_a"
+            ).active
         if supported_transition:
             # Unlike the generic legacy trace rule, no extra transition OFF is
             # permitted: every original post-acquisition checkpoint retains ON.

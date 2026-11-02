@@ -723,8 +723,7 @@ def test_handoff_fixture_is_selected_asserted_and_repeatably_continuable(
     source = next(v for v in path.route if v.node_id == "guest_bedroom_sensor")
     assert source.branch_active
     assert tuple(v.node_id for v in path.route) == (
-        ("foyer_sensor", "stairs_bottom_sensor", "guest_bedroom_sensor",
-         "stairs_bottom_sensor") if correlated else
+        ("guest_bedroom_sensor", "stairs_bottom_sensor") if correlated else
         ("dining_sensor", "foyer_sensor", "stairs_bottom_sensor",
          "guest_bedroom_sensor")
     )
@@ -776,11 +775,18 @@ def test_handoff_fixture_is_selected_asserted_and_repeatably_continuable(
                         s for s in projected.episode_states
                         if s.node_id == source.node_id
                     )
-        assert next(s for s in result.snapshot.belief_states
-                    if s.zone == source.zone) == next(
-                        s for s in projected.belief_states
-                        if s.zone == source.zone
-                    )
+        source_belief = next(s for s in result.snapshot.belief_states
+                             if s.zone == source.zone)
+        projected_belief = next(s for s in projected.belief_states
+                                if s.zone == source.zone)
+        assert replace(source_belief, occupancy_evidence=None) == replace(
+            projected_belief, occupancy_evidence=None,
+        )
+        assert source_belief.occupancy_evidence is not None
+        assert source_belief.occupancy_evidence.resolved_at == (
+            NOW + timedelta(seconds=6603) if correlated else at
+        )
+        assert source_belief.occupancy_evidence.resolution_kind == "direct_departure"
         assert not engine._pending_prediction_learning
         assert tuple(engine._pending_prediction_learning) == before_pending == ()
         assert engine.prediction_manager.chain.counts == before_counts

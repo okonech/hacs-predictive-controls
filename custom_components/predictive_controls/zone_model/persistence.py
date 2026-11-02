@@ -41,6 +41,8 @@ from .types import (
     CountConflictState,
     CountState,
     EpisodeState,
+    OccupancyEvidence,
+    OccupancyObservation,
     OutwardContext,
     PendingAcquisitionCandidate,
     PolicyDecision,
@@ -168,6 +170,7 @@ def _target_map_fingerprint_payload(
         payload["settled_endpoint_release_version"] = 1
         payload["selected_path_version"] = 2
         payload["presence_gated_departure_version"] = 1
+        payload["occupancy_evidence_version"] = 1
         payload["selected_prediction_execution_version"] = 1
         payload["unsupported_jump_diagnostics_version"] = 1
         payload["deferred_prediction_learning_version"] = 1
@@ -226,7 +229,11 @@ def restore_target_state(
     fingerprint = root.get("map_fingerprint")
     if fingerprint != target_map_fingerprint(predictive_map):
         raise ValueError("Target map fingerprint is incompatible")
-    snapshot = _decode_snapshot(root.get("snapshot"))
+    snapshot = _decode_snapshot(
+        root.get("snapshot"), configured_zones=frozenset(
+            node.occupancy_zone for node in predictive_map.nodes.values()
+        ),
+    )
     if restore_at < snapshot.updated_at:
         raise ValueError("Zone-model restore time predates stored state")
     audit_payload = root.get("audit")
@@ -451,8 +458,15 @@ def _decode_snapshot(
     *,
     legacy_v3: bool = False,
     pre_feature_v4: bool = False,
+    configured_zones: frozenset[str] | None = None,
 ) -> ZoneModelSnapshot:
     data = _mapping(value, "Target snapshot")
+    if configured_zones is not None:
+        beliefs = _list(data, "belief_states")
+        if len(beliefs) != len(configured_zones) or frozenset(
+            _string(_mapping(item, "Target belief"), "zone") for item in beliefs
+        ) != configured_zones:
+            raise ValueError("Target belief zone inventory is incompatible")
     retained_raw = data.get("retained_traversal_tokens", [])
     if not isinstance(retained_raw, list):
         raise ValueError("Retained traversal tokens must be a list")
@@ -712,6 +726,8 @@ def _decode_episode(
 
 def _decode_belief(value: object, *, historical: bool = False) -> ZoneBeliefState:
     data = _mapping(value, "Target belief")
+    if not historical and "occupancy_evidence" not in data:
+        raise ValueError("Target belief occupancy evidence field is missing")
     if not historical and "qualified_departure_at" not in data:
         raise ValueError("Target belief qualified departure field is missing")
     if not historical and "path_displaced_at" not in data:
@@ -747,6 +763,34 @@ def _decode_belief(value: object, *, historical: bool = False) -> ZoneBeliefStat
         _optional_datetime(data.get("path_displaced_at"), "path displacement"),
         False if historical and "physical_hold" not in data
         else _boolean(data, "physical_hold"),
+        None if historical or data.get("occupancy_evidence") is None
+        else _decode_occupancy_evidence(data["occupancy_evidence"]),
+    )
+
+
+def _decode_occupancy_observation(value: object) -> OccupancyObservation:
+    data = _mapping(value, "Occupancy observation")
+    if set(data) != {"node_id", "episode_id", "kind", "at"}:
+        raise ValueError("Occupancy observation keys are invalid")
+    return OccupancyObservation(
+        _string(data, "node_id"), _string(data, "episode_id"),
+        _string(data, "kind"), _datetime(data.get("at"), "occupancy observation"),
+    )
+
+
+def _decode_occupancy_evidence(value: object) -> OccupancyEvidence:
+    data = _mapping(value, "Occupancy evidence")
+    if set(data) != {
+        "admission", "latest", "authorization_reason", "admission_probability",
+        "resolved_at", "resolution_kind",
+    }:
+        raise ValueError("Occupancy evidence keys are invalid")
+    return OccupancyEvidence(
+        _decode_occupancy_observation(data["admission"]),
+        _decode_occupancy_observation(data["latest"]),
+        _string(data, "authorization_reason"), _number(data, "admission_probability"),
+        _optional_datetime(data.get("resolved_at"), "occupancy resolution"),
+        _optional_string(data.get("resolution_kind"), "occupancy resolution kind"),
     )
 
 
