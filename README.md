@@ -43,10 +43,10 @@ Flapping warnings require **10 completed short ON→OFF cycles within a rolling
 the warning clears when fewer than ten remain. Aliases, duplicates and timers do
 not add cycles. This diagnostic-only rule replaces the former six-cycles/hour rule.
 
-**Open guest-bedroom incident:** the new
+**Guest-bedroom incident (resolved by configuration):** the
 [recorded scenario](tests/incidents/test_inc_2026_11_02_2356z_guest_bedroom_missed_activation.py)
-reproduces occupied-room output remaining inactive. It is intentionally red;
-production behavior is unchanged. See
+now uses the approved Foyer/Guest map edge and passes; production behavior is
+unchanged by it. See
 [current conformance](SPECIFICATION.md#current-local-conformance).
 
 **Prior baseline validation, 2026-11-02: PASS.** **3,440 Python

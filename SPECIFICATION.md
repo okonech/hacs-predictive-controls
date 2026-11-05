@@ -9,12 +9,11 @@ strict modular panel contracts, including bounded overlapping selected branches
 and the default-off Visitors lighting override in the unpublished release.
 Unresolved qualified room evidence now survives movement-history retirement
 until a supported latest-source departure or count-complete outside proof.
-**Current status: open guest-bedroom activation incident.** The new
+**Guest-bedroom incident resolved by configuration (2026-11-04).** The
 [retained scenario](tests/incidents/test_inc_2026_11_02_2356z_guest_bedroom_missed_activation.py)
-reproduces inactive occupied-room output on its original embedded graph; package
-behavior is unchanged. The November3 approved Foyer/Guest adjacency correction
-is applied to the local Homelab map and validated separately in Section19.0,
-not deployed to Home Assistant.
+now embeds the user-approved November3 reciprocal Foyer/Guest adjacency and
+passes: Guest acquires via Dining->Foyer->Guest at00:05:03 and stays ON. Package
+behavior is unchanged by it; the map is not yet loaded in Home Assistant.
 **Prior baseline validation passed (2026-11-02):**3440 Python tests,
 100% statement and branch coverage; distinct85 incident,113 scenario and308
 frontend cases pass.
@@ -2535,20 +2534,25 @@ references remain in [Section 19.5](#deferred-operational-obligations) and
 
 ### 19.0 Current local conformance - 2026-11-03
 
-**Open incident, reported November2 local / November3 UTC:** the new
+**Incident reported November2 local / November3 UTC, resolved by configuration
+November4:** the
 [guest-bedroom scenario](tests/incidents/test_inc_2026_11_02_2356z_guest_bedroom_missed_activation.py)
-retains138 recorder changes across17 entities/11 physical nodes/count2 and fails
-the public guest active expectation at01:01:04.222491UTC. Its later
-Guest->Left selected pair and public left acquisition qualify successfully.
-The initial guest positive lacks an observed adjacent source; pending expires,
-then PATH004's non-retroactive source rule leaves guest inactive even after the
-later pair. The warning is a consequence of lost coverage, not the activation
+retains138 recorder changes across17 entities/11 physical nodes/count2. On the
+capture-time graph it failed the public guest active expectation at
+01:01:04.222491UTC: the initial guest positive lacked an observed adjacent
+source; pending expired, then PATH004's non-retroactive source rule left guest
+inactive even after a later Guest->Left pair. The warning is a consequence of lost coverage, not the activation
 block. This is a captured configuration discrepancy, not an amendment permitting
 arbitrary isolated positives. The active
 [investigation specification](docs/spec/INC-2026-11-02-2356Z-guest-bedroom-missed-activation.md)
 records evidence, three capture hardening passes and three distinct scoped
-configuration hardening passes. The original captured-map primary is unchanged
-and remains red; do not substitute a different-map probe as its passing result.
+configuration hardening passes. November4, at the user's request, the scenario
+embeds the corrected graph (its eleven nodes otherwise equal the repository map)
+with the same138 inputs and passes: the selected Dining->Foyer->Guest route at
+00:05:03.683190, exactly one Guest ON edge and Guest active at the report. Its
+old-graph Left qualification is dropped: the00:19:12 five-second Left
+still-target blip only paired with the stray Guest origin; with the corrected
+graph it has no supported source and stays OFF. The old graph still fails.
 
 **Approved local configuration correction, November3:** the user approved adding
 only reciprocal `foyer_pir_motion`/`guest_bedroom_motion` adjacency to the Homelab
@@ -2560,7 +2564,7 @@ The approved YAML validator, map schema/reciprocity and seven boundary cases
 pass: recorded replay at counts0/1/2, isolated Guest OFF at counts1/2, and reverse
 Guest->Foyer acquisition without retroactive source activation at counts1/2.
 The corrected-map later Left allocation differs from the original capture;
-its00:19:12 output is OFF, so full incident reconciliation remains open.
+its00:19:12 output is OFF, reconciled November4 as described above.
 Independent final read-only review passes only this local configuration scope.
 No live map load, storage mutation or restart occurred. Loading this graph will
 reject old-map full inference; preserve matching backups and require fresh

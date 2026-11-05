@@ -1,11 +1,17 @@
 # Guest Bedroom Missed Activation
 
-Status: November3 approved reciprocal Foyer/Guest motion-node correction applied
-to the local Homelab map. Exact actual-map red/green proof, seven boundary cases,
-YAML/schema validation and independent final review PASS for this local scope. No package
-source/test change or live deployment. Original-map primary remains red and
-unchanged. Physical detector coverage and original loaded-map equivalence are
-not newly proven; preserve those limits and the path-required safety contract.
+Status: November4 resolved by configuration in the package test. At the user's
+request the retained scenario embeds the approved reciprocal Foyer/Guest
+motion-node edge (Homelab map 23d3e08; the induced eleven nodes otherwise equal
+the repository map) with the unchanged138 inputs/count2, and passes: selected
+Dining->Foyer->Guest route at00:05:03.683190, exactly one Guest ON edge and
+Guest active at the report. The old-graph Guest->Left/Left ON qualification is
+dropped: that00:19:12 five-second still-target blip only paired with the stray
+Guest origin and has no supported source on the corrected graph. With the old
+edges restored the test fails at arrival. Live map loading is still pending.
+Earlier November3 status: approved correction applied to the local Homelab map;
+original-map primary red. Physical detector coverage is not newly proven;
+preserve the path-required safety contract.
 Layers: MAP_PROFILE topology/coverage candidate; TRAVERSAL / POLICY reject as
 configured. PATH_HEALTH is diagnostic only; no retention defect established.
 Authority: SPECIFICATION.md REQ-PATH-003/004/006/009, HEALTH001/003, DIAG007, GOV005.
@@ -379,7 +385,8 @@ live-deployment approval is implied.
 | Incoming-path investigation                  | Complete | Approved14-entity expanded history, both floor plans, independent topology review, two induced and three full-map/control probe branches  | Confirm detector coverage and original loaded-map adjacency         |
 | Configured-map regression proof              | Complete | Actual-map probe exits1 at public arrival goal;138 normalized inputs, arrival/final bothfalse, no Guest edges                             | Rerun unchanged immediately after map edit                          |
 | Local configuration repair                   | Complete | Actual map patched; unchanged probe RED->green, seven boundaries/schema/YAML/editor checks and independent final review PASS              | Local scope complete; separately authorize live loading             |
-| Live deployment and incident closure         | Blocked  | No live write authorized; captured original-map scenario remains frozen                                                                   | Separately authorize loading and reconcile remaining incident scope |
+| Package scenario on corrected graph          | Complete | November4: same138 inputs pass on the embedded corrected graph; old graph fails at arrival; Left qualification dropped as old-graph only  | None                                                                |
+| Live deployment                              | Pending  | No live write authorized                                                                                                                  | Load the Homelab map into the config entry                          |
 | Capture validation and status reconciliation | Complete | Scoped Ruff/default mypy1file/editor clean; ordered source/startup/map equality; XML1fail/1pass; diff clean; canonical/README status open | Keep this working spec while unresolved                             |
 
 Exactly three capture-only full critique/rewrite passes completed: factual/architectural

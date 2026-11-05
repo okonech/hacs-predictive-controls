@@ -11,8 +11,14 @@ Retain138 recorder changes/17entities/11physical nodes/count2; first captured
 callback23:56:09.627305Z determines incident identity. Recorder boundary levels
 at23:55 are synthetic cold-inference startup, not fresh positives or a restored
 historical posterior. Receipt/timer phase is synthetic; event times are exact.
-The final public occupied checkpoint is sourced from the report/status. The
-later Guest->Left path and Left ON edge are supplementary causal qualifications.
+The final public occupied checkpoint is sourced from the report/status.
+Disposition: the capture-time graph lacked the physical Foyer/Guest doorway, so
+the arrival had no adjacent source. The user-approved November3 reciprocal
+foyer_pir_motion/guest_bedroom_motion edge (Homelab map 23d3e08) is embedded
+here; the induced eleven nodes otherwise equal the repository map. The arrival
+qualifies as the selected Dining->Foyer->Guest route. Under the old graph the
+00:19:12 five-second Left still-target blip paired with the stray Guest origin;
+with the corrected graph it has no supported source, so it is not asserted.
 The warning is documented, not an expectation that it be hidden to recover active.
 """
 
@@ -60,7 +66,7 @@ nodes:
     zone: foyer
     role: transition_gate
     entities: {motion: binary_sensor.foyer_pir_motion_motion_detection}
-    adjacent: [dining_room_motion, bottom_of_staircase_motion]
+    adjacent: [dining_room_motion, bottom_of_staircase_motion, guest_bedroom_motion]
     transition_seconds: {dining_room_motion: 15}
     initial_weight: 0.85
   living_room_fireplace_left:
@@ -98,7 +104,8 @@ nodes:
     role: room_occupancy
     entities:
       mmwave: binary_sensor.guest_bedroom_guest_bedroom_motion_motion_detection
-    adjacent: [bottom_of_staircase_motion, living_room_fireplace_left]
+    adjacent:
+      [bottom_of_staircase_motion, living_room_fireplace_left, foyer_pir_motion]
     initial_weight: 0.75
   top_of_staircase_motion:
     floor: second_floor
@@ -317,7 +324,7 @@ def test_inc_2026_11_02_2356z_guest_bedroom_missed_activation() -> None:
             row.split() for row in _INPUTS.strip().splitlines()
         )
     )
-    paired_at = datetime(2026, 11, 3, 0, 19, 12, 371936, tzinfo=UTC)
+    arrival_at = datetime(2026, 11, 3, 0, 5, 3, 683190, tzinfo=UTC)
     report_at = datetime(2026, 11, 3, 1, 1, 4, 222491, tzinfo=UTC)
     initial_states = {
         entity: "on" if index in {6, 8, 9, 13} else "off"
@@ -327,19 +334,22 @@ def test_inc_2026_11_02_2356z_guest_bedroom_missed_activation() -> None:
         replay = scenario.create(predictive_map, 2, initial_states=initial_states)
         for event in expected_inputs:
             published = replay.observe(event)
-            if event.event_at == paired_at:
-                assert published.active("living_room_left")
+            if event.event_at == arrival_at:
+                assert published.active("guest_bedroom")
                 assert any(
                     path is not None and tuple(
                         visit.node_id for visit in path.route
-                    ) == ("guest_bedroom_motion", "living_room_fireplace_left")
+                    ) == (
+                        "dining_room_motion", "foyer_pir_motion",
+                        "guest_bedroom_motion",
+                    )
                     for path in replay.inference_snapshot().selected_paths
                 )
         reported = replay.advance(report_at)
         assert len(expected_inputs) == 138
         assert replay.normalized_inputs == list(expected_inputs)
-        assert ActiveEdge(paired_at, "living_room_left", True) in (
-            replay.input_edges_for("living_room_left")
+        assert replay.edges_for("guest_bedroom") == (
+            ActiveEdge(arrival_at, "guest_bedroom", True),
         )
         assert reported.active("guest_bedroom"), (
             "Occupied guest bedroom never recovered its public active output",

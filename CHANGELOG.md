@@ -110,6 +110,9 @@ entries below describe earlier releases and may contain superseded behavior.
 - Remove completed migration plans, phase inventories and intermediate conformance
 	reports after reconciling permanent contracts, regression provenance and current
 	evidence. Retain unresolved operational work and factual incident fixtures.
+- The November2 guest-bedroom incident scenario now embeds the approved
+	reciprocal Foyer/Guest map edge and passes with its unchanged138 inputs; the
+	old-graph Left pairing qualification is dropped. No package behavior change.
 
 ### Development
 
