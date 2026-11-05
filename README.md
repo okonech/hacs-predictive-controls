@@ -22,11 +22,12 @@ elapsed time alone does not evict them, and rejected alternatives cannot hold
 every possible room on. Movement can displace old coverage, but genuine
 noninteraction presence separately protects local confidence through stable clear;
 qualified local occupancy evidence also survives movement-history retirement.
-It resolves only on departure from its latest local observation or fresh,
-independent outside confirmation for all accepted occupants. Then ordinary decay
-and full release dwell follow after all protections end. Count zero clears normal
-retention immediately. With no resolving evidence a room can remain ON indefinitely;
-this conservative rule adds no timeout, acquisition bonus or person identity.
+It resolves only on departure from its latest local observation, or once every
+accepted occupant's confirmed path ends outside the room after that observation
+(settled or pacing occupants count). Then ordinary decay and full release dwell
+follow after all protections end. Count zero clears normal retention immediately.
+Without either proof a room can remain ON; there is no timeout, acquisition bonus
+or person identity.
 
 Warnings are diagnostic, not occupancy or hardware-control gates. A missing,
 unobserved intermediate does not authorize a target: it can produce a distinct
@@ -42,7 +43,13 @@ Flapping warnings require **10 completed short ON→OFF cycles within a rolling
 the warning clears when fewer than ten remain. Aliases, duplicates and timers do
 not add cycles. This diagnostic-only rule replaces the former six-cycles/hour rule.
 
-**Current local validation, 2026-11-02: PASS.** **3,440 Python
+**Open guest-bedroom incident:** the new
+[recorded scenario](tests/incidents/test_inc_2026_11_02_2356z_guest_bedroom_missed_activation.py)
+reproduces occupied-room output remaining inactive. It is intentionally red;
+production behavior is unchanged. See
+[current conformance](SPECIFICATION.md#current-local-conformance).
+
+**Prior baseline validation, 2026-11-02: PASS.** **3,440 Python
 tests** pass with **100% statement and branch coverage** (8,293 statements/3,202
 branches), in **242.43 seconds**. Separate runs pass all **85 incident tests**,
 **113 scenario-marked tests**, and **308 frontend tests**. Existing cases remain;
@@ -81,8 +88,8 @@ verification is claimed.
   fingerprints, all v3 inference and v1 inference are rejected; a schema label
   or edited fingerprint cannot supply missing authority.
 - The warning calibration, selected overlap version2 and occupancy-evidence
-  version1 change that fingerprint. Deploying them rejects old full inference and
-  cold-reconstructs from subsequent evidence;
+  version2 (November4 established proof) change that fingerprint. Deploying
+  them rejects old full inference and cold-reconstructs from subsequent evidence;
   configuration is retained. Preserve original stored inference/learning backups:
   old-fingerprint learning is not automatically imported into cold inference.
   No live deployment, storage overwrite or restart was performed here.

@@ -170,7 +170,7 @@ def _target_map_fingerprint_payload(
         payload["settled_endpoint_release_version"] = 1
         payload["selected_path_version"] = 2
         payload["presence_gated_departure_version"] = 1
-        payload["occupancy_evidence_version"] = 1
+        payload["occupancy_evidence_version"] = 2
         payload["selected_prediction_execution_version"] = 1
         payload["unsupported_jump_diagnostics_version"] = 1
         payload["deferred_prediction_learning_version"] = 1

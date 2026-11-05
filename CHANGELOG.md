@@ -29,6 +29,15 @@ entries below describe earlier releases and may contain superseded behavior.
 	fresh disjoint outside confirmation for all accepted occupants, then apply
 	normal decay/full dwell. Clear/count changes alone cannot prove departure;
 	count0 clears normal retention immediately. No fallback timeout is added.
+- Add an established-paths all-occupants proof alongside the strict live one:
+	once the room's own sensors are quiet, every counted slot's confirmed path
+	ending outside it after its latest detection releases the hold, even when an
+	occupant has settled (head OFF/past trust) or paces between two nodes. Fixes
+	the November4 master bathroom held ON at5% for hours. Stale, provisional or
+	empty slots, shared endpoints and unavailable heads still cannot prove absence;
+	no timeout is added. Bumps `occupancy_evidence_version` to2: version-1
+	inference rejects before decoding and cold-reconstructs, and strict-only
+	builds reject the new checkpoints.
 - Require strict occupancy admission/latest/resolution records and fingerprint
 	version1, with monotonic physical generations and atomic restore rejection.
 	Keep selected-path v2 and historical readers; preserve configuration and old

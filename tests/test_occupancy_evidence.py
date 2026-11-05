@@ -11,9 +11,11 @@ from typing import cast
 import pytest
 
 from custom_components.predictive_controls.model import PredictiveMap
+from custom_components.predictive_controls.zone_model import persistence
 from custom_components.predictive_controls.zone_model.engine import ZoneModelEngine
 from custom_components.predictive_controls.zone_model.persistence import (
     restore_target_state,
+    serialize_target_state,
 )
 from custom_components.predictive_controls.zone_model.types import (
     OccupancyEvidence,
@@ -118,25 +120,98 @@ def test_count_complete_public_release_and_committed_restore(
         assert edges[-1].at > at(142)
 
 
-@pytest.mark.parametrize("failure", ("unlocated", "unknown", "expired"))
+@pytest.mark.parametrize("failure", ("unlocated", "unknown", "provisional"))
 def test_incomplete_or_untrusted_outside_proof_retains(failure: str) -> None:
     with RuntimeScenario(at(0)) as scenario:
         replay = scenario.create(evidence_map(), 2)
         ambiguous(replay)
-        offset = 0
         if failure == "unknown":
             replay.send("binary_sensor.w", "unknown", at(17))
-        if failure == "expired":
-            offset = 1000
-        if failure != "unlocated":
+        if failure == "provisional":
+            for seconds, node in ((20, "d"), (21, "e")):
+                replay.send(f"binary_sensor.{node}", "on", at(seconds))
+        elif failure != "unlocated":
             for seconds, node in ((20, "d"), (21, "e"), (22, "f")):
-                replay.send(f"binary_sensor.{node}", "on", at(seconds + offset))
+                replay.send(f"binary_sensor.{node}", "on", at(seconds))
         replay.advance(at(2000))
         assert record(replay).resolved_at is None
         assert replay.edges_for("room") == (ActiveEdge(at(2), "room", True),)
         restored = scenario.create(evidence_map(), 2)
         restored.restore(replay.checkpoint())
         assert restored.inference_snapshot() == replay.inference_snapshot()
+
+
+def test_settled_outside_path_releases_without_live_head() -> None:
+    """A settled occupant's confirmed path still places its slot outside."""
+
+    steps = ((1020, "d", "on"), (1021, "e", "on"), (1022, "f", "on"))
+    with RuntimeScenario(at(0)) as scenario:
+        replay = scenario.create(evidence_map(), 2)
+        ambiguous(replay)
+        replay.send("binary_sensor.w", "off", at(17))
+        for seconds, node, state in steps:
+            replay.send(f"binary_sensor.{node}", state, at(seconds))
+        paths = tuple(p for p in replay.inference_snapshot().selected_paths if p)
+        assert len(paths) == 2 and all(
+            p.track_confidence == "confirmed" and p.endpoint.zone != "room"
+            for p in paths
+        )
+        assert record(replay).resolution_kind == "count_complete"
+        assert record(replay).resolved_at == at(steps[-1][0])
+        replay.advance(at(4000))
+        assert not replay.view().active("room")
+        assert [edge.active for edge in replay.edges_for("room")] == [True, False]
+
+
+def test_established_resolution_is_not_restorable_under_strict_only_fingerprint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Version 1 never produced established-proof resolutions; reject its root."""
+
+    mapping = evidence_map()
+    fingerprint = persistence._target_map_fingerprint_payload(mapping)
+    assert fingerprint["occupancy_evidence_version"] == 2
+    with RuntimeScenario(at(0)) as scenario:
+        replay = scenario.create(mapping, 2)
+        ambiguous(replay)
+        replay.send("binary_sensor.w", "off", at(17))
+        for seconds, node in ((1020, "d"), (1021, "e"), (1022, "f")):
+            replay.send(f"binary_sensor.{node}", "on", at(seconds))
+        assert record(replay).resolution_kind == "count_complete"
+        engine = replay.runtime.confidence._engine
+        assert engine is not None
+        payload = serialize_target_state(mapping, engine)
+    restored = restore_target_state(mapping, deepcopy(payload), at(1022))
+    assert restored.snapshot == engine.snapshot
+    fingerprint["occupancy_evidence_version"] = 1
+    payload["map_fingerprint"] = persistence._fingerprint(fingerprint)
+
+    def forbidden(_value: object) -> None:
+        raise AssertionError("Strict-only inference reached the snapshot decoder")
+
+    monkeypatch.setattr(persistence, "_decode_snapshot", forbidden)
+    with pytest.raises(ValueError, match="fingerprint"):
+        restore_target_state(mapping, payload, at(1022))
+
+
+def test_slot_older_than_latest_room_detection_never_proves_absence() -> None:
+    """Only paths refreshed after the latest room detection count as outside."""
+
+    with RuntimeScenario(at(0)) as scenario:
+        replay = scenario.create(evidence_map(), 2)
+        ambiguous(replay)
+        for seconds, node in ((20, "d"), (21, "e"), (22, "f")):
+            replay.send(f"binary_sensor.{node}", "on", at(seconds))
+        assert record(replay).resolution_kind == "count_complete"
+        replay.send("binary_sensor.room", "on", at(30))
+        replay.send("binary_sensor.room", "off", at(31))
+        assert record(replay).resolved_at is None
+        replay.send("binary_sensor.f", "off", at(32))
+        replay.send("binary_sensor.e", "off", at(33))
+        replay.send("binary_sensor.e", "on", at(40))
+        assert record(replay).resolved_at is None
+        replay.advance(at(4000))
+        assert replay.view().active("room")
 
 
 def test_direct_departure_uses_latest_not_earlier_source() -> None:
@@ -360,6 +435,33 @@ def test_count_complete_trust_boundary_and_zero_defense() -> None:
     assert engine._count_complete_outside("room", at(2), expiry - timedelta(
         microseconds=1,
     ))
+    # The room's own sensor is still ON: only the strict live proof applies.
     assert not engine._count_complete_outside("room", at(2), expiry)
     empty = ZoneModelEngine(evidence_map(), 0, at(0))
     assert not empty._count_complete_outside("room", at(0), at(0))
+
+
+def test_established_proof_ignores_head_trust_once_room_is_quiet() -> None:
+    engine = ZoneModelEngine(evidence_map(), 1, at(0))
+    for seconds, node in enumerate(("a", "b", "room", "x", "y", "z", "w")):
+        engine.observe(SensorInput(f"binary_sensor.{node}", "on", at(seconds)))
+    engine.observe(SensorInput("binary_sensor.room", "off", at(7)))
+    head = next(state for state in engine.snapshot.episode_states
+                if state.node_id == "w")
+    assert head.assertion_trust_until is not None
+    later = head.assertion_trust_until + timedelta(hours=1)
+    engine.advance(later)
+    assert engine._count_complete_outside("room", at(2), later)
+    assert not engine._count_complete_outside("room", at(6), later)
+    # Pacing between two outside nodes keeps the slot outside the room.
+    engine.observe(SensorInput("binary_sensor.w", "on", later))
+    engine.observe(SensorInput("binary_sensor.z", "off", later + timedelta(seconds=1)))
+    pace = later + timedelta(seconds=60)
+    engine.observe(SensorInput("binary_sensor.z", "on", pace))
+    path = engine._selected_paths.paths[0]
+    assert path is not None and path.track_confidence == "confirmed"
+    assert [visit.node_id for visit in path.route[-3:]] == ["z", "w", "z"]
+    assert engine._count_complete_outside("room", at(2), pace)
+    # A fresh room detection blocks the proof until the room is quiet again.
+    engine.observe(SensorInput("binary_sensor.room", "on", pace))
+    assert not engine._count_complete_outside("room", at(2), pace)

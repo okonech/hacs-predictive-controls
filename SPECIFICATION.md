@@ -9,7 +9,13 @@ strict modular panel contracts, including bounded overlapping selected branches
 and the default-off Visitors lighting override in the unpublished release.
 Unresolved qualified room evidence now survives movement-history retirement
 until a supported latest-source departure or count-complete outside proof.
-**Current local validation passes (2026-11-02):**3440 Python tests,
+**Current status: open guest-bedroom activation incident.** The new
+[retained scenario](tests/incidents/test_inc_2026_11_02_2356z_guest_bedroom_missed_activation.py)
+reproduces inactive occupied-room output on its original embedded graph; package
+behavior is unchanged. The November3 approved Foyer/Guest adjacency correction
+is applied to the local Homelab map and validated separately in Section19.0,
+not deployed to Home Assistant.
+**Prior baseline validation passed (2026-11-02):**3440 Python tests,
 100% statement and branch coverage; distinct85 incident,113 scenario and308
 frontend cases pass.
 Ruff, mypy, strict types, shipped build/freshness, independent review and standalone
@@ -33,12 +39,17 @@ validated; Section19.0 records the final complete runs, not a coverage union.
   count changes do not resolve or delete it; count0 clears it immediately.
 - **REQ-PATH-010:** Resolve only on trustworthy real noninteraction selected
   departure whose direct source equals the latest node/episode, or on an ordinary
-  positive input establishing all N>0 slots outside the zone. All-N requires
-  confirmed eligible main heads, matching current known-ON episodes strictly
-  before assertion-trust expiry, and disjoint three-distinct-node adjacent route
-  suffixes with consecutive different zones, all occurrences strictly newer than
-  latest room support, kinds positive/correlated_positive and ordinary terminal.
-  U, shared evidence and timer/count-only callbacks fail. Same outside zone is
+  positive input establishing all N>0 slots outside the zone. All-N passes by
+  either proof. Live: confirmed eligible main heads, matching current known-ON
+  episodes strictly before assertion-trust expiry, and disjoint three-distinct-node
+  adjacent route suffixes with consecutive different zones, all occurrences
+  strictly newer than latest room support, kinds positive/correlated_positive and
+  ordinary terminal. Established (added 2026-11-04, user-approved): no zone node
+  is known-ON, and every slot holds a confirmed path whose distinct
+  positive/correlated_positive endpoint is outside the zone, strictly newer than
+  latest room support, on a node that is not unavailable; head ON, trust and
+  suffix shape are not required, so settled or pacing occupants still count.
+  Empty/provisional slots, shared evidence and timer/count-only callbacks fail. Same outside zone is
   allowed. Direct-source OFF continuation needs neither second track nor target
   acquisition. Resolution commits; fresh trustworthy local support rearms.
 - **REQ-POLICY-015:** Advance old context to resolution first, adding no negative
@@ -46,7 +57,8 @@ validated; Section19.0 records the final complete runs, not a coverage union.
   protections end. Protected time cannot earn dwell. Preserve actual displacement
   independently. A one-zone latest anchor is not same-room multiplicity proof;
   other selected/presence holds still protect. With no resolving evidence, normal
-  control can remain ON indefinitely. No fallback timeout is introduced.
+  control can remain ON; no fallback timeout is introduced. Release comes from
+  departure or all-N outside paths, never from elapsed time alone.
 - **REQ-STATE-014:** Require bounded strict admission/latest/resolution records
   on current beliefs and a new occupancy_evidence_version fingerprint. Preserve
   selected-path v2, historical recipes/readers and original stored backups.
@@ -1914,7 +1926,7 @@ Persist only state needed to reproduce the next decision:
   [persistence](custom_components/predictive_controls/zone_model/persistence.py).
   Alongside map, capability/profile, reliability, route-prior, belief, policy,
   arrival and prediction calibration, its current top-level integer version keys
-  (all `1` except selected-path version `2`) are `settled_adjacent_transfer_version`, `support_departure_version`,
+  (all `1` except selected-path and occupancy-evidence version `2`) are `settled_adjacent_transfer_version`, `support_departure_version`,
   `impossible_cadence_preservation_version`, `supported_gap_acquisition_version`,
   `settled_endpoint_release_version`, `selected_path_version`,
   `presence_gated_departure_version`, `selected_prediction_execution_version`,
@@ -1924,7 +1936,9 @@ Persist only state needed to reproduce the next decision:
   maximum ON duration and completion count. Retained component keys do not enable
   those components as current acquisition/health policy.
   The September16 HEALTH002 amendment changes window/count from3600s/6 to1200s/10;
-  unsupported600s and maximumON60s remain. Old fingerprints reject before snapshot
+  unsupported600s and maximumON60s remain. The November4 PATH010 established
+  proof sets `occupancy_evidence_version` to2 so strict-only builds reject its
+  resolutions and version-1 roots cold-reconstruct. Old fingerprints reject before snapshot
   decoding; the user approved cold inference rather than a partial health migration.
   No Store/schema bump, fingerprint rewriting or configuration reset is required.
 
@@ -2519,9 +2533,55 @@ references remain in [Section 19.5](#deferred-operational-obligations) and
 
 <a id="current-local-conformance"></a>
 
-### 19.0 Current local conformance - validated 2026-11-02
+### 19.0 Current local conformance - 2026-11-03
 
-**PASS, local qualification only.** PATH009/010, POLICY015 and STATE014 implement
+**Open incident, reported November2 local / November3 UTC:** the new
+[guest-bedroom scenario](tests/incidents/test_inc_2026_11_02_2356z_guest_bedroom_missed_activation.py)
+retains138 recorder changes across17 entities/11 physical nodes/count2 and fails
+the public guest active expectation at01:01:04.222491UTC. Its later
+Guest->Left selected pair and public left acquisition qualify successfully.
+The initial guest positive lacks an observed adjacent source; pending expires,
+then PATH004's non-retroactive source rule leaves guest inactive even after the
+later pair. The warning is a consequence of lost coverage, not the activation
+block. This is a captured configuration discrepancy, not an amendment permitting
+arbitrary isolated positives. The active
+[investigation specification](docs/spec/INC-2026-11-02-2356Z-guest-bedroom-missed-activation.md)
+records evidence, three capture hardening passes and three distinct scoped
+configuration hardening passes. The original captured-map primary is unchanged
+and remains red; do not substitute a different-map probe as its passing result.
+
+**Approved local configuration correction, November3:** the user approved adding
+only reciprocal `foyer_pir_motion`/`guest_bedroom_motion` adjacency to the Homelab
+map. No model rule, calibration, Python/test source or interaction edge changed.
+The actual on-disk-map RuntimeScenario probe failed public Guest acquisition
+before the edit and passed immediately afterward with the same138 normalized
+inputs/count2: one ON at00:05:03.683190UTC and no OFF through01:01:04.222491UTC.
+The approved YAML validator, map schema/reciprocity and seven boundary cases
+pass: recorded replay at counts0/1/2, isolated Guest OFF at counts1/2, and reverse
+Guest->Foyer acquisition without retroactive source activation at counts1/2.
+The corrected-map later Left allocation differs from the original capture;
+its00:19:12 output is OFF, so full incident reconciliation remains open.
+Independent final read-only review passes only this local configuration scope.
+No live map load, storage mutation or restart occurred. Loading this graph will
+reject old-map full inference; preserve matching backups and require fresh
+qualifying evidence. Broad package gates have not been rerun for this YAML-only
+change, and no library/global-green or complete incident-resolution claim is made.
+
+**Published-map YAML compatibility, November3:** the Homelab map's bare `y`
+coordinate keys resolve to Boolean keys in the panel's YAML1.1 reader, producing
+`Expected a finite number` before save transport. Quote only those48 keys in
+the published YAML; no decoder, parser semantics, package/test source, assets,
+coordinates or graph data change. Whole-text comparison permits exactly those
+48 substitutions, and backend parsed-data/schema equality passes for31 nodes/
+17 zones with the approved Foyer/Guest edge intact. The actual source and shipped
+panel Save probes both fail before the edit (zero requests, exact error) and
+pass afterward (one correctly typed mocked save request each, no error).
+All308 frontend tests pass,3350.901706ms, zero failures/skips. Approved YAML and
+editor checks pass. No agent live save/reload occurred; the user must paste the
+updated file again. This format repair does not close the separate original-map
+guest incident or renew historical Python/performance qualification.
+
+**Prior baseline PASS, local qualification only.** PATH009/010, POLICY015 and STATE014 implement
 the approved unresolved-room rule without changing acquisition thresholds,
 selected-path v2, anonymous slot bounds, shared decay/dwell or diagnostic health.
 All3391 prior Python cases remain;49 additive cases bring the total to3440.
@@ -2580,8 +2640,10 @@ frontend/build logs and performance JSON. This is not deployment approval: deplo
 matching backend/assets separately, preserve configuration and original inference/
 learning backups, and expect old-fingerprint inference to cold-start. No automatic
 old-learning import, live restart, storage overwrite or physical-light proof is
-claimed. Without either resolving proof an empty room can stay ON indefinitely;
-the user explicitly approved this tradeoff, not a fallback timer.
+claimed. Without either resolving proof an empty room can stay ON;
+the user explicitly approved this tradeoff, not a fallback timer. The
+2026-11-04 all-N amendment below keeps that rule but stops settled or pacing
+outside occupants from blocking the proof.
 
 #### Historical Visitors qualification - 2026-10-30 (2026-10-31 UTC)
 

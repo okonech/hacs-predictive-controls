@@ -1243,6 +1243,15 @@ class ZoneModelEngine:
     ) -> bool:
         if self._count.state.expected_count == 0:
             return False
+        return self._live_suffixes_outside(
+            zone, latest_at, at,
+        ) or self._established_paths_outside(zone, latest_at)
+
+    def _live_suffixes_outside(
+        self, zone: str, latest_at: datetime, at: datetime,
+    ) -> bool:
+        """Strict proof: every slot is walking a fresh live outside route."""
+
         episodes = {state.node_id: state for state in self._episodes.states}
         used: set[str] = set()
         for path in self._selected_paths.paths:
@@ -1273,6 +1282,35 @@ class ZoneModelEngine:
             ):
                 return False
             used.update(identities)
+        return True
+
+    def _established_paths_outside(self, zone: str, latest_at: datetime) -> bool:
+        """Every slot is an established path ending outside a locally quiet zone.
+
+        Each slot needs a confirmed selected path whose endpoint is a distinct
+        real positive outside the zone, strictly newer than the zone's latest
+        local observation, on a sensor that is not unavailable. A settled
+        occupant (head OFF or past trust) or one pacing between two outside
+        nodes still places its slot outside. A slot not refreshed since the
+        zone's latest detection never does, and no proof exists while any of
+        the zone's own sensors still reports ON.
+        """
+        episodes = {state.node_id: state for state in self._episodes.states}
+        if any(state.zone == zone and state.known_on for state in episodes.values()):
+            return False
+        used: set[str] = set()
+        for path in self._selected_paths.paths:
+            if path is None or path.track_confidence != "confirmed":
+                return False
+            head = path.endpoint
+            if (
+                head.zone == zone or head.at <= latest_at
+                or head.kind not in {"positive", "correlated_positive"}
+                or head.episode_id in used
+                or episodes[head.node_id].status == "unavailable"
+            ):
+                return False
+            used.add(head.episode_id)
         return True
 
     def _supported_gap_source(
